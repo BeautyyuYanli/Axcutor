@@ -1,0 +1,28 @@
+# 02. 6 种控制边语法速查表
+
+`graph.edges` 定义控制令牌（Control Token）在图内的流转拓扑。支持以下 6 种标准边表达式：
+
+| 序号 | 边表达式语法 | 适用源节点（`source`） | 适用目标（`target`） | 控制流与状态语义 |
+| :--- | :--- | :--- | :--- | :--- |
+| **1** | `source -> target` | `start`、无分支节点、挂载了 `for_each` 的节点 | 普通节点、`end`、`fail` | 源节点正常完成后，提交 `output` 并移交控制令牌至 `target`。 |
+| **2** | `source.choice -> target` | 未挂载 `for_each` 的有分支节点（含 `branches` 或 `catch`） | 普通节点、`end`、`end.branch`、`fail` | 排他分支路由：走向正常分支 `.choice`（携带该分支关联的 `output` 子集）或异常分支 `.<catch_branch>`（不产出 `output`）时移交 `target`。 |
+| **3** | `source -> [worker_a, worker_b] -> join_target` | `start`、无分支节点、挂载了 `for_each` 的节点 | 普通节点、`end`、`end.branch` | 无分支触发 Fork-Join 异构并发组：锁定 Fork 快照并同时激活组内全部节点，全部完成后在屏障处原子合并输出并移交 `join_target`。 |
+| **4** | `source.choice -> [worker_a, worker_b] -> join_target` | 未挂载 `for_each` 的有分支节点 | 普通节点、`end`、`end.branch` | 分支触发 Fork-Join 异构并发组：当 `source` 走向 `.choice` 分支时激活并发组，全部完成后汇合移交 `join_target`。 |
+| **5** | `source -> end`<br>`source.choice -> end.branch` | 图内任意节点或分支 | `end`（宿主无 `branches` 时）<br>`end.<branch>`（宿主有 `branches` 时） | 正常结束当前图栈帧，提取该出口分支关联的宿主 `output` 变量原子提交给父调用方。 |
+| **6** | `source -> fail`<br>`source.choice -> fail` | 图内任意节点或分支 | `fail` | 异常中止当前图栈帧，**丢弃当前图对宿主 `output` 的一切未提交修改（Rollback）**，并向父栈帧抛出 `execution` 异常。 |
+
+---
+
+## 连边静态检查速查（Checklist）
+
+1. **单令牌唯一出边**：
+   * `start`、非并发组内的无分支节点（含挂载了 `for_each` 的节点），必须且只能有 **1 条**出边。
+   * 未挂载 `for_each` 的节点声明的每一个正常分支 `node.<choice>` 和每一个异常分支 `node.<catch_branch>`，都必须且只能有 **1 条**出边（穷尽且唯一）。
+2. **`for_each` 节点外层单出口**：
+   * 挂载了 `for_each` 的节点，其 `branches` 与 `catch` 在单次迭代内部被消费，在外层 `graph.edges` 中只能写无后缀的 `node -> target`，严禁写 `node.<choice> -> target`。
+3. **并发组 `[worker_a, worker_b]` 成员限制**：
+   * 并发组内的节点禁止在 `edges` 中再单独写额外的入边或出边；
+   * 并发组内的节点（若未挂载 `for_each`）禁止直接声明 `branches` 或 `catch`，其写回外层图的目标变量集合必须两两互斥。
+4. **全图可达性与防死环**：
+   * 图内所有节点必须可从 `start` 到达；
+   * 图内所有节点（特别是处于成环回边中的节点）必须至少存在一条路径能够到达 `end`（或 `end.<branch>`）。
