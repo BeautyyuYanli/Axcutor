@@ -1,38 +1,56 @@
 # 配方 02：候选节点短路早退遍历与失败轨迹记录（`array_shift` + `array_append`）
 
-## 场景与问题
+## 一、 场景与需求
 
-给定一个按优先级排列的候选服务地址列表 `candidate_endpoints`：
-* 我们需要按顺序依次尝试向候选节点发起请求；
-* **一旦某个节点成功返回响应，立即短路早退结束工作流**，不再请求队列中剩余的节点（因此不适合使用全量遍历的 `for_each`）；
-* 若某个节点请求失败，将该节点的失败摘要追加到 `failed_trace` 列表中，继续弹出下一个节点尝试，直到成功或队列耗尽。
+给定按优先级排列的候选服务地址列表 `candidate_endpoints` 与请求报文 `request_payload`，需满足以下编排行为：
 
-## 解决方案要点
-
-* 使用 [`builtin:array_shift`](../../reference/builtins/array-shift.md) 从列表头部零开销弹出首元素 `current_endpoint`，并将剩余切片 `rest` 原地写回 `candidate_endpoints`；
-* 当 `pop_endpoint.some` 时发起尝试：若成功（`try_call.success`）直接走向 `end.ok` 短路退出；
-* 若失败（`try_call.failed`），使用 [`builtin:array_append`](../../reference/builtins/array-append.md) 将错误记录追加到 `failed_trace` 末尾，再沿成环回边跳回 `pop_endpoint`。
+1. **按序逐个尝试与命中即停（Short-Circuit）**：按列表顺序依次向候选节点发起请求；一旦某个节点成功返回响应，立即结束工作流并返回结果，不再访问队列中剩余的候选节点（因此不使用全量遍历的 `for_each`）。
+2. **失败轨迹累积**：若当前节点调用失败，将该节点的失败摘要追加至 `failed_trace` 列表，继续弹出下一个节点尝试，直至某个节点成功或候选队列耗尽。
 
 ---
 
-## 完整工作流定义
+## 二、 核心原语组合要点
+
+1. **队列首元素弹出（[`builtin:array_shift`](../../reference/builtins/array-shift.md)）**：从 `candidate_endpoints` 头部弹出首元素 `current_endpoint`，并将剩余切片 `rest` 原地写回 `candidate_endpoints`。队列非空时走 `.some` 分支，队列耗尽时走 `.empty` 分支。
+2. **失败记录追加（[`builtin:array_append`](../../reference/builtins/array-append.md)）**：在 `try_call.failed` 分支下，将单步产出的 `error_entry` 追加至 `failed_trace` 列表末尾，随后沿回边跳回 `pop_endpoint`。
 
 ```yaml
+# 原地弹出队列首元素并更新剩余列表
+pop_endpoint:
+  use: builtin:array_shift
+  with:
+    input:
+      source: candidate_endpoints
+    output:
+      item: current_endpoint
+      rest: candidate_endpoints
+```
+
+---
+
+## 三、 完整工作流定义
+
+```yaml
+# 1. 根节点输入契约
 input:
   candidate_endpoints:
     type: array
     items: { type: string }
   request_payload:
     type: string
+
+# 2. 根节点输出契约
 output:
   response_data:
     type: string
   failed_trace:
     type: array
     items: { type: string }
+
+# 3. 根节点排他分支契约：成功时返回响应与前置失败轨迹，全败时仅返回失败轨迹
 branches:
   ok:
-    description: "命中可用节点并成功获取响应"
+    description: "命中可用节点并获取响应"
     output: [response_data, failed_trace]
   all_failed:
     description: "所有候选节点均尝试失败"
@@ -40,15 +58,16 @@ branches:
 
 graph:
   max_steps: 50
+
+  # 4. 显式声明带类型的空数组初值，供 builtin:array_append 累积失败记录
   variables:
-    # 显式声明带类型的空数组初值，供 builtin:array_append 累积失败轨迹
     failed_trace:
       type: array
       items: { type: string }
       default: []
 
   nodes:
-    # 1. 从队列头部弹出首元素 current_endpoint，剩余切片原地覆盖回 candidate_endpoints
+    # 步骤 1：从队列头部弹出首元素 current_endpoint，剩余切片写回 candidate_endpoints
     pop_endpoint:
       use: builtin:array_shift
       with:
@@ -58,7 +77,7 @@ graph:
           item: current_endpoint
           rest: candidate_endpoints
 
-    # 2. 尝试调用当前弹出的候选节点
+    # 步骤 2：调用当前弹出的候选节点
     try_call:
       input: [current_endpoint, request_payload]
       output:
@@ -66,14 +85,14 @@ graph:
         error_entry: { type: string }
       branches:
         success:
-          description: "当前节点调用成功，立即早退"
+          description: "当前节点调用成功，短路退出"
           output: [response_data]
         failed:
-          description: "当前节点调用失败，产出错误记录"
+          description: "当前节点调用失败，产出单条错误摘要"
           output: [error_entry]
-      run: "向节点 variables.current_endpoint 发送请求 variables.request_payload；成功则写入 output.response_data 并选 success；失败则将节点名与错误原因写入 output.error_entry 并选 failed。"
+      run: "向节点 variables.current_endpoint 发送请求 variables.request_payload；成功则写入 output.response_data 并选择 success；失败则将节点名与错误原因写入 output.error_entry 并选择 failed。"
 
-    # 3. 将单次失败记录追加到 failed_trace 末尾
+    # 步骤 3：将单次失败摘要 error_entry 追加至 failed_trace 列表末尾
     record_failure:
       use: builtin:array_append
       with:
@@ -83,15 +102,16 @@ graph:
         output:
           result: failed_trace
 
+  # 5. 控制流连边：组合 .some / .empty 分支、短路出口与成环回边
   edges:
     - start -> pop_endpoint
-    # 队列非空（.some）：current_endpoint 已定值，发起尝试
+    # 队列非空（.some）：current_endpoint 已定值，发起调用尝试
     - pop_endpoint.some -> try_call
-    # 命中即停（短路早退）：直接跳出循环至 end.ok，不再消费剩余节点
+    # 命中即停（短路早退）：直接跳出循环至 end.ok，不再消费剩余候选节点
     - try_call.success -> end.ok
-    # 当前节点失败：记录日志后沿回边跳回 pop_endpoint 继续取下一个
+    # 当前节点失败：追加错误记录后沿回边跳回 pop_endpoint 继续弹出下一项
     - try_call.failed -> record_failure
     - record_failure -> pop_endpoint
-    # 队列已耗尽（.empty）：进入 end.all_failed
+    # 队列已空（.empty）：所有候选节点均已耗尽，进入 end.all_failed
     - pop_endpoint.empty -> end.all_failed
 ```

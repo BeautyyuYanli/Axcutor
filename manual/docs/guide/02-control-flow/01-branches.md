@@ -1,36 +1,39 @@
 # 01. Branches：排他条件分支与按需产出
 
-在业务编排中，节点常常需要根据执行结果走向不同的分支（如校验通过 vs. 驳回、存在可选值 vs. 为 `null`）。更重要的是，**不同分支往往产出不同的字段子集**。
+在业务流程中，节点通常需要根据执行结果走向不同控制分支（如校验通过或驳回、命中缓存或回源查询），且不同分支往往产出不同的字段子集。
 
-Axcutor 通过 **`branches`（排他控制分支）** 结合 **分支关联输出契约（Branch-Scoped Output / Tagged Union）**，让你在每个分支只产出该分支真正需要的非空字段，彻底告别用 `[T, "null"]` 和 `null` 假初值污染正常业务流。
+Axcutor 通过 **`branches`（排他控制分支）** 与 **分支关联输出契约（Branch-Scoped Output / Tagged Union）**，支持每个分支仅声明并产出该分支所需的非空字段，无需将互斥分支的字段声明为 `[T, "null"]` 或填充 `null` 占位值。
 
 ---
 
-## 一、 声明 `branches` 的两种形式
+## 一、 `branches` 的两种声明形式
 
-在根节点、图内 `run` 节点或内联 `graph` 节点上，均可声明 `branches`：
+在根节点、图内 `run` 节点或内联 `graph` 节点上，均可声明 `branches`。
 
 ### 1. 全量产出简写（`<choice>: "<description>"`）
-当各分支均产出节点 `output` 中的全部字段（或节点无 `output`，仅做条件判断）时，直接写描述字符串：
+
+当各分支均产出节点 `output` 中的全部字段，或节点仅执行条件路由而不产出 `output` 字段时，直接将分支值写为描述字符串：
 
 ```yaml
 verify_signature:
   input: [payload, signature]
+  # 节点无 output，两个分支仅用于控制流路由
   branches:
-    valid: "签名有效"
+    valid: "签名校验通过"
     invalid: "签名不匹配或已过期"
-  run: "校验 variables.payload 的签名 variables.signature，有效则选 valid，否则选 invalid。"
+  run: "校验 variables.payload 的签名 variables.signature，有效则选择 valid，否则选择 invalid。"
 ```
 
 ### 2. 分支按需产出子集（`<choice>: { description: "...", output: [<field>, ...] }`）
-当不同分支产出不同的字段时，用 `output: [...]` 列出该分支承诺产出的字段名（若某分支不产出任何字段，可写 `output: []`）：
+
+当不同分支产出不同字段子集时，通过 `output: [<field>, ...]` 显式指定该分支承诺产出的字段列表（若某分支不产出任何字段，可写 `output: []`）：
 
 ```yaml
 inspect_order:
   input: [order_request]
   output:
-    approved_invoice: { type: string }  # 纯正非空 string，仅在 approved 分支产出
-    reject_reason: { type: string }     # 纯正非空 string，仅在 rejected 分支产出
+    approved_invoice: { type: string }  # 非空 string，仅在 approved 分支产出
+    reject_reason: { type: string }     # 非空 string，仅在 rejected 分支产出
     audit_timestamp: { type: integer }  # 两个分支均产出的公共字段
   branches:
     approved:
@@ -39,32 +42,132 @@ inspect_order:
     rejected:
       description: "订单不合规，记录驳回原因"
       output: [reject_reason, audit_timestamp]
-  run: "审核 variables.order_request；若合规写入 output.approved_invoice 并选 approved；否则写入 output.reject_reason 并选 rejected。均记录时间戳 output.audit_timestamp。"
+  run: "审核 variables.order_request；若合规写入 output.approved_invoice 并选择 approved；否则写入 output.reject_reason 并选择 rejected。均写入时间戳 output.audit_timestamp。"
 ```
 
 ---
 
 ## 二、 分支连边与分支终点（`end.<branch>`）
 
-1. **穷尽分支出边**：声明了 `branches` 的节点（未挂载 `for_each` 时），在 `graph.edges` 中必须为**每一个分支**编写一条出边 `node.<choice> -> target`。
-2. **分支终点 `end.<branch>`**：当根工作流或内联 `graph` 自身声明了 `branches` 时，图内控制流通过 `-> end.<branch>` 退出。到达 `end.<branch>` 的路径**只需确保该分支 `output` 列表中的变量已赋值**，其他分支专属的输出变量无需赋值！
+### 1. 穷尽分支出边（`node.<choice> -> target`）
+
+未挂载 `for_each` 的有分支节点，必须在 `graph.edges` 中为每一个声明的分支编写唯一一条出边。各分支下游路径仅获得该分支 `output` 子集的定值：
+
+```yaml
+edges:
+  - start -> inspect_order
+  # approved 分支下游可安全读取 approved_invoice 与 audit_timestamp
+  - inspect_order.approved -> issue_shipment
+  # rejected 分支下游可安全读取 reject_reason 与 audit_timestamp
+  - inspect_order.rejected -> send_rejection_notice
+```
+
+### 2. 分支出口终点（`-> end.<branch>`）
+
+当根工作流或内联 `graph` 自身声明了 `branches` 时，图内控制流通过 `-> end.<branch>` 退出。通往 `end.<branch>` 的路径只需确保该分支关联的 `output` 子集已定值，其他分支专属的输出变量无需赋值：
+
+```yaml
+output:
+  shipment_id: { type: string }
+  reject_reason: { type: string }
+branches:
+  fulfilled:
+    description: "订单已发货"
+    output: [shipment_id]
+  rejected:
+    description: "订单被驳回"
+    output: [reject_reason]
+
+graph:
+  nodes: ...
+  edges:
+    - start -> inspect_order
+    - inspect_order.approved -> issue_shipment
+    # 通往 end.fulfilled 的路径仅需为 shipment_id 赋值，无需为 reject_reason 赋值
+    - issue_shipment -> end.fulfilled
+    # 通往 end.rejected 的路径仅需为 reject_reason 赋值，无需为 shipment_id 赋值
+    - inspect_order.rejected -> end.rejected
+```
 
 ---
 
-## 三、 零开销确定性路由与拆包算子（`builtin:switch` & `builtin:unwrap`）
+## 三、 确定性路由与可空拆包内建算子
 
-当图中的某个变量已经是明确的 `boolean`、带 `enum` 约束的 `string`，或者是显式可空类型 `Optional<T>`（`type: [<BaseType>, "null"]`）时，无需编写 `run` 节点，直接使用运行时内建算子即可完成零开销路由与非空拆包（完整参数字典见 [内建节点字典](../../reference/builtins/README.md)）：
+当图中变量已经是明确的 `boolean`、带 `enum` 约束的 `string`，或显式可空类型 `Optional<T>`（`type: [<BaseType>, "null"]`）时，可直接调用运行时内建算子执行零开销路由或非空拆包（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）。
 
-* **[`builtin:switch`](../../reference/builtins/switch.md)**：
-  * 绑定 `boolean` 变量/字段路径时，自动暴露 **`.true`** 与 **`.false`** 分支；
-  * 绑定 `{ type: string, enum: [low, medium, high] }` 变量/字段路径时，自动暴露 **`.low`**、**`.medium`**、**`.high`** 分支。
-* **[`builtin:unwrap`](../../reference/builtins/unwrap.md)**：
-  * **模式 A（省略 `default`）**：暴露 **`.some`** 与 **`.none`** 分支；在 `.some` 分支下将可空类型 `[T, "null"]` 拆包收窄为非空类型 `T` 的新变量。
-  * **模式 B（传入 `default`）**：无分支单出边；当源变量为 `null` 时自动取 `default` 值，直接产出非空类型 `T`。
+### 1. [`builtin:switch`](../../reference/builtins/switch.md)：布尔与枚举确定性路由
 
-### 综合示例
+* 绑定 `type: boolean` 变量或结构体字段路径时，自动暴露 **`.true`** 与 **`.false`** 分支。
+* 绑定 `type: string, enum: [<v1>, <v2>, ...]` 变量或结构体字段路径时，自动暴露与各枚举值同名的 **`.<v1>`**、**`.<v2>`** 分支。
 
 ```yaml
+nodes:
+  # 布尔二路路由：自动暴露 check_vip.true 与 check_vip.false
+  check_vip:
+    use: builtin:switch
+    with:
+      input:
+        source: customer.is_vip
+
+  # 枚举多路路由：若 priority 的 enum 为 [low, medium, high]，自动暴露对应三个分支
+  route_priority:
+    use: builtin:switch
+    with:
+      input:
+        source: ticket.priority
+
+edges:
+  - start -> check_vip
+  - check_vip.true -> route_priority
+  - check_vip.false -> standard_queue
+  - route_priority.high -> urgent_handler
+  - route_priority.medium -> normal_handler
+  - route_priority.low -> batch_handler
+```
+
+### 2. [`builtin:unwrap`](../../reference/builtins/unwrap.md)：可空类型拆包与默认值合并
+
+`builtin:unwrap` 将可空类型 `[T, "null"]` 收窄为非空类型 `T`，支持两种模式：
+
+* **模式 A（省略 `default`）**：暴露 **`.some`** 与 **`.none`** 两个分支；在 `.some` 分支下产出非空类型 `T` 的目标变量 `value`，在 `.none` 分支下不产出 `value`（`output: []`）。
+* **模式 B（传入 `default`）**：无分支单出边（`node -> target`）；当 `source` 为 `null` 时自动回退为非空 `default` 值，直接产出非空类型 `T` 的 `value`。
+
+```yaml
+nodes:
+  # 模式 A（省略 default）：条件拆包，暴露 .some（产出 reviewer_id）与 .none（不产出）
+  check_assigned_reviewer:
+    use: builtin:unwrap
+    with:
+      input:
+        source: ticket.optional_reviewer
+      output:
+        value: reviewer_id
+
+  # 模式 B（传入 default）：默认值合并，无分支单出边，直接产出非空 string 变量 operator_name
+  resolve_operator_with_default:
+    use: builtin:unwrap
+    with:
+      input:
+        source: ticket.operator_override
+        default: { value: "auto_bot" }
+      output:
+        value: operator_name
+
+edges:
+  - start -> resolve_operator_with_default
+  - resolve_operator_with_default -> check_assigned_reviewer
+  - check_assigned_reviewer.some -> notify_specific_reviewer
+  - check_assigned_reviewer.none -> assign_from_pool
+```
+
+---
+
+## 四、 完整示例：组合 `builtin:unwrap`、`builtin:switch` 与按需分支出口
+
+以下完整工作流对输入的工单结构体先执行可空字段默认值合并，再按优先级枚举值路由至不同处理分支，并从对应的 `end.<branch>` 退出：
+
+```yaml
+# 1. 根节点输入契约：包含 enum 枚举字段与可空 [string, "null"] 字段
 input:
   ticket:
     type: object
@@ -76,10 +179,14 @@ input:
       operator_override:
         type: [string, "null"]
     required: [id, priority, operator_override]
+
+# 2. 根节点输出全集：各字段均为非空 string
 output:
   resolution_report: { type: string }
   escalation_id: { type: string }
   assigned_operator: { type: string }
+
+# 3. 根节点排他分支契约：resolved 与 escalated 分别关联不同的输出字段子集
 branches:
   resolved:
     description: "常规工单直接处理完毕"
@@ -90,7 +197,7 @@ branches:
 
 graph:
   nodes:
-    # 1. 用 builtin:unwrap (带 default) 将可空的 operator_override 合并为非空 string
+    # 步骤 1：使用带 default 的 builtin:unwrap 将可空字段 ticket.operator_override 合并为非空 assigned_operator
     resolve_operator:
       use: builtin:unwrap
       with:
@@ -100,25 +207,28 @@ graph:
         output:
           value: assigned_operator
 
-    # 2. 用 builtin:switch 对 enum 字段 ticket.priority 做零开销分流
+    # 步骤 2：使用 builtin:switch 对枚举字段 ticket.priority (normal | urgent) 执行二路分流
     route_priority:
       use: builtin:switch
       with:
         input:
           source: ticket.priority
 
+    # 步骤 3a：常规分支处理节点，仅产出 resolved 出口所需的 resolution_report
     handle_normal:
       input: [ticket, assigned_operator]
       output:
         resolution_report: { type: string }
       run: "由 variables.assigned_operator 处理常规工单 variables.ticket.id，结果写入 output.resolution_report。"
 
+    # 步骤 3b：紧急分支处理节点，仅产出 escalated 出口所需的 escalation_id
     handle_urgent:
       input: [ticket, assigned_operator]
       output:
         escalation_id: { type: string }
       run: "由 variables.assigned_operator 升级紧急工单 variables.ticket.id，升级单号写入 output.escalation_id。"
 
+  # 4. 控制流连边：两条分支路径分别汇聚至 end.resolved 与 end.escalated
   edges:
     - start -> resolve_operator
     - resolve_operator -> route_priority
@@ -130,4 +240,4 @@ graph:
 
 ---
 
-当我们将排他分支的一条出边连回上游已经执行过的节点时，控制流图就形成了环路。下一节介绍动态条件循环：[02. 成环回边：动态条件循环（While Loop）](./02-cycles-and-back-edges.md)。
+下一节：[02. 成环回边：动态条件循环（While Loop）](./02-cycles-and-back-edges.md)。

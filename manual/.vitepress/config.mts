@@ -10,11 +10,6 @@ export default withMermaid(
     // 支持通过环境变量 VITEPRESS_BASE 自动适配 GitHub Pages 子路径（如 /Axcutor/），本地开发默认 /
     base: process.env.VITEPRESS_BASE || '/',
 
-    // 将各目录下的 README.md 映射为对应目录的 index.md，既保留仓库直接阅读习惯又支持站点目录首页
-    rewrites(id) {
-      return id.replace(/(^|\/)README\.md$/, '$1index.md')
-    },
-
     markdown: {
       math: true
     },
@@ -43,7 +38,7 @@ export default withMermaid(
           {
             text: '渐进式教程导读',
             items: [
-              { text: '教程总览与阅读路线', link: '/docs/guide/' }
+              { text: '教程总览与原语体系', link: '/docs/guide/' }
             ]
           },
           {
@@ -84,9 +79,9 @@ export default withMermaid(
 
         '/docs/cookbook/': [
           {
-            text: '实战组合配方索引',
+            text: '实战组合配方导读',
             items: [
-              { text: 'Cookbook 场景总览', link: '/docs/cookbook/' }
+              { text: '工程模式选型矩阵', link: '/docs/cookbook/' }
             ]
           },
           {
@@ -120,7 +115,7 @@ export default withMermaid(
           {
             text: '用户速查字典',
             items: [
-              { text: '速查字典总览', link: '/docs/reference/' },
+              { text: '文档层级结构速览', link: '/docs/reference/' },
               { text: '01. 节点与图字段速查表', link: '/docs/reference/01-node-and-graph-fields' },
               { text: '02. 6 种控制边语法速查表', link: '/docs/reference/02-edge-syntax-cheatsheet' },
               { text: '03. TypeSpec 类型写法速查表', link: '/docs/reference/03-typespec-cheatsheet' }
@@ -200,7 +195,7 @@ export default withMermaid(
           {
             text: '早期原型设计稿归档',
             items: [
-              { text: '原型归档索引', link: '/prototype/' },
+              { text: '原型演进概览', link: '/prototype/' },
               { text: 'DSL.md (初始总体规范)', link: '/prototype/DSL' },
               { text: 'builtins.md (内建算子初稿)', link: '/prototype/builtins' },
               { text: 'error_handling.md (容错模型初稿)', link: '/prototype/error_handling' },

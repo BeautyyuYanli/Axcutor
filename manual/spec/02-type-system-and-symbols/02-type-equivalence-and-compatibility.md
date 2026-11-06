@@ -9,7 +9,7 @@
 两个良构的 `TypeSpec` $T_1$ 与 $T_2$ 静态等价（记作 $T_1 \equiv T_2$），当且仅当递归满足以下全部条件：
 
 1. **基础类型与可空性一致**：
-   * $\text{BaseType}(T_1) = \text{BaseType}(T_2)$（注意：在变量与变量之间，$\texttt{integer} \not\equiv \texttt{number}$，不存在隐式子类型转换）；
+   * $\text{BaseType}(T_1) = \text{BaseType}(T_2)$（注意：在变量与变量之间，$\texttt{integer} \not\equiv \texttt{number}$，无隐式子类型转换）；
    * $\text{Nullable}(T_1) = \text{Nullable}(T_2)$（其中 `type: [b, "null"]` 与 `type: ["null", b]` 的 $\text{Nullable}$ 均为 $\texttt{true}$，彼此等价，但与 $\text{Nullable} = \texttt{false}$ 的非空类型不等价）。
 2. **标量枚举集合一致**：
    * 若 $\text{BaseType}(T_1) \in \{\texttt{string}, \texttt{integer}, \texttt{number}, \texttt{boolean}\}$，则两者要么均未声明 `enum`，要么 $\text{set}(T_1.\text{enum}) = \text{set}(T_2.\text{enum})$。
@@ -30,7 +30,7 @@
 当在 `graph.variables` 初值声明或 `use.with.input` 常量传参中向目标类型 $T$ 提供字面量 $L$ 时，执行实例兼容性判定 $L \models T$：
 
 1. **空值 `null` 规则**：
-   * 当 $L = \texttt{null}$ 时：$L \models T \iff \text{Nullable}(T) = \texttt{true}$。非空类型严禁接受 `null` 字面量。
+   * 当 $L = \texttt{null}$ 时：$L \models T \iff \text{Nullable}(T) = \texttt{true}$。非空类型禁止接受 `null` 字面量。
 2. **非空字面量规则（当 $L \neq \texttt{null}$ 时）**：
    * **标量匹配**：
      * $\text{BaseType}(T) = \texttt{string} \implies L$ 必须为字符串；

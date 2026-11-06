@@ -12,9 +12,9 @@
 | **可恢复运行时异常** | `timeout` | 单次尝试耗时超出节点 `timeout_ms` | **允许** |
 | **可恢复运行时异常** | `contract` | 节点返回的 `output` 违反 `TypeSpec` 或返回非法 `branch` | **允许** |
 | **可恢复运行时异常** | `max_steps` | 内联 `graph` 或 `use` 子工作流超出其 `graph.max_steps` | **允许**（仅在包裹该子图的父节点边界） |
-| **不可恢复引擎 Panic** | `StackOverflowError` | 调用栈深度 $d > \text{MAX\_CALL\_DEPTH}$ | **严禁拦截**（直接穿透终止） |
-| **不可恢复引擎 Panic** | `MaxStepsExceededError` | 根工作流（Root Graph）自身超出 `max_steps` | **严禁拦截**（直接穿透终止） |
-| **不可恢复引擎 Panic** | `CancelledError` | 外部宿主取消信号，或并发兄弟分支 Fail-Fast 协同取消 | **严禁拦截**（直接穿透终止） |
+| **不可恢复引擎 Panic** | `StackOverflowError` | 调用栈深度 $d > \text{MAX\_CALL\_DEPTH}$ | **禁止拦截**（直接穿透终止） |
+| **不可恢复引擎 Panic** | `MaxStepsExceededError` | 根工作流（Root Graph）自身超出 `max_steps` | **禁止拦截**（直接穿透终止） |
+| **不可恢复引擎 Panic** | `CancelledError` | 外部宿主取消信号，或并发兄弟分支 Fail-Fast 协同取消 | **禁止拦截**（直接穿透终止） |
 
 ---
 
@@ -39,7 +39,8 @@ stateDiagram-v2
     UnwindToParent --> [*]: 触发所属图栈帧 Unwind 展开
 ```
 
-### `catch` 分支匹配规则：
+### `catch` 分支匹配规则
+
 * 节点的 `catch` 声明中，各分支的显式选择器集合两两互斥，且最多有一个分支声明通配符 `"*"`（代表差集 $\{ \texttt{execution}, \texttt{timeout}, \texttt{contract}, \texttt{max\_steps} \} \setminus \bigcup \text{ExplicitSelectors}$）。
 * 当可恢复异常 $E$ 从重试控制器逃逸时，若存在分支 $c \in \text{dom}(N.\text{catch})$ 使得 $E \in \text{Selectors}(c)$，则异常被消费，控制令牌以空输出（$\Delta = \emptyset$）转入异常出边 $N.c$。
 

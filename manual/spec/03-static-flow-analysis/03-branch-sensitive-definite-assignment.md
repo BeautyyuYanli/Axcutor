@@ -1,6 +1,6 @@
 # 03. 全路径分支敏感必达定值分析（Definite Assignment Analysis）
 
-为确保运行时绝不发生读取未初始化变量（Unassigned Variable Read）的错误，静态检查器对每张图 $G$ 独立执行前向必达数据流分析（Forward Must-Analysis）。
+为确保运行时不发生读取未初始化变量（Unassigned Variable Read）的错误，静态检查器对每张图 $G$ 独立执行前向必达数据流分析（Forward Must-Analysis）。
 
 ---
 
@@ -29,7 +29,7 @@
    仅并入分支 $b$ 契约承诺产出的输出变量子集 $OutVars(N, b)$：
    $$Def_{\text{out}}(e_b) = Def_{\text{in}}(N) \cup OutVars(N, b)$$
 4. **未挂载 `for_each` 的节点 $N$ 的异常捕获出边 $e_c = (N.c \to \text{target})$**（$c \in \text{dom}(N.\text{catch})$）：
-   异常分支回滚一切局部产出（$OutVars(N, c) = \emptyset$）：
+   异常分支回滚局部产出（$OutVars(N, c) = \emptyset$）：
    $$Def_{\text{out}}(e_c) = Def_{\text{in}}(N)$$
 5. **Fork-Join 并发三元边 $e_{\text{fork}} = (\text{src} \to [W_1, \dots, W_k] \to \text{join\_target})$**：
    设触发源端点 $\text{src}$（可为 `start`、无分支节点 $S$ 或分支端点 $S.b$）对应的源出边定值集为 $Def_{\text{src}}$，则：
@@ -41,7 +41,7 @@
 
 ## 三、 汇合方程（Meet Equation）与不动点求解
 
-对于图内除 `start` 與并发组成员外的任意节点或终态端点 $X \in \text{dom}(G.\text{nodes}) \cup \{\text{end}, \text{end}.*, \text{fail}\}$：
+对于图内除 `start` 与并发组成员外的任意节点或终态端点 $X \in \text{dom}(G.\text{nodes}) \cup \{\text{end}, \text{end}.*, \text{fail}\}$：
 $$Def_{\text{in}}(X) = \bigcap_{e \in \text{InEdges}(X)} Def_{\text{out}}(e)$$
 
 由于图可能包含成环回边，算法按标准必达分析（Must-Analysis）初始化：

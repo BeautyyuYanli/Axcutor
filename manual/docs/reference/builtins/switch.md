@@ -6,14 +6,15 @@
 
 ## 一、 参数与分支契约
 
-| 方向 | 参数名 | 必填/可选 | 类型契约与约束 |
+| 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
 | **`with.input`** | `source` | **必填** | 绑定已定值的非空 `type: boolean`，或带 `enum: [<v1>, <v2>, ...]` 约束的非空 `type: string`。 |
-| **`with.output`** | *无* | *禁止声明* | 仅做纯控制流路由，不产出或修改任何变量。 |
+| **`with.output`** | *无* | *禁止声明* | 仅执行控制流路由，不产出或修改任何变量。 |
 
-### 控制流分支行为（编译期强制穷尽性检查）：
+### 控制流分支行为（编译期穷尽性检查）
+
 * **当 `source` 为 `type: boolean` 时**：固定暴露 **`.true`** 与 **`.false`** 两个分支。
-* **当 `source` 为 `type: string, enum: [<v1>, <v2>, ...]` 时**：自动暴露与每个枚举值字面量完全同名的 **`.<v1>`**、**`.<v2>`**... 分支。每一个枚举分支都必须在 `graph.edges` 中声明唯一一条出边。
+* **当 `source` 为 `type: string, enum: [<v1>, <v2>, ...]` 时**：自动暴露与每个枚举值字面量同名的 **`.<v1>`**、**`.<v2>`**... 分支。每一个枚举分支均必须在 `graph.edges` 中声明唯一一条出边。
 
 ---
 
@@ -21,14 +22,14 @@
 
 ```yaml
 nodes:
-  # 形态 A：布尔二路路由（.true / .false）
+  # 形态 A：布尔二路路由（暴露 check_review_passed.true 与 check_review_passed.false）
   check_review_passed:
     use: builtin:switch
     with:
       input:
         source: review_result.passed
 
-  # 形态 B：枚举多路穷尽路由（.low / .medium / .high）
+  # 形态 B：枚举多路穷尽路由（若 priority 的 enum 为 [low, medium, high]，暴露对应三个分支）
   route_by_priority:
     use: builtin:switch
     with:

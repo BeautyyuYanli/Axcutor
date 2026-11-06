@@ -1,61 +1,184 @@
 # 02. 执行护栏：`max_steps`、调用栈深度与 `timeout_ms`
 
-在生产环境中运行包含动态循环（成环回边）、子工作流调用（`use`）与外部 I/O 的工作流时，Axcutor 提供三道自动护栏，确保工作流始终在受控的时间与资源边界内运行。
+在运行包含动态循环（成环回边）、跨文件子工作流调用（`use`）与外部 I/O 的工作流时，Axcutor 提供单图步数上限、调用栈深度上限与节点级超时重试三项执行护栏，控制工作流的资源消耗与执行时长。
 
 ---
 
 ## 一、 单图执行步数上限（`graph.max_steps`）
 
-每个激活的 `graph`（包括根工作流的 `graph`、`use` 调用的子工作流以及每次激活的内联 `graph`）都拥有自己独立的步数计数器，用于防止成环回边条件不收敛导致的无限循环。
+每个激活的 `graph`（包括根工作流的 `graph`、`use` 调用的子工作流以及每次激活的内联 `graph`）均维护独立的步数计数器，用于限制成环回边的最大迭代规模。
+
+### 1. 计步规则
+
+| 调度的图内元素 | 消耗步数 |
+| :--- | :--- |
+| 普通单次节点（`run`、`use` 或内联 `graph` 本身） | 每次激活计 **`1` 步** |
+| Fork-Join 并发组（`-> [a, b, c] ->`） | 按组内并发激活的节点数量计步（例如 3 个分支计 **`3` 步**） |
+| 挂载 `for_each` 的节点 | 按实际遍历的元素个数累加步数（例如遍历 10 个元素计 **`10` 步**；空集合计 `0` 步） |
+
+### 2. 超限回滚与异常捕获
+
+* **在内联 `graph` 或 `use` 子工作流内超限**：立即中止该子图并丢弃其未提交的所有中间修改，向外层调用节点抛出可恢复的 **`max_steps` 异常**；外层节点可通过 `catch` 拦截该异常并转入降级分支。
+* **在顶层根图自身超限**：无上层调用方捕获，直接终止整个工作流。
 
 ```yaml
-graph:
-  max_steps: 50   # 可选，正整数；未显式声明时默认上限为 1000 步
-  nodes: ...
-  edges: ...
-```
+nodes:
+  # 内联子图设置独立的 max_steps: 10；若内部循环超过 10 步，外层通过 catch 捕获 max_steps 异常
+  bounded_loop_subflow:
+    input: [initial_prompt]
+    output: [refined_text]
+    catch:
+      step_limit_reached: [max_steps]
+    graph:
+      max_steps: 10   # 仅统计该内联子图内部调度的节点步数（未配置时默认 1000）
+      nodes: ...
+      edges: ...
 
-* **怎么计步？**
-  * 每激活一个普通节点计 **`1` 步**；
-  * 启动一个并发组 `-> [a, b, c] ->` 按组内激活的节点数计步（此处计 **`3` 步**）；
-  * 挂载了 `for_each` 的节点按**实际遍历的元素个数**累加步数（例如遍历 10 个元素计 **`10` 步**）。
-* **超出 `max_steps` 会发生什么？**
-  * 如果发生在**内联 `graph` 或 `use` 子工作流**中，会立即中断并回滚该子图，向外层父节点抛出可恢复的 **`max_steps` 异常**——外层节点可以用 `catch` 捕获该异常并走降级分支！
-  * 如果发生在**最顶层根图**自身，则直接终止整个工作流。
+edges:
+  - start -> bounded_loop_subflow
+  - bounded_loop_subflow -> end
+  # 子图步数超限时回滚子图修改，转入兜底处理节点
+  - bounded_loop_subflow.step_limit_reached -> use_fallback_text
+  - use_fallback_text -> end
+```
 
 ---
 
 ## 二、 调用栈深度上限（`max_call_depth`）
 
-为了防止工作流直接递归（`A -> use A`）或相互递归（`A -> use B -> use A`）导致爆栈，运行时按调用链路径追踪栈深度（根图为 `1`，每进入一层 `use` 或内联 `graph` 深度 `+1`，退出时 `-1`；并发分支之间独立计算，互不横向累加）。
+为防止工作流直接递归（`A -> use A`）或相互递归（`A -> use B -> use A`）导致调用栈溢出，运行时按调用链路径追踪栈深度：
 
-当任意调用路径深度超过引擎阈值（默认 **`64`**）时，立即触发不可捕获的 `StackOverflowError` 终止执行。
+* **深度增减规则**：根图深度为 `1`；每进入一层 `use: workflow:<path>`（`Function Frame`）或内联 `graph`（`Block Frame`），当前路径调用深度 `+1`，退出时 `-1`。
+* **并发分支独立计算**：Fork-Join 并发分支或 `for_each` 并发迭代各自沿其父节点深度独立向下累加，兄弟分支之间不横向叠加。
+* **超限行为**：当任意调用路径深度超过引擎上限（默认 **`64`**）时，立即触发不可捕获的致命错误 `StackOverflowError` 并终止工作流。
 
 ---
 
 ## 三、 节点级单次超时与原地快照重试（`timeout_ms` & `retry`）
 
-在任何业务节点（`run`、内联 `graph`、`use: workflow:<path>`）上，都可以配置 `timeout_ms` 和 `retry`：
+在任何业务节点（`run`、内联 `graph`、`use: workflow:<path>`）上均可声明 `timeout_ms` 与 `retry`（注：零开销确定性算子 `use: builtin:*` 不支持 `timeout_ms` 与 `retry`）。
+
+### 1. 单节点超时与重试配置
+
+* **`timeout_ms`**：作用于**每一次独立尝试（Per-Attempt）**。若配置 `timeout_ms: 5000` 与 `max_attempts: 3`，则每次尝试均享有独立的 5000 毫秒超时预算。
+* **`retry` 快照重放**：当单次尝试因匹配 `retry.on` 的异常失败时，运行时丢弃该次尝试产生的一切未提交状态，等待 `backoff_ms` 后使用进入节点前锁定的同一份 `input` 只读快照重新执行。
 
 ```yaml
 nodes:
   call_payment_api:
-    timeout_ms: 5000                  # 单次尝试（Per-Attempt）最大耗时：5000 毫秒
+    timeout_ms: 5000                  # 单次尝试最大耗时：5000 毫秒
     retry:
-      max_attempts: 3                 # 最大尝试总次数（含首次执行，>= 2）
+      max_attempts: 3                 # 最大尝试总次数（含首次执行，必须 >= 2）
       backoff_ms: 1000                # 两次尝试间的退避等待毫秒数（默认 0）
-      on: [execution, timeout]        # 允许触发重试的异常类型（默认 [execution, timeout]）
+      on: [execution, timeout]        # 触发重试的异常类型列表（默认 [execution, timeout]）
     input: [payment_request]
     output:
       receipt_id: { type: string }
     run: "调用支付接口处理请求 variables.payment_request，将凭证号写入 output.receipt_id。"
 ```
 
-### 关键行为特性：
-1. **`timeout_ms` 针对每一次独立尝试**：如果设置了 `timeout_ms: 5000` 和 `max_attempts: 3`，那么每次重试都享有完整的 5 秒超时预算。
-2. **基于只读输入快照的干净重放**：某次尝试失败或超时后，运行时会**彻底丢弃该次尝试产生的一切半成品状态**（如果是内联 `graph` 则销毁重建子栈帧），等待 `backoff_ms` 后用进入节点前锁定的同一份 `input` 只读快照重新执行。
-3. **与 `for_each` 结合时的元素级重试**：当 `for_each` 节点配置了 `timeout_ms` / `retry` 时，仅对发生失败的**那单个元素**原地重试，同一批次里已经成功的其他元素不会重跑。
+### 2. 与 `for_each` 结合时的元素级隔离重试
+
+当挂载了 `for_each` 的节点同时配置 `timeout_ms` 与 `retry` 时，超时计时器与重试计数器**绑定在单个元素迭代（Per-Item Attempt）上**：仅对发生失败的单个元素执行原地重试，同一批次中已成功完成的其他元素不会重复执行：
+
+```yaml
+nodes:
+  batch_enrich_users:
+    for_each:
+      source: user_ids
+      item: current_uid
+      concurrency: 5
+      collect:
+        profile: enriched_profiles
+    # 每个 current_uid 的单次尝试超时为 3000ms；某元素超时仅重跑该元素（最多 3 次）
+    timeout_ms: 3000
+    retry:
+      max_attempts: 3
+      backoff_ms: 500
+      on: [execution, timeout]
+    input: [current_uid]
+    output:
+      profile: { type: string }
+    run: "查询用户 variables.current_uid 的画像数据写入 output.profile。"
+```
 
 ---
 
-如果重试耗尽后依然失败，或者发生了无需重试的异常，我们该如何捕获并优雅恢复？请阅读本教程的最后一节：[03. 错误处理：异常捕获（`catch`）与主动回滚（`fail`）](./03-error-handling.md)。
+## 四、 完整示例：组合步数护栏、超时控制与快照重试
+
+以下完整工作流在内联子图上配置 `max_steps` 与整体 `timeout_ms`，并在子图内部的外部接口调用节点上配置单次尝试超时与 `retry`：
+
+```yaml
+# 1. 根节点输入与输出契约
+input:
+  query_topic: { type: string }
+output:
+  final_summary: { type: string }
+
+graph:
+  nodes:
+    # 阶段 1：带步数上限与总超时保护的内联探索子图
+    # - timeout_ms: 30000 限制整个子图单次运行总耗时不超过 30 秒
+    # - catch 拦截子图步数超限 (max_steps) 或总超时 (timeout)，转入降级节点
+    bounded_research_stage:
+      timeout_ms: 30000
+      catch:
+        degraded: [max_steps, timeout]
+      input: [query_topic]
+      output: [final_summary]
+      graph:
+        # 限制子图内部环路最多执行 12 步
+        max_steps: 12
+        variables:
+          draft_notes: ""
+        nodes:
+          # 子图步骤 1.1：调用外部检索服务，配置单次请求 4 秒超时与最多 3 次原地重试
+          fetch_next_evidence:
+            timeout_ms: 4000
+            retry:
+              max_attempts: 3
+              backoff_ms: 1000
+              on: [execution, timeout]
+            input: [query_topic, draft_notes]
+            output:
+              draft_notes: { type: string }
+            run: "围绕主题 variables.query_topic 检索新资料并追加至 variables.draft_notes，写回 output.draft_notes。"
+
+          # 子图步骤 1.2：评估资料是否充足，决定继续回边检索或产出最终摘要
+          evaluate_sufficiency:
+            input: [draft_notes]
+            output:
+              final_summary: { type: string }
+            branches:
+              enough:
+                description: "资料充足，生成摘要并结束子图"
+                output: [final_summary]
+              need_more:
+                description: "资料不足，继续下一轮检索"
+                output: []
+            run: "评估 variables.draft_notes 是否充足；充足则生成摘要写入 output.final_summary 并选 enough，否则选 need_more。"
+
+        edges:
+          - start -> fetch_next_evidence
+          - fetch_next_evidence -> evaluate_sufficiency
+          - evaluate_sufficiency.need_more -> fetch_next_evidence
+          - evaluate_sufficiency.enough -> end
+
+    # 阶段 2（降级补偿节点）：当子图触发 max_steps 或 timeout 时，生成兜底摘要
+    build_fallback_summary:
+      input: [query_topic]
+      output:
+        final_summary: { type: string }
+      run: "检索阶段达到资源上限，为主题 variables.query_topic 生成基础兜底说明写入 output.final_summary。"
+
+  # 2. 主图控制流连边
+  edges:
+    - start -> bounded_research_stage
+    - bounded_research_stage -> end
+    - bounded_research_stage.degraded -> build_fallback_summary
+    - build_fallback_summary -> end
+```
+
+---
+
+下一节：[03. 错误处理：异常捕获（`catch`）与主动回滚（`fail`）](./03-error-handling.md)。
