@@ -1,0 +1,34 @@
+// Run the generated nodejs glue. Each call executes the actual .wasm module.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const api = require(path.resolve(process.argv[2]));
+const oracle = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+const hostError = error => error instanceof Error && !(error instanceof WebAssembly.RuntimeError);
+let queries = 0;
+let invalidQueries = 0;
+for (const entry of oracle) {
+  assert.equal(api.compile_workflow(entry.request_json), entry.result_json);
+  for (const query of entry.queries) {
+    assert.equal(api.get_available_vars_at_node(query.analysis_json, query.node_id, query.expected_json), query.vars_json);
+    assert.equal(api.derive_node_ports(query.analysis_json, query.node_id), query.ports_json);
+    queries++;
+  }
+  for (const query of entry.invalid_queries) {
+    assert.throws(() => api.get_available_vars_at_node(query.analysis_json, query.node_id, query.expected_json), hostError);
+    if (query.check_ports) assert.throws(() => api.derive_node_ports(query.analysis_json, query.node_id), hostError);
+    invalidQueries++;
+  }
+}
+console.log('Rejected query groups:', invalidQueries);
+assert.throws(() => api.compile_workflow('{}'));
+assert.throws(() => api.compile_workflow('not JSON'));
+assert.throws(() => api.get_available_vars_at_node('{}', 'n'));
+assert.throws(() => api.derive_node_ports('not JSON', 'n'));
+const shallow = oracle[0].queries[0].analysis_json;
+const deepType = '{"type":"array","items":'.repeat(2048) + '{"type":"integer"}' + '}'.repeat(2048);
+const deepAnalysis = shallow.slice(0, -1) + ',"extra":' + '['.repeat(2048) + '0' + ']'.repeat(2048) + '}';
+assert.throws(() => api.get_available_vars_at_node(shallow, 'n', deepType), hostError);
+assert.throws(() => api.get_available_vars_at_node(deepAnalysis, 'n'), hostError);
+assert.throws(() => api.derive_node_ports(deepAnalysis, 'n'), hostError);
+console.log(`WebAssembly: ${oracle.length} compile cases, ${queries} canvas queries passed`);

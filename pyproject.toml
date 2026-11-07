@@ -1,0 +1,46 @@
+[project]
+name = "axcutor"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Axcutor development workspace"
+
+[tool.uv.workspace]
+members = ["crates/axcutor-py", "python/axcutor_runtime"]
+
+[tool.uv.sources]
+axcutor-core = { workspace = true }
+axcutor-runtime = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "axcutor-runtime",
+  "pytest>=8",
+  "pytest-asyncio>=1",
+  "ruff>=0.14",
+  "mypy>=1.18",
+  "types-simplejson>=3.20",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/runtime"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["python/axcutor_runtime/src"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "axcutor_core"
+ignore_missing_imports = true
