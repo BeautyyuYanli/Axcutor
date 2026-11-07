@@ -2,11 +2,13 @@
 
 * **状态**：Proposed
 * **所属分类**：执行器 ABI 架构演进、语法正交化与静态类型代码生成（Executor Architecture, Grammar Simplification & Static Type Codegen）
+* **前置关联提案**：
+  * [`RFC-0011: Axcutor 编译器前后端与 Temporal 运行时参考实现架构`](./0011-compiler-and-temporal-runtime-architecture.md)
 * **核心解决的问题**：
-  1. **废除自然语言变量正则提取（`RunVarRef`）**：移除前期针对提示词字符串设计的 `\bvariables\.[a-zA-Z_]...` 正则扫描与静态路径检查，将 `run` 节点的静态数据流依赖完全收敛至节点显式声明的 `input` 契约，彻底解除编译器与执行器内部载荷文本的耦合；
-  2. **引入内聚式 `RunSpec` 标记联合体（Tagged Union）**：将 `run` 字段的值从裸字符串重构为以 `executor` 为必填鉴别键的结构化映射对象（无裸字符串语法糖），实现图调度契约与具体执行器配置的严格分层；
-  3. **定义首个标准执行器 `builtin`（可信进程内 Python 执行器）**：支持在不引入隔离沙箱的前提下直接运行可信 Python 代码（`run: { executor: "builtin", content: "<python_code>" }`）；
-  4. **确立基于 `TypeSpec` 的前后置模板合成与分支联合返回类型（Union of Branch Output Types）**：通过禁用 Python 保留字作为标识符，并为每个 `builtin` 节点的 `content` 自动合成包含强类型只读 `Input`、按分支精细化定义的 `Branch.<branch_id>`（或无分支时的 `Output`）模型及 `async def __axcutor_run__(input: Input) -> ReturnType:` 签名的完整可独立编译/静态分析的 `.py` 单元。
+  1. **废除自然语言变量正则提取（`RunVarRef`）**：移除前期针对提示词字符串设计的 `\bvariables\.[a-zA-Z_]...` 正则扫描、归一化 AST 中的 `references: Vec<FieldPath>` 字段及 `symbol.capture` 检查，将 `run` 节点的静态数据流依赖完全收敛至节点显式声明的 `input` 契约，彻底解除编译器与执行器内部载荷文本的耦合；
+  2. **引入内聚式 `RunSpec` 标记联合体（Tagged Union）与语言无关的 `input_schema` 导出**：将 `run` 字段的值从裸字符串重构为以 `executor` 为必填鉴别键的结构化映射对象（无裸字符串语法糖）；Rust 编译器前端（`axcutor-core`）保持对具体宿主框架（如 Pydantic 或未来 TS 沙箱）的零耦合，仅负责校验 `RunSpec` 结构并在归一化 `Run` 节点中附带其 `input` 变量的 `TypeSpec` 签名（`input_schema`）；
+  3. **确立 `RunActivities.execute_run` 按 `executor` 统一分派机制与首个标准执行器 `builtin`**：在 Python Temporal Activity 外壳（`RunActivities.execute_run`）中统一复用超时计时（`deadline`）、心跳取消（`heartbeat` + `AbortSignal`）与出口处的 Rust `validate_run_contract` 契约校验，内部按 `run_spec["executor"]` 分派至内置的 `builtin`（可信进程内 Python 执行器）及未来扩展的其他执行器（如 `ts_sandbox`），同时将 `options.task_queues` 改为按 `executor` 名称路由；
+  4. **确立 `builtin` 执行器基于 `TypeSpec` 的前后置 `.py` 模板合成与分支联合返回类型（Union of Branch Output Types）**：通过全局禁用 Python 保留字作为标识符，由 Python `builtin` 执行器模块根据节点的 `input_schema`、`output_schema` 与 `branches_contract` 将 `run.content` 自动合成为包含强类型只读 `Input`（兼容运行时精确 `Decimal` 数值传输）、按分支精细化定义的 `Branch.<branch_id>`（或无分支时的 `Output`）模型及 `async def __axcutor_run__(input: Input) -> ReturnType:` 签名的完整可独立编译与静态分析（`pyright` / `mypy`）的 `.py` 单元。
 
 ---
 
@@ -14,53 +16,56 @@
 
 ### 问题 12.1：自然语言变量正则提取（`RunVarRef`）属于前期过度设计，破坏了编译器与执行器的职责边界
 
-在现行规范中，编译器假定所有 `run` 载荷均为自然语言提示词字符串，并使用正则表达式 `\bvariables\.([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)` 从文本中提取形如 `variables.user.name` 的引用，强制对其执行静态字段路径类型推导 `TypeOf`，甚至专门定义了“句尾英文句号自动剥离”的词法特判。
+在前期规范与 `axcutor-core` 实现中，编译器假定所有 `run` 载荷均为自然语言提示词字符串，并使用正则表达式 `\bvariables\.([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)` 从文本中提取形如 `variables.user.name` 的引用存入 `references: Vec<FieldPath>`，强制对其执行 `symbol.capture` 白名单校验与静态字段路径类型推导 `TypeOf`。
 * **冗余性与侵入性缺陷**：
   1. **静态数据流分析本就不依赖 `RunVarRef`**：在必达定值分析中，节点 $N$ 的读取变量集 $Use(N)$ 完全由节点显式声明的 `input: [...]` 列表唯一决定；在运行期，调度器也严格按 `input: [...]` 裁剪 `input_snapshot`，未在 `input` 中声明的图变量物理上绝不会进入 `run` 执行器。
-  2. **阻塞代码类执行器**：当 `run` 承载的是 Python 源码或其他结构化执行器载荷时，用正则在源码字符串或注释中扫描 `variables.xxx` 既不完备又会产生误报。
+  2. **阻塞代码类执行器**：当 `run` 承载的是 Python 源码或未来的 TypeScript 代码时，用正则在源码字符串或注释中扫描 `variables.xxx` 既不完备又会产生误报。
 
-### 问题 12.2：`run` 缺乏显式执行器分派结构（`executor`），无法在多执行器架构下内聚扩展
+### 问题 12.2：`run` 缺乏显式执行器分派结构（`executor`），且外部手工注册表导致工作流无法自包含
 
-现行文法将 `RunSpec` 硬编码为非空裸字符串 `String`。
-* 若要支持多种执行器（首先是直接执行可信 Python 代码的 `builtin` 执行器，以及未来可能扩展的其他执行后端），必须提供一个显式的执行器选择字段；
+在前期设计中，`RunSpec` 被定义为裸字符串 `String`，而在 Temporal 运行时（`axcutor_runtime`）中则要求宿主在启动 `create_worker(client, task_queue, executors)` 时手工传入一个外部函数字典 `executors: Mapping[str, Executor]`，通过 `run` 字符串去查找外部 Python 函数，并将整个 `run` 字符串作为 `options.task_queues` 的路由键。
+* 若要让工作流自身能够直接内联携带可执行代码，并支持多种执行器（首先是直接执行可信 Python 代码的 `builtin` 执行器，以及未来可能扩展的 `ts_sandbox` 等执行后端），必须提供一个显式的执行器选择字段 `executor`；
 * 将 `executor` 内聚在 `run` 映射对象内部（即 `run: { executor: "<id>", ... }`），而不引入裸字符串简写语法糖，能够保持节点外层字段（`input`、`output`、`branches`、`for_each`、`timeout_ms`、`retry`、`catch`）100% 归属于图调度器，使 `RunSpec` 成为纯粹的标记联合体（Tagged Union）。
 
-### 问题 12.3：`builtin` Python 执行器需要兼顾“零隔离原生性能”与“编译期全静态类型安全”
+### 问题 12.3：`builtin` Python 执行器需要兼顾“零隔离原生性能”、“前后端职责解耦”与“编译期全静态类型安全”
 
-作为第一个标准执行器，`builtin` 的定位是**直接在宿主进程内运行可信 Python 代码，无需子进程、容器或受限字节码隔离**。但在数据交互接口与静态检查上，若直接向代码塞入裸 `dict` 并要求返回裸 `dict`：
-* 用户在编写代码时完全丧失 IDE / 类型检查器（`pyright` / `mypy`）的字段补全与类型校验；
-* 当节点包含多个 `branches` 且各分支关联不同的 `output` 字段子集（`BranchSpec`）时，裸字典或单一 `Output` 类无法在类型层面约束“选择某分支时必须且只能提供该分支承诺产出的字段子集”。
+作为第一个标准内置执行器，`builtin` 的定位是**直接在宿主进程内运行可信 Python 代码，无需子进程、容器或受限字节码隔离**。
+* 若直接向代码塞入裸 `dict` 并要求返回裸 `dict`，用户在编写代码时完全丧失静态类型检查器（`pyright` / `mypy`）的字段补全与类型校验；且当节点包含多个 `branches` 并关联不同的 `output` 字段子集时，裸字典或单一 `Output` 类无法在类型层面约束“选择某分支时必须且只能提供该分支承诺产出的字段子集”。
+* 同时，在跨端架构下，Rust 编译器前端（`axcutor-core`）需要编译为 WASM 在浏览器运行，不应与 Python Pydantic 或未来 TypeScript 的具体模板代码字符串生成耦合；最佳职责分界是由 Rust 编译器前端在归一化 AST 中导出语言无关的节点输入/输出/分支 `TypeSpec` 签名，再由 Python 侧的 `builtin` 执行器模块负责合成完整的 `.py` 模块源码以供静态检查与运行期求值。
 
 ---
 
 ## 二、 核心设计决策
 
-### 决策 1：彻底移除 `RunVarRef` 自然语言变量正则提取
+### 决策 1：彻底移除 `RunVarRef` 自然语言变量正则提取与 `references` 字段
 
 1. **编译器只认节点 `input` 契约**：
    * 图内 `ActionNode` 的静态读取集唯一由 `node.input: List<Identifier>` 确定（顶层 `RootRunNode` 由 `root.input: Map<Identifier, TypeSpec>` 确定）；
    * 未在 `input` 中声明的变量绝不进入执行器的 `input_snapshot`。
-2. **静态字段路径（`FieldPathExpr`）边界收敛**：
-   * 移除 `RunVarRef` 正则提取规则、句尾标点剥离规则，以及对 `run` 内部 `variables.<E>` 引用的扫描校验；
+2. **静态字段路径（`FieldPathExpr`）与编译器 AST 清理**：
+   * 移除 `RunVarRef` 正则提取规则、句尾标点剥离规则，以及 `axcutor-core` 中 `NodeBody::Run` 与 `RootBody::Run` 上的 `references: Vec<FieldPath>` 字段和 `symbol.capture` 检查；
    * 静态字段路径表达式 `FieldPathExpr` 仅用于 DSL 绑定层面的 `for_each.source` 与 `use.with.input.<param>`。
 
 ---
 
-### 决策 2：内聚式 `RunSpec` 文法（`run: { executor: "builtin", content: "..." }`）
+### 决策 2：内聚式 `RunSpec` 文法与归一化 AST 中的 `input_schema` 导出
 
-取消 `run` 的裸字符串形态，将 `RunSpec` 形式化定义为以必填字段 `executor` 为鉴别键的标记联合体（Discriminated Union）：
+1. **`RunSpec` 标记联合体文法（`run: { executor: "builtin", content: "..." }`）**：
+   取消 `run` 的裸字符串形态，将 `RunSpec` 形式化定义为以必填字段 `executor` 为鉴别键的标记联合体（Discriminated Union）：
+   ```txt
+   RunSpec        ::= BuiltinRunSpec ;
 
-```txt
-RunSpec        ::= BuiltinRunSpec ;
-
-BuiltinRunSpec ::= {
-  executor: "builtin",
-  content:  NonEmptyString   (* 满足 |trim(content)| >= 1 的可信 Python 函数体源码 *)
-} ;
-```
-
-* **零语法糖原则**：不支持 `run: "..."` 裸字符串简写；`run` 必须为映射对象且显式声明 `executor`。
-* **闭合性约束**：当 `executor == "builtin"` 时，`run` 映射对象必须且只能包含 `executor` 与 `content` 两个键，出现任何其他未知键均在编译期阶段 01 报错。
+   BuiltinRunSpec ::= {
+     executor: "builtin",
+     content:  NonEmptyString   (* 满足 |trim(content)| >= 1 的可信 Python 函数体源码 *)
+   } ;
+   ```
+   * **零语法糖原则**：不支持 `run: "..."` 裸字符串简写；`run` 必须为映射对象且显式声明 `executor`。
+   * **闭合性约束**：当 `executor == "builtin"` 时，`run` 映射对象必须且只能包含 `executor` 与 `content` 两个键，出现任何其他未知键均在编译期 Pass 1 报 `schema.unknown_field` 错误。
+2. **Rust 编译器前端保持语言无关，导出节点 `input_schema`**：
+   * `axcutor-core` 不内嵌具体宿主语言（Python Pydantic 或未来 TypeScript）的模板拼接代码；
+   * 在 Pass 3 完成符号表查找后，`axcutor-core` 将图内 `NodeBody::Run` 所声明的 `input: Vec<String>` 对应的 `TypeSpec` 子集提取为保序映射 `input_schema: Symbols`（即 $\Sigma_{\text{local}}|_{N.\text{input}}$；对于顶层 `RootRunNode`，其 `root.input` 本身已是完整的 `Symbols`）并保存在归一化 AST 中；
+   * 解释器在构造发往 `execute_run` Activity 的请求载荷时，一并传入 `input_schema`、`output_schema` 与 `branches_contract`，使任何语言的执行器均拥有构造强类型输入输出模型所需的完整 `TypeSpec` 元数据。
 
 ---
 
@@ -90,7 +95,7 @@ BuiltinRunSpec ::= {
 在 `builtin` 执行器中，用户的 `run.content` 作为异步函数 `async def __axcutor_run__(input: Input) -> ReturnType:` 的函数体运行，遵循以下强类型契约：
 
 1. **只读强类型输入（`input: Input`）**：
-   * 函数唯一入参 `input` 是根据该节点声明的 `input` 变量集合及其静态 `TypeSpec` 生成的只读强类型对象（Pydantic `BaseModel`，配置 `frozen=True, extra="forbid", strict=True`）；
+   * 函数入参 `input` 是根据该节点的 `input_schema` 生成的只读强类型对象（Pydantic `BaseModel`，配置 `frozen=True, extra="forbid", strict=True`）；
    * 仅包含节点 `input` 显式声明的变量（未声明的外层图变量不在 `Input` 类型中定义，运行期亦不传入）；
    * 若某个输入变量（或其内部嵌套字段）为强类型结构体（`TypedDict`，即 `type: object` + `properties`），则递归映射为嵌套的只读 `BaseModel` 子类，支持全程点号属性访问（如 `input.order_info.subtotal`）；
    * 若为强类型有序映射（`OrderedMap`，即 `type: object` + `additionalProperties`），则映射为 `dict[str, V]`。
@@ -112,13 +117,13 @@ BuiltinRunSpec ::= {
 
 ---
 
-### 决策 5：前后置模板合成规范（合成可独立编译与静态类型检查的 `.py` 单元）
+### 决策 5：Python 侧前后置模板合成规范（合成可独立编译与静态类型检查的 `.py` 单元）
 
-在编译期阶段 02（静态类型检查阶段），针对每个 `executor: "builtin"` 的节点，编译器将自动生成的前置类型头（Preamble）、函数签名包装（Function Header）与统一缩进 4 个空格后的 `run.content` 拼接为一个**完整的、自包含的合法 Python 模块源码字符串**。
+`axcutor_runtime` 中的 `builtin` 执行器模块提供纯函数接口，根据节点的 `(input_schema, output_schema, branches_contract, content)` 将自动生成的前置类型头（Preamble）、函数签名包装（Function Header）与统一缩进 4 个空格后的 `run.content` 拼接为一个**完整的、自包含的合法 Python 模块源码字符串**。该合成源码既可在编译/测试工具链中直接交由 `compile()` 与 `pyright` / `mypy` 进行静态检查，又可在 Activity 运行期直接编译执行。
 
-#### 1. `TypeSpec` 到 Python 类型注解的递归映射函数 $\mathcal{T}_{\text{py}}(T)$
+#### 1. `TypeSpec` 到 Python 类型注解的递归映射函数 $\mathcal{T}_{\text{py}}(T)$ 与 `Decimal` 精确数值适配
 
-给定任意良构的 `TypeSpec` $T$，其对应的 Python 类型表达式 $\mathcal{T}_{\text{py}}(T)$ 归纳定义如下：
+由于 `axcutor_runtime.codec` 为保持精确 JSON 数值传输将浮点数解码为 `decimal.Decimal`（并在重编码时支持 `float`、`int`、`Decimal`），`TypeSpec` 中的 `type: number` 在生成的类型注解中统一映射为 `float | int | Decimal`：
 
 | `TypeSpec` 构造器形态 | 非空类型映射（$\text{Nullable}(T) = \texttt{false}$） | 可空类型映射（$\text{Nullable}(T) = \texttt{true}$） |
 | :--- | :--- | :--- |
@@ -126,18 +131,17 @@ BuiltinRunSpec ::= {
 | `type: string`（含 `enum: [e_1, ...]`） | `Literal["e_1", ...]` | `Literal["e_1", ...] \| None` |
 | `type: integer`（无 `enum`） | `int` | `int \| None` |
 | `type: integer`（含 `enum: [e_1, ...]`） | `Literal[e_1, ...]` | `Literal[e_1, ...] \| None` |
-| `type: number`（无 `enum`） | `float \| int` | `float \| int \| None` |
-| `type: number`（含 `enum: [e_1, ...]`） | *(由于 Python `Literal` 按 PEP 586 不支持浮点字面量，静态注解映射为 `float \| int`，并在 Pydantic 字段上附加运行期枚举集合校验器)* | `float \| int \| None` |
+| `type: number`（无 `enum`） | `float \| int \| Decimal` | `float \| int \| Decimal \| None` |
+| `type: number`（含 `enum: [e_1, ...]`） | `float \| int \| Decimal` *(附加枚举值校验器)* | `float \| int \| Decimal \| None` |
 | `type: boolean`（无 `enum`） | `bool` | `bool \| None` |
 | `type: boolean`（含 `enum: [e_1, ...]`） | `Literal[True]` / `Literal[False]` | `Literal[...] \| None` |
 | `type: array, items: U` | `list[` $\mathcal{T}_{\text{py}}(U)$ `]` | `list[` $\mathcal{T}_{\text{py}}(U)$ `] \| None` |
 | `type: object, additionalProperties: V` | `dict[str, ` $\mathcal{T}_{\text{py}}(V)$ `]` | `dict[str, ` $\mathcal{T}_{\text{py}}(V)$ `] \| None` |
 | `type: object, properties: {...}` (`TypedDict`) | • 在 `Input` 树中：生成的嵌套类 `Input_<path>`<br>• 在 `Output` 树中：`Output_<path> \| _Dict_Output_<path>` | `<NonNullType> \| None` |
 
-* **严格布尔与数值隔离**：在 Pydantic `strict=True` 下，由于 Python 中 `bool` 是 `int` 的子类（`isinstance(True, int) == True`），代码生成器在 `int` 与 `float | int` 字段上统一挂载严格校验器以确保 `bool` 值不会被误判为合法的 `integer` 或 `number`，与 Axcutor `TypeSpec` 的严格标量隔离保持 100% 一致。
+* **严格布尔与数值隔离**：在 Pydantic `strict=True` 下，由于 Python 中 `bool` 是 `int` 的子类（`isinstance(True, int) == True`），代码生成器在 `int` 与 `float | int | Decimal` 字段上统一挂载严格校验器以确保 `bool` 值不会被误判为合法的 `integer` 或 `number`，与 Axcutor `TypeSpec` 的严格标量隔离保持 100% 一致。
 * **`TypedDict` 非必填属性（$f \notin \text{required}$）的映射**：
-  对于结构体 $T$ 中未列入 `required` 的可选属性 $f$（设属性 Schema 为 $P_f = T.\text{properties}[f]$），根据静态字段路径求值规约（缺失属性读取为 `None`），在生成的模型中声明为默认值是 `None` 的可空字段：
-  $$f : \mathcal{T}_{\text{py}}(\text{MakeNullable}(P_f)) = \texttt{None}$$
+  对于结构体 $T$ 中未列入 `required` 的可选属性 $f$（设属性 Schema 为 $P_f = T.\text{properties}[f]$），根据静态字段路径求值规约（缺失属性读取为 `None`），在生成的 `Input` 模型中声明为默认值是 `None` 的可空字段 $f : \mathcal{T}_{\text{py}}(\text{MakeNullable}(P_f)) = \texttt{None}$（在 `Output` 模型中支持省略或设为非空目标类型值，若属性本身非空而值为 `None` 则在导出字典时自动剥离该可选键以符合 JSON Schema 契约）。
 
 #### 2. 合成 `.py` 模块的完整标准模板示例
 
@@ -173,16 +177,17 @@ review_order:
           return Branch.ignored()
       if input.raw_order.subtotal <= 0:
           return Branch.rejected(reject_reason="Subtotal must be positive")
-      total = round(input.raw_order.subtotal * (1 + input.tax_rate), 2)
+      total = round(float(input.raw_order.subtotal) * (1 + float(input.tax_rate)), 2)
       return Branch.approved(
           order_info={"order_id": input.raw_order.id, "total": total}
       )
 ```
 
-**编译器合成的完整 `.py` 源码（可直接交由 `pyright` / `mypy` 静态检查并由 `compile()` 编译执行）**：
+**合成的完整 `.py` 源码（可直接交由 `pyright` / `mypy` 静态检查并由 `compile()` 编译执行）**：
 ```python
 # === AUTO-GENERATED AXCUTOR BUILTIN MODULE (NODE: review_order) ===
 from __future__ import annotations
+from decimal import Decimal
 from typing import Literal, TypedDict
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -192,23 +197,23 @@ _MODEL_CFG = ConfigDict(frozen=True, extra="forbid", strict=True)
 class Input_raw_order(BaseModel):
     model_config = _MODEL_CFG
     id: str
-    subtotal: float | int
+    subtotal: float | int | Decimal
     items: list[str]
 
 class Input(BaseModel):
     model_config = _MODEL_CFG
     raw_order: Input_raw_order
-    tax_rate: float | int
+    tax_rate: float | int | Decimal
 
 # --- 2. Output Nested Models & TypedDicts ---
 class Output_order_info(BaseModel):
     model_config = _MODEL_CFG
     order_id: str
-    total: float | int
+    total: float | int | Decimal
 
 class _Dict_Output_order_info(TypedDict):
     order_id: str
-    total: float | int
+    total: float | int | Decimal
 
 # --- 3. Branch Variant Models & ReturnType Union ---
 class _Branch_approved(BaseModel):
@@ -234,12 +239,12 @@ ReturnType = _Branch_approved | _Branch_rejected | _Branch_ignored
 
 # --- 4. User Execution Entrypoint ---
 async def __axcutor_run__(input: Input) -> ReturnType:
-    # --- BEGIN USER CONTENT (line_offset = 49) ---
+    # --- BEGIN USER CONTENT (line_offset = 50) ---
     if not input.raw_order.items:
         return Branch.ignored()
     if input.raw_order.subtotal <= 0:
         return Branch.rejected(reject_reason="Subtotal must be positive")
-    total = round(input.raw_order.subtotal * (1 + input.tax_rate), 2)
+    total = round(float(input.raw_order.subtotal) * (1 + float(input.tax_rate)), 2)
     return Branch.approved(
         order_info={"order_id": input.raw_order.id, "total": total}
     )
@@ -252,30 +257,34 @@ async def __axcutor_run__(input: Input) -> ReturnType:
 class Output(BaseModel):
     model_config = _MODEL_CFG
     _axcutor_branch: None = PrivateAttr(default=None)
-    total_amount: float | int
+    total_amount: float | int | Decimal
 
 ReturnType = Output
 
 async def __axcutor_run__(input: Input) -> ReturnType:
-    total = round(input.order_info.subtotal * (1 + input.tax_rate), 2)
+    total = round(float(input.order_info.subtotal) * (1 + float(input.tax_rate)), 2)
     return Output(total_amount=total)
 ```
 
 #### 3. 诊断行号精确还原（Line Number Mapping）
-由于前置模板的生成是确定性的，设 `content` 第一行在合成 `.py` 文件中的起始行号偏移量为 $L_{\text{offset}}$（即 `__axcutor_run__` 函数头所在行号）。无论是编译期的 `SyntaxError` / 静态类型检查器诊断，还是运行期堆栈追踪（`Traceback`），定位到合成文件的第 $L$ 行（$L > L_{\text{offset}}$）均精确对应用户 `run.content` 的第 $L - L_{\text{offset}}$ 行。
+由于前置模板的生成是确定性的，设 `content` 第一行在合成 `.py` 文件中的起始行号偏移量为 $L_{\text{offset}}$（即 `__axcutor_run__` 函数头所在行号）。无论是 `SyntaxError` / 静态类型检查器诊断，还是运行期堆栈追踪（`Traceback`），定位到合成文件的第 $L$ 行（$L > L_{\text{offset}}$）均精确对应用户 `run.content` 的第 $L - L_{\text{offset}}$ 行。
 
 ---
 
-### 决策 6：`builtin` 执行器的运行期求值与异常映射协议
+### 决策 6：`RunActivities.execute_run` 按 `executor` 统一分派与运行期协议
 
-1. **输入构造（Copy-in）**：
-   * 节点尝试（Attempt）激活时，执行器接收调度器传入的只读 `input_snapshot`（`Map<Identifier, JSONValue>`），调用 `Input.model_validate(input_snapshot)` 构造深层不可变（`frozen=True`）的 `Input` 实例传入 `await __axcutor_run__(input_instance)`。
-2. **输出拆包与 ABI 契约校验（Copy-out & `contract` Exception）**：
+在 Temporal 运行时（`axcutor_runtime`）中，`RunActivities.execute_run` 作为所有 `run` 执行器的统一 Activity 生命周期外壳运行：
+
+1. **按 `run_spec["executor"]` 分派与 `task_queues` 路由**：
+   * **Task Queue 路由**：解释器在发起 `workflow.execute_activity("execute_run", ...)` 时，以执行器类型名 `run_spec["executor"]`（如 `"builtin"`）作为键查询 `self._options["task_queues"].get(body["run"]["executor"])`；
+   * **内置 `"builtin"` 执行器与可扩展分派表**：`RunActivities` 默认内置 `"builtin"` 执行器处理器（同时允许通过可选的 `executors` 字典扩展或注册未来的其他执行器类型如 `"ts_sandbox"`），因此 `create_worker(client, task_queue)` 开箱即用，无需外部必传手工函数注册表；
+   * **共享外层 ABI 守护管线**：无论分派给 `"builtin"` 还是未来扩展的 `"ts_sandbox"`，外层 `RunActivities.execute_run` 均统一管理单次尝试期限（`deadline`）、心跳保活（`heartbeat`）、取消监听与 `AbortSignal` 置位、退出时的 `cancel_and_drain` 清理，以及出口处的 `axcutor_core.validate_run_contract` + Workflow 二次契约校验。
+2. **`builtin` 执行器的输入构造（Copy-in）**：
+   * `builtin` 执行器根据请求中的 `(input_schema, output_schema, branches_contract, run_spec["content"])` 合成模块并编译执行（可按确定性摘要缓存编译后的模块构建器），调用 `Input.model_validate(request["input_snapshot"])` 构造深层不可变（`frozen=True`）的 `Input` 实例，传入 `await __axcutor_run__(input_instance)`。
+3. **输出拆包与契约违约映射（Copy-out & `contract` Exception）**：
    * 函数返回 `res` 后：
-     * 若 `res` 不是当前节点生成的 `ReturnType`（即对应的 `Output` 或 `_Branch_<b>` 实例，例如用户漏写 `return` 返回了 `None`，或返回了随意构造的其他对象），或者用户在构造 `Output(...)` / `Branch.<b>(...)` 时因类型不匹配、缺失必填字段、传入额外字段而在函数体内抛出了 `pydantic.ValidationError`：
-     * 执行器统一将其判定为**违反输出/分支契约**，抛出可恢复的 **`contract` 异常**（而非 `execution` 异常），与标准 ABI 的边界契约校验语义严格对齐。
-   * 若 `res` 为合法的 `ReturnType` 实例，执行器提取 `branch = res._axcutor_branch` 与 `output = res.model_dump(mode="python")`（由 Pydantic 保证已递归转为纯净的 JSON 兼容基础数据结构），组装为标准 `ExecutionSuccess(branch, output)` 返回给调度器原子写回栈帧 $\rho$。
-3. **业务运行期故障映射（`execution` Exception）**：
-   * 若 `__axcutor_run__` 执行期间抛出除 `pydantic.ValidationError`（来自 `Output` / `Branch` 构造器）与 `asyncio.CancelledError` 以外的任何未捕获 Python `Exception`（如 `ZeroDivisionError`、`KeyError`、`ValueError`、网络/文件 I/O 异常等），执行器将其捕获并封装为 `ExecutionError`，由调度器映射为可恢复的 **`execution` 异常**，进入节点的 `retry` / `catch` 状态机。
-4. **超时与取消（`timeout` & `CancelledError`）**：
-   * 调度器通过 `asyncio.wait_for(__axcutor_run__(input_instance), timeout=timeout_ms / 1000)` 施加单次尝试超时控制；当触发超时或并发组触发 `CancelledError` 时，向协程注入 `asyncio.CancelledError` 并静默丢弃任何迟到结果。
+     * 若 `res` 不是当前节点生成的 `ReturnType`（即对应的 `Output` 或 `_Branch_<b>` 实例，例如用户漏写 `return` 返回了 `None`，或返回了其他对象），或者用户在构造 `Output(...)` / `Branch.<b>(...)` 时因类型不匹配、缺失必填字段、传入额外字段而在函数体内抛出了 `pydantic.ValidationError`：
+     * 执行器统一将其捕获并抛出 `ContractError`（由 `RunActivities.execute_run` 映射为 `ApplicationError(..., type="contract")`），与标准 ABI 的边界契约校验语义严格对齐。
+   * 若 `res` 为合法的 `ReturnType` 实例，执行器提取 `branch = res._axcutor_branch` 与 `output = res.model_dump(mode="python")`，组装为 `{"branch": branch, "output": output}` 返回给 `RunActivities.execute_run` 继续完成 `codec.dumps` 与 `axcutor_core.validate_run_contract` 校验。
+4. **业务运行期故障映射（`execution` Exception）**：
+   * 若 `__axcutor_run__` 执行期间抛出除 `pydantic.ValidationError`（来自 `Output` / `Branch` 构造器）与 `asyncio.CancelledError` 以外的任何未捕获 Python `Exception`（含 `SyntaxError`、`ZeroDivisionError`、`KeyError`、`ValueError`、网络/文件 I/O 异常等），由 `RunActivities.execute_run` 统一捕获并封装为 `ApplicationError(str(error), type="execution")`，进入节点的 `retry` / `catch` 状态机。
