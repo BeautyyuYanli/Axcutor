@@ -17,7 +17,7 @@
 
 > [!NOTE]
 > **三类节点挂载 `for_each` 时的输入与输出映射规则**：
-> * **`run`（`ActionNode`）**：节点 `input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index` 及外层变量（未列入 `input` 的变量不会进入传给业务执行器的 `input_snapshot`）；`output` 声明单次产出类型，在外层自动提升为对应集合。
+> * **`run`（`ActionNode`）**：节点 `input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index` 及外层变量（未列入 `input` 的变量不会进入传给业务执行器的 `input_snapshot` 及 `builtin` 的 `Input` 模型）；`output` 声明单次产出类型，在外层自动提升为对应集合。
 > * **`use`（`CallNode`）**：在 `with.input` 中直接引用 `item` / `key` / `index`（或其结构体字段路径）及外层变量；在 `with.output` 中将被调用方单次产出的字段名映射至外层目标集合变量名，在外层自动提升为列表或有序映射。
 > * **内联 `graph`（`InlineGraphNode`）**：由于 `item` / `key` / `index` 已自动注入子图的初始 `Block Frame`，内联 `graph` 节点的 `input: [...]` 仅用于捕获外层普通变量，**禁止**重复列出 `item` / `key` / `index`。
 
@@ -40,7 +40,10 @@ process_list_items:
   # output 声明单次元素类型 string；在外层图中 results 对应为 Array<string>
   output:
     results: { type: string }
-  run: "处理第 variables.item_idx 项 variables.current_item，写入 output.results。"
+  run:
+    executor: builtin
+    content: |
+      return Output(results=f"[{input.item_idx}] {input.current_item}")
 
 # 示例 B：在 use: workflow:<path> 节点上挂载 for_each 遍历列表
 audit_sub_items:
@@ -77,7 +80,10 @@ translate_sections:
   # 单次产出 string，在外层图中保留原键 section_id 提升为 OrderedMap<string, string>
   output:
     translated_section_map: { type: string }
-  run: "翻译章节 variables.section_id 的正文 variables.section_body，写入 output.translated_section_map。"
+  run:
+    executor: builtin
+    content: |
+      return Output(translated_section_map=f"[{input.section_id}] {input.section_body}")
 ```
 
 ---
@@ -119,12 +125,19 @@ analyze_feedbacks:
     spam:
       description: "垃圾信息，不产出任何字段（在汇聚时自动跳过）"
       output: []
-  run: "评估反馈 variables.fb；若为紧急故障写入 output.urgent_tickets 并选 urgent；若为普通反馈写入 output.normal_summaries 并选 normal；若为垃圾信息直接选 spam。"
+  run:
+    executor: builtin
+    content: |
+      if "spam" in input.fb:
+          return Branch.spam()
+      if "URGENT" in input.fb:
+          return Branch.urgent(urgent_tickets={"id": "T-1", "reason": input.fb})
+      return Branch.normal(normal_summaries=input.fb)
 ```
 
 ### 2. 利用内联 `graph` + `builtin:assign` 实现原元素零拷贝过滤与死信分流
 
-当需要在不让执行器（如 LLM）重抄输入元素的前提下，按分支或异常原样保留输入元素 `item`（例如将合格元素过滤至 `valid_items`、将异常元素收集至死信队列 `failed_items`）时，可在 `for_each` 挂载的内联 `graph` 分支中调用零开销算子 [`builtin:assign`](../../reference/builtins/assign.md) 将 `item` 直接赋给目标输出变量：
+当需要在不让执行器重抄输入元素的前提下，按分支或异常原样保留输入元素 `item`（例如将合格元素过滤至 `valid_items`、将异常元素收集至死信队列 `failed_items`）时，可在 `for_each` 挂载的内联 `graph` 分支中调用零开销算子 [`builtin:assign`](../../reference/builtins/assign.md) 将 `item` 直接赋给目标输出变量：
 
 ```yaml
 filter_and_process_items:
@@ -154,7 +167,12 @@ filter_and_process_items:
           drop: "质量不合格"
         catch:
           err: ["*"]
-        run: "仅判断 variables.current_item 是否合格并选择 keep 或 drop 分支，无需重抄原文。"
+        run:
+          executor: builtin
+          content: |
+            if len(input.current_item.strip()) >= 3:
+                return Branch.keep()
+            return Branch.drop()
 
       # 在 keep 分支上通过 builtin:assign 零拷贝透传原元素 current_item
       assign_valid:
@@ -195,7 +213,10 @@ extract_tags_per_article:
     nested_tags:
       type: array
       items: { type: string }
-  run: "提取文章 variables.article.title 的标签列表写入 output.nested_tags。"
+  run:
+    executor: builtin
+    content: |
+      return Output(nested_tags=input.article.title.lower().split())
 
 # 步骤 2：调用 builtin:array_flatten 将二维列表 nested_tags 展平为一维列表 all_tags
 flatten_all_tags:
@@ -275,7 +296,15 @@ graph:
               keep: "内容合规"
               flagged: "疑似违规"
               drop: "无效垃圾内容"
-            run: "审核文稿 variables.current_article，选择 keep、flagged 或 drop 分支。"
+            run:
+              executor: builtin
+              content: |
+                text = input.current_article.strip()
+                if not text:
+                    return Branch.drop()
+                if "FLAG" in text:
+                    return Branch.flagged()
+                return Branch.keep()
 
           keep_article:
             use: builtin:assign
@@ -317,7 +346,16 @@ graph:
         standard:
           description: "常规文稿，仅产出标签"
           output: [nested_tags]
-      run: "分析第 variables.idx 篇文稿 variables.current_article，提取标签列表写入 output.nested_tags；若属优质文稿则额外撰写摘要写入 output.featured_summaries 并选 high_quality，否则选 standard。"
+      run:
+        executor: builtin
+        content: |
+          tags = [w.lower() for w in input.current_article.split() if len(w) > 3]
+          if len(input.current_article) >= 20:
+              return Branch.high_quality(
+                  featured_summaries=f"#{input.idx}: {input.current_article[:20]}",
+                  nested_tags=tags,
+              )
+          return Branch.standard(nested_tags=tags)
 
     # 阶段 3：使用 builtin:array_flatten 将二维标签列表 nested_tags 保序展平为一维列表 all_tags
     flatten_tags:

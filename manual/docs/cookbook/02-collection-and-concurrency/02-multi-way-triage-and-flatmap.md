@@ -146,11 +146,30 @@ graph:
               spam:
                 description: "无意义垃圾信息"
                 output: []
-            run: |
-              分析第 variables.idx 条反馈（用户 variables.feedback.user_id）：variables.feedback.content。
-              若为垃圾信息，直接选择 spam 分支。
-              构造结构化分析写入 output.analyzed_items，提取诉求标签列表写入 output.nested_feature_tags。
-              若属严重线上故障，生成工单描述写入 output.urgent_tickets 并选择 urgent；否则选择 normal。
+            run:
+              executor: builtin
+              content: |
+                text = input.feedback.content.strip()
+                if not text or "spam" in text.lower():
+                    return Branch.spam()
+                if "crash" in text.lower() or "outage" in text.lower():
+                    return Branch.urgent(
+                        analyzed_items={
+                            "index": input.idx,
+                            "user_id": input.feedback.user_id,
+                            "sentiment": "negative",
+                        },
+                        urgent_tickets=f"INC-{input.idx}:{input.feedback.user_id}",
+                        nested_feature_tags=["reliability", "incident"],
+                    )
+                return Branch.normal(
+                    analyzed_items={
+                        "index": input.idx,
+                        "user_id": input.feedback.user_id,
+                        "sentiment": "neutral",
+                    },
+                    nested_feature_tags=["general"],
+                )
 
           # 子图步骤 1.2：仅在 urgent 分支下，通过 builtin:assign 零拷贝透传原始 feedback 结构体
           keep_urgent_feedback:
@@ -182,7 +201,15 @@ graph:
       input: [analyzed_items, urgent_feedbacks, urgent_tickets, all_feature_tags]
       output:
         executive_summary: { type: string }
-      run: "综合分析结果 variables.analyzed_items、高优原始反馈 variables.urgent_feedbacks、紧急工单 variables.urgent_tickets 与标签总表 variables.all_feature_tags，生成汇总报告写入 output.executive_summary。"
+      run:
+        executor: builtin
+        content: |
+          summary = (
+              f"Analyzed={len(input.analyzed_items)}, "
+              f"Urgent={len(input.urgent_tickets)}, "
+              f"Tags={len(input.all_feature_tags)}"
+          )
+          return Output(executive_summary=summary)
 
   # 4. 外层控制流边：analyze_each 内部消化所有迭代分支，对外为单条无分支出边
   edges:

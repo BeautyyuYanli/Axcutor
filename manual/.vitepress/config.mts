@@ -199,7 +199,8 @@ export default withMermaid(
             text: '05. 业务执行器 (run) ABI 契约',
             collapsed: false,
             items: [
-              { text: '01. run 业务执行器标准 ABI 契约', link: '/spec/05-executor-abi/01-run-executor-contract' }
+              { text: '01. run 业务执行器标准 ABI 契约', link: '/spec/05-executor-abi/01-run-executor-contract' },
+              { text: '02. builtin 受信任 Python 执行器规范', link: '/spec/05-executor-abi/02-builtin-python-executor' }
             ]
           }
         ],

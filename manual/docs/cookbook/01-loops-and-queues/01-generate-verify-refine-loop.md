@@ -11,7 +11,7 @@
 
 ## 二、 核心原语组合要点
 
-1. **跨轮状态初值声明与确定性计数**：在 `graph.variables` 中声明 `attempts: { type: integer, default: 0 }` 与 `last_error: { type: string, default: "" }`，为首轮进入循环提供初始定值；在循环体入口通过 [`builtin:math`](../../reference/builtins/math.md)（`increment_attempts`）确定性地将 `attempts` 自增 `1`，并通过 [`builtin:compare`](../../reference/builtins/compare.md)（`check_retry_budget`）判断 `attempts < 3`，避免依赖提示词手动维护循环计数与阈值判断。
+1. **跨轮状态初值声明与确定性计数**：在 `graph.variables` 中声明 `attempts: { type: integer, default: 0 }` 与 `last_error: { type: string, default: "" }`，为首轮进入循环提供初始定值；在循环体入口通过 [`builtin:math`](../../reference/builtins/math.md)（`increment_attempts`）确定性地将 `attempts` 自增 `1`，并通过 [`builtin:compare`](../../reference/builtins/compare.md)（`check_retry_budget`）判断 `attempts < 3`，避免依赖业务代码手动维护循环计数与阈值判断。
 2. **成环回边与退环出口**：在 `graph.edges` 中通过 `check_retry_budget.true -> increment_attempts` 构成成环回边，通过 `validate_sql.valid -> end.success` 与 `check_retry_budget.false -> end.failed` 构成两条退环出口。
 3. **分支关联输出子集（`branches.<choice>.output`）**：在根节点输出全集中将 `sql`、`attempts`、`last_error` 均声明为非空类型，并在顶层 `branches` 中令 `success` 分支仅绑定 `output: [sql, attempts]`、`failed` 分支仅绑定 `output: [attempts, last_error]`。到达对应出口时，仅校验该分支声明的输出子集已定值，从而无需将 `sql` 或 `last_error` 妥协为可空类型。
 
@@ -81,7 +81,11 @@ graph:
       output:
         sql:
           type: string
-      run: "根据表结构 variables.schema 和查询需求 variables.question 编写 SQL（当前第 variables.attempts 次尝试）；若 variables.last_error 不为空，则结合该错误信息修正上一轮 SQL，并将结果写入 output.sql。"
+      run:
+        executor: builtin
+        content: |
+          sql_query = f"SELECT * FROM ({input.schema}) WHERE q = {input.question!r} -- attempt {input.attempts}"
+          return Output(sql=sql_query)
 
     # 步骤 3：在沙箱中验证 SQL
     # - valid 分支声明 output: []，无需覆写 last_error
@@ -98,7 +102,12 @@ graph:
         invalid:
           description: "SQL 执行报错，记录错误原因并检查重试余量"
           output: [last_error]
-      run: "在数据库沙箱中试运行 variables.sql；若成功则选择 valid 分支，若失败则将具体报错信息写入 output.last_error 并选择 invalid 分支。"
+      run:
+        executor: builtin
+        content: |
+          if input.sql.upper().startswith("SELECT"):
+              return Branch.valid()
+          return Branch.invalid(last_error="Query must start with SELECT")
 
     # 步骤 4：使用 builtin:compare 确定性地判断是否仍有重试余量（attempts < 3）
     check_retry_budget:

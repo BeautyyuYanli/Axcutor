@@ -61,7 +61,10 @@ graph:
             input: [order_id]
             output:
               order_amount: { type: number }
-            run: "调用订单服务获取 variables.order_id 的金额，写入 output.order_amount。"
+            run:
+              executor: builtin
+              content: |
+                return Output(order_amount=199.95)
 
           # 事务步骤 1.2：校验金额区间合法性
           verify_amount:
@@ -69,7 +72,12 @@ graph:
             branches:
               valid: "金额合法"
               invalid: "金额为负数或超出允许区间"
-            run: "校验 variables.order_amount 是否大于零且在合理区间，选择 valid 或 invalid。"
+            run:
+              executor: builtin
+              content: |
+                if 0.0 < input.order_amount <= 50000.0:
+                    return Branch.valid()
+                return Branch.invalid()
 
           # 事务步骤 1.3：提交清算，产出子图对外导出的 settlement_id 与 status_note
           submit_clearing:
@@ -78,7 +86,13 @@ graph:
             output:
               settlement_id: { type: string }
               status_note: { type: string }
-            run: "调用清算服务提交 variables.order_id 与 variables.order_amount，写入 output.settlement_id 与 output.status_note。"
+            run:
+              executor: builtin
+              content: |
+                return Output(
+                    settlement_id=f"STL-{input.order_id}",
+                    status_note=f"Cleared {input.order_amount:.2f}",
+                )
 
         # 子图内部控制流：invalid 分支连向 fail，丢弃 order_amount 并向父节点抛出 execution 异常
         edges:
@@ -93,7 +107,10 @@ graph:
       input: [order_id]
       output:
         status_note: { type: string }
-      run: "将订单 variables.order_id 加入延迟重试队列，并将排队说明写入 output.status_note。"
+      run:
+        executor: builtin
+        content: |
+          return Output(status_note=f"Deferred order {input.order_id} for retry")
 
   # 3. 主图控制流连边
   edges:

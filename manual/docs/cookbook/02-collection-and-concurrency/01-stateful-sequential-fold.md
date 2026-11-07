@@ -75,7 +75,12 @@ graph:
       input: [document, valid_context_text]
       output:
         rolling_summary: { type: string }
-      run: "结合标题 variables.document.title 与背景资料 variables.valid_context_text 生成初始摘要，写入 output.rolling_summary。"
+      run:
+        executor: builtin
+        content: |
+          return Output(
+              rolling_summary=f"[{input.document.title}] {input.valid_context_text}"
+          )
 
     # 步骤 3（汇合后执行）：将结构体字段 document.sections 初始化至工作队列 pending_sections
     init_queue:
@@ -109,10 +114,16 @@ graph:
         skipped:
           description: "无关分片，不修改任何变量，直接进入下一轮"
           output: []
-      run: |
-        阅读《variables.document.title》的分片内容：variables.current_section。
-        若分片有效，结合上一分片累积摘要 variables.rolling_summary 更新全局摘要写入 output.rolling_summary，生成当前分片的独立审查记录写入 output.single_note，并选择 updated 分支。
-        若分片无关，直接选择 skipped 分支。
+      run:
+        executor: builtin
+        content: |
+          sec = input.current_section.strip()
+          if not sec or sec.startswith("SKIP:"):
+              return Branch.skipped()
+          return Branch.updated(
+              rolling_summary=f"{input.rolling_summary} | {sec}",
+              single_note=f"Reviewed section of {input.document.title}: {sec}",
+          )
 
     # 步骤 6：仅在 updated 分支下将 single_note 追加至 section_notes
     record_note:

@@ -21,7 +21,7 @@
 ### 3. 表达式求值函数 $\text{Eval}(\rho, \text{arg})$ 与反定值状态转移（Unbind Transition）
 * **输入参数求值函数 $\text{Eval}(\rho, \text{arg})$**：
   对于 `with.input` 中传入的任意参数项 $\text{arg}$，求值函数 $\text{Eval}(\rho, \text{arg})$ 定义如下：
-  1. **顶层变量引用**（$\text{arg} \equiv v \in \text{Identifier}$）：直接返回当前栈帧环境中的绑定值 $\rho(v)$（由编译期明确定值分析保证 $v \in \text{dom}(\rho)$ 且 $\rho(v) \neq \text{Unbound}$）。
+  1. **顶层变量引用**（$\text{arg} \equiv v \in \text{RestrictedIdentifier}$）：直接返回当前栈帧环境中的绑定值 $\rho(v)$（由编译期明确定值分析保证 $v \in \text{dom}(\rho)$ 且 $\rho(v) \neq \text{Unbound}$）。
   2. **静态字段路径投影**（$\text{arg} \equiv v.f_1.f_2\dots f_k \in \text{FieldPathExpr}$）：从根结构体对象 $O_0 = \rho(v)$ 出发，沿路径片段 $f_1, \dots, f_k$ 逐级读取属性 $O_i = O_{i-1}[f_i]$。由于编译期禁止穿越可空（`nullable: true`）或非必填（`required` 未包含）的中间结构体节点，所有中间节点 $O_0, \dots, O_{k-1}$ 在运行期必定为非空对象；若最终叶子属性 $f_k$ 为所属 `TypedDict` 的非必填字段且在运行期实例 $O_{k-1}$ 中缺席（未出现该键），则求值结果规约为 $\texttt{null}$：
      $$\text{Eval}(\rho, v.f_1\dots f_k) = \begin{cases} O_{k-1}[f_k] & \text{若 } f_k \in \text{dom}(O_{k-1}) \\ \texttt{null} & \text{若 } f_k \notin \text{dom}(O_{k-1}) \text{（缺失的非必填叶子属性）} \end{cases}$$
   3. **常量字面量**（$\text{arg} \equiv \text{Literal}(c)$）：直接返回该字面量对应的不可变 JSON 值 $c$。
@@ -72,14 +72,14 @@
 * **输入求值**：读取比较算子 $op = \text{Eval}(\rho, \text{with.input.op}) \in \{\texttt{"eq"}, \texttt{"ne"}, \texttt{"lt"}, \texttt{"lte"}, \texttt{"gt"}, \texttt{"gte"}\}$，以及左操作数 $x = \text{Eval}(\rho, \text{with.input.left})$、右操作数 $y = \text{Eval}(\rho, \text{with.input.right})$。
 * **比较谓词求值 $b \in \{\texttt{true}, \texttt{false}\}$**：
   * **相等性比较（$op \in \{\texttt{"eq"}, \texttt{"ne"}\}$）**：按 JSON 深度结构化值相等（Deep Structural Equality）判定 $x \equiv_{\text{val}} y$：
-    * 数值类型跨 `integer` 与 `number` 按实数值相等判定（例如 $1 \equiv_{\text{val}} 1.0$）；
+    * 数值类型跨 `integer` 与 `number` 按精确十进制实数值相等判定（例如 $1 \equiv_{\text{val}} 1.0$）；
     * 字符串按 UTF-8 / Unicode 码点序列精确匹配；
     * 列表 `Array<T>` 按长度相等且对应下标元素递归满足 $\equiv_{\text{val}}$ 判定；
     * 结构体 `TypedDict` 与有序映射 `OrderedMap` 按键集合相同且每个键对应的值递归满足 $\equiv_{\text{val}}$ 判定（相等性比较忽略键的插入顺序）；
     * $\texttt{null}$ 仅与 $\texttt{null}$ 相等；
     * 当 $op = \texttt{"eq"}$ 时 $b = (x \equiv_{\text{val}} y)$；当 $op = \texttt{"ne"}$ 时 $b = \lnot(x \equiv_{\text{val}} y)$。
   * **全序大小比较（$op \in \{\texttt{"lt"}, \texttt{"lte"}, \texttt{"gt"}, \texttt{"gte"}\}$）**：
-    * 若 $x, y$ 为数值（`integer` / `number`），按实数全序关系 $<, \le, >, \ge$ 比较；
+    * 若 $x, y$ 为数值（`integer` / `number`），按精确十进制实数全序关系 $<, \le, >, \ge$ 比较（不经由 IEEE 754 `f64` 截断）；
     * 若 $x, y$ 为字符串（`string`），按 Unicode 码点（Code Points）字典序比较。
 * **状态转移与控制流路由**：
   * **模式 A（未声明 `with.output`，直接作为条件路由节点）**：
@@ -105,10 +105,10 @@
 * **输入求值**：读取算术算子 $op = \text{Eval}(\rho, \text{with.input.op}) \in \{\texttt{"add"}, \texttt{"sub"}, \texttt{"mul"}, \texttt{"div"}, \texttt{"mod"}\}$，以及左操作数 $x = \text{Eval}(\rho, \text{with.input.left})$、右操作数 $y = \text{Eval}(\rho, \text{with.input.right})$，记 `with.output.result` 绑定的目标变量为 $v_{\text{res}}$。
 * **状态转移与控制流路由**：
   * **情形 1：加、减、乘运算（$op \in \{\texttt{"add"}, \texttt{"sub"}, \texttt{"mul"}\}$）**：
-    计算 $z = x + y$（`add`）、$z = x - y$（`sub`）或 $z = x \times y$（`mul`）。当左右操作数的静态类型均为 `integer` 时，$z$ 为精确整数；否则 $z$ 为 IEEE 754 双精度浮点数：
+    计算 $z = x + y$（`add`）、$z = x - y$（`sub`）或 $z = x \times y$（`mul`）。当左右操作数的静态类型均为 `integer` 时，$z$ 按任意精度精确整数运算；当任一操作数的静态类型为 `number` 时，$z$ 按 IEEE 754 双精度浮点数（`f64`）运算（若结果溢出为非有限数 `NaN` / `Inf` 则触发不可恢复的引擎级错误）：
     $$\rho' = \rho[v_{\text{res}} \mapsto z], \quad \text{edge} = \text{default（唯一无分支出边）}$$
   * **情形 2：除法与整数取模运算（$op \in \{\texttt{"div"}, \texttt{"mod"}\}$）**：
-    当 $y \neq 0$ 时，若 $op = \texttt{"div"}$ 则计算浮点真除法 $z = x / y$，若 $op = \texttt{"mod"}$ 则计算整数取模 $z = x \bmod y$：
+    当 $y \neq 0$ 时，若 $op = \texttt{"div"}$ 则按 IEEE 754 双精度浮点数（`f64`）计算真除法 $z = x / y$；若 $op = \texttt{"mod"}$ 则按任意精度整数计算向负无穷取整的数学取模（余数与除数 $y$ 同号，即 $z = x - \lfloor x / y \rfloor \cdot y$）：
     * **模式 A（未声明 `with.input.default`）**：
       $$\begin{cases}
       \rho' = \rho[v_{\text{res}} \mapsto z], \quad \text{edge} = \texttt{.some} & \text{若 } y \neq 0 \\

@@ -40,7 +40,7 @@
 ### 决策 1：彻底移除 `RunVarRef` 自然语言变量正则提取与 `references` 字段
 
 1. **编译器只认节点 `input` 契约**：
-   * 图内 `ActionNode` 的静态读取集唯一由 `node.input: List<Identifier>` 确定（顶层 `RootRunNode` 由 `root.input: Map<Identifier, TypeSpec>` 确定）；
+  * 图内 `ActionNode` 的静态读取集唯一由 `node.input: List<Identifier>` 确定（顶层 `RootRunNode` 由 `root.input: Map<Identifier, TypeSpec>` 确定）；
    * 未在 `input` 中声明的变量绝不进入执行器的 `input_snapshot`。
 2. **静态字段路径（`FieldPathExpr`）与编译器 AST 清理**：
    * 移除 `RunVarRef` 正则提取规则、句尾标点剥离规则，以及 `axcutor-core` 中 `NodeBody::Run` 与 `RootBody::Run` 上的 `references: Vec<FieldPath>` 字段和 `symbol.capture` 检查；
@@ -109,11 +109,9 @@
    * **情形 B：节点未声明 `branches`（单一 `Output` 模型）**：
      * 当 `branches_contract` 为空时，生成包含 `output_schema` 全部字段的单一强类型模型类 `Output(BaseModel)`（若 `output_schema` 为空 `{}`，则 `Output()` 为零参数构造器），此时 $\text{ReturnType} = \texttt{Output}$；
      * 用户代码直接通过 `return Output(<field_1>=..., ...)` 返回。
-3. **嵌套输出结构体的双模兼容（Model 实例与 `TypedDict` 字面量联合注解）**：
-   * 当节点的某个 `output` 字段（或深层嵌套属性）为强类型结构体（`TypedDict`）时，代码生成器同时生成：
-     1. 确定性命名的 Pydantic 模型类 `Output_<field_path>`（供用户显式实例化 `Output_order_info(order_id=..., total=...)`）；
-     2. 同构的 `typing.TypedDict` 类型 `_Dict_Output_<field_path>`；
-   * 在父级 `Output` 或 `_Branch_<b>` 模型中，该字段的静态类型注解声明为两者的联合类型 `Output_<field_path> | _Dict_Output_<field_path>`。这样无论用户在 `return` 时传入 `Output_order_info(...)` 实例还是直接传入字典字面量 `{"order_id": ..., "total": ...}`，静态类型检查器（`pyright` / `mypy`）与运行期 Pydantic（自动校验并实例化嵌套字典）均能 **100% 类型安全地通过**。
+3. **嵌套输出结构体的强类型模型构造（`Output_<field_path>`）**：
+   * 当节点的某个 `output` 字段（或深层嵌套属性）为强类型结构体（`TypedDict`）时，代码生成器生成确定性命名的 Pydantic 模型类 `Output_<field_path>`（供用户显式实例化 `Output_order_info(order_id=..., total=...)`）；
+   * 在父级 `Output` 或 `_Branch_<b>` 模型中，该字段的静态类型注解固定为 `Output_<field_path>`，不接受原生字典字面量 `{...}`，确保输入输出全程使用统一的强类型模型构造与点号属性心智。
 
 ---
 
@@ -141,7 +139,7 @@
 | `type: boolean`（含 `enum: [e_1, ...]`） | `Literal[True]` / `Literal[False]` | `Literal[...] \| None` |
 | `type: array, items: U` | `list[` $\mathcal{T}_{\text{py}}(U)$ `]` | `list[` $\mathcal{T}_{\text{py}}(U)$ `] \| None` |
 | `type: object, additionalProperties: V` | `dict[str, ` $\mathcal{T}_{\text{py}}(V)$ `]` | `dict[str, ` $\mathcal{T}_{\text{py}}(V)$ `] \| None` |
-| `type: object, properties: {...}` (`TypedDict`) | • 在 `Input` 树中：生成的嵌套类 `Input_<path>`<br>• 在 `Output` 树中：`Output_<path> \| _Dict_Output_<path>` | `<NonNullType> \| None` |
+| `type: object, properties: {...}` (`TypedDict`) | • 在 `Input` 树中：生成的嵌套类 `Input_<path>`<br>• 在 `Output` 树中：生成的嵌套类 `Output_<path>` | `<NonNullType> \| None` |
 
 * **严格布尔与数值隔离**：在 Pydantic `strict=True` 下，由于 Python 中 `bool` 是 `int` 的子类（`isinstance(True, int) == True`），代码生成器在 `int`、`float` 与 `float | int` 字段上统一挂载严格校验器以确保 `bool` 值不会被误判为合法的 `integer` 或 `number`，与 Axcutor `TypeSpec` 的严格标量隔离保持 100% 一致。
 * **`TypedDict` 非必填属性（$f \notin \text{required}$）的映射**：
@@ -183,7 +181,7 @@ review_order:
           return Branch.rejected(reject_reason="Subtotal must be positive")
       total = round(input.raw_order.subtotal * (1 + input.tax_rate), 2)
       return Branch.approved(
-          order_info={"order_id": input.raw_order.id, "total": total}
+          order_info=Output_order_info(order_id=input.raw_order.id, total=total)
       )
 ```
 
@@ -191,7 +189,7 @@ review_order:
 ```python
 # === AUTO-GENERATED AXCUTOR BUILTIN MODULE (NODE: review_order) ===
 from __future__ import annotations
-from typing import Literal, TypedDict
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 _MODEL_CFG = ConfigDict(frozen=True, extra="forbid", strict=True)
@@ -208,13 +206,9 @@ class Input(BaseModel):
     raw_order: Input_raw_order
     tax_rate: float
 
-# --- 2. Output Nested Models & TypedDicts ---
+# --- 2. Output Nested Models ---
 class Output_order_info(BaseModel):
     model_config = _MODEL_CFG
-    order_id: str
-    total: float | int
-
-class _Dict_Output_order_info(TypedDict):
     order_id: str
     total: float | int
 
@@ -222,7 +216,7 @@ class _Dict_Output_order_info(TypedDict):
 class _Branch_approved(BaseModel):
     model_config = _MODEL_CFG
     _axcutor_branch: str = PrivateAttr(default="approved")
-    order_info: Output_order_info | _Dict_Output_order_info
+    order_info: Output_order_info
 
 class _Branch_rejected(BaseModel):
     model_config = _MODEL_CFG
@@ -242,14 +236,14 @@ ReturnType = _Branch_approved | _Branch_rejected | _Branch_ignored
 
 # --- 4. User Execution Entrypoint ---
 async def __axcutor_run__(input: Input) -> ReturnType:
-    # --- BEGIN USER CONTENT (line_offset = 49) ---
+    # --- BEGIN USER CONTENT (line_offset = 45) ---
     if not input.raw_order.items:
         return Branch.ignored()
     if input.raw_order.subtotal <= 0:
         return Branch.rejected(reject_reason="Subtotal must be positive")
     total = round(input.raw_order.subtotal * (1 + input.tax_rate), 2)
     return Branch.approved(
-        order_info={"order_id": input.raw_order.id, "total": total}
+        order_info=Output_order_info(order_id=input.raw_order.id, total=total)
     )
     # --- END USER CONTENT ---
 ```

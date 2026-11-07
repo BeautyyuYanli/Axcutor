@@ -83,7 +83,10 @@ nodes:
     input: [payment_request]
     output:
       receipt_id: { type: string }
-    run: "调用支付接口处理请求 variables.payment_request，将凭证号写入 output.receipt_id。"
+    run:
+      executor: builtin
+      content: |
+        return Output(receipt_id=f"PAY-{input.payment_request}")
 ```
 
 ### 2. 与 `for_each` 结合时的元素级隔离重试
@@ -107,7 +110,10 @@ nodes:
     # 单次迭代产出 string，在外层图中对应为已声明的 Array<string>
     output:
       enriched_profiles: { type: string }
-    run: "查询用户 variables.current_uid 的画像数据写入 output.enriched_profiles。"
+    run:
+      executor: builtin
+      content: |
+        return Output(enriched_profiles=f"profile:{input.current_uid}")
 ```
 
 ---
@@ -153,7 +159,11 @@ graph:
             input: [query_topic, draft_notes]
             output:
               draft_notes: { type: string }
-            run: "围绕主题 variables.query_topic 检索新资料并追加至 variables.draft_notes，写回 output.draft_notes。"
+            run:
+              executor: builtin
+              content: |
+                updated = f"{input.draft_notes}\nEvidence for {input.query_topic}".strip()
+                return Output(draft_notes=updated)
 
           # 子图步骤 1.2：评估资料是否充足，决定继续回边检索或产出最终摘要
           evaluate_sufficiency:
@@ -167,7 +177,12 @@ graph:
               need_more:
                 description: "资料不足，继续下一轮检索"
                 output: []
-            run: "评估 variables.draft_notes 是否充足；充足则生成摘要写入 output.final_summary 并选 enough，否则选 need_more。"
+            run:
+              executor: builtin
+              content: |
+                if len(input.draft_notes.splitlines()) >= 2:
+                    return Branch.enough(final_summary=input.draft_notes)
+                return Branch.need_more()
 
         edges:
           - start -> fetch_next_evidence
@@ -180,7 +195,10 @@ graph:
       input: [query_topic]
       output:
         final_summary: { type: string }
-      run: "检索阶段达到资源上限，为主题 variables.query_topic 生成基础兜底说明写入 output.final_summary。"
+      run:
+        executor: builtin
+        content: |
+          return Output(final_summary=f"Fallback summary for {input.query_topic}")
 
   # 2. 主图控制流连边
   edges:

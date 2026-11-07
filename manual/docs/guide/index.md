@@ -37,7 +37,7 @@ Axcutor 将工作流的运行机制拆分为正交的两个层面——**何时�
 
 2. **运行期执行与护栏调度（Runtime Execution & Guardrails）**
    通过静态验证后，工作流引擎依据外部传入的初始参数初始化根栈帧变量表，并注入初始控制令牌：
-   - **节点调度与执行契约校验**：令牌激活节点后，引擎从变量表提取 `input` 快照，交由底层执行器（业务函数、外部服务、Agent 或 `builtin:*` 内建确定性算子）运行，并在节点返回时严格按照其 `output` Schema 校验产出数据。
+   - **节点调度与执行契约校验**：令牌激活节点后，引擎从变量表提取 `input` 快照，交由底层执行器（如内置受信任 Python 执行器 `executor: builtin`、外部扩展执行器或 `builtin:*` 内建确定性算子）运行，并在节点返回时严格按照其 `output` Schema 校验产出数据。
    - **多级护栏与事务级容错**：运行期全程受声明式护栏保护——图层级通过 `max_steps` 限制最大推进步数以防范无限循环；节点层级通过 `timeout_ms` 与 `retry` 实现基于输入快照的幂等超时重试，并通过 `catch` 将超时或执行期异常转化为控制流恢复分支降级处理。
 
 ---
@@ -80,7 +80,10 @@ graph:
       # 声明单次迭代的元素类型 string；汇聚后在外层变量表中自动提升为 Array<string>
       output:
         processed_items: { type: string }
-      run: "处理单条数据 variables.single_item，将转换结果写入 output.processed_items。"
+      run:
+        executor: builtin
+        content: |
+          return Output(processed_items=input.single_item.strip().upper())
 
     # 节点 2：跨文件调用子工作流（use + with 显式参数绑定）
     generate_audit:

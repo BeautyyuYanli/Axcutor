@@ -41,20 +41,29 @@ nodes:
     input: [raw_draft]
     output:
       report_a: { type: string }
-    run: "..."
+    run:
+      executor: builtin
+      content: |
+        return Output(report_a=f"Report A: {input.raw_draft}")
 
   worker_b:
     input: [raw_draft]
     output:
       report_b: { type: string }
-    run: "..."
+    run:
+      executor: builtin
+      content: |
+        return Output(report_b=f"Report B: {input.raw_draft}")
 
   # 非法（编译期报错）：若将 worker_c 与 worker_a 放入同一并发组，因两者均写入 report_a 违反写集合互斥
   worker_c:
     input: [raw_draft]
     output:
       report_a: { type: string }
-    run: "..."
+    run:
+      executor: builtin
+      content: |
+        return Output(report_a=f"Duplicate A: {input.raw_draft}")
 ```
 
 ### 3. Join 屏障原子合并与 Fail-Fast 协同取消
@@ -87,13 +96,19 @@ nodes:
             entity_summary: { type: string }
           catch:
             fallback: "*"
-          run: "快速抽取实体摘要写入 output.entity_summary。"
+          run:
+            executor: builtin
+            content: |
+              return Output(entity_summary=f"Fast entities: {input.raw_draft[:20]}")
 
         fallback_extract:
           input: [raw_draft]
           output:
             entity_summary: { type: string }
-          run: "使用兜底规则抽取实体摘要写入 output.entity_summary。"
+          run:
+            executor: builtin
+            content: |
+              return Output(entity_summary="Fallback entities")
       edges:
         - start -> try_fast_extract
         # 子图内部消费 catch 分支，最终统一收敛到子图唯一的 end
@@ -136,7 +151,10 @@ graph:
       input: [raw_draft]
       output:
         compliance_report: { type: string }
-      run: "扫描文稿 variables.raw_draft 的合规性，生成审计报告写入 output.compliance_report。"
+      run:
+        executor: builtin
+        content: |
+          return Output(compliance_report=f"Compliance OK for {len(input.raw_draft)} chars")
 
     # 并发分支 3（内联 graph 节点）：在单个并发分支内封装两步串联逻辑，仅对外导出 entity_summary
     extract_entities_pipeline:
@@ -152,14 +170,21 @@ graph:
               raw_entities:
                 type: array
                 items: { type: string }
-            run: "从 variables.raw_draft 中抽取核心实体列表写入 output.raw_entities。"
+            run:
+              executor: builtin
+              content: |
+                words = [w for w in input.raw_draft.split() if w.istitle()]
+                return Output(raw_entities=words)
 
           # 子图步骤 3.2：读取 raw_entities，产出对外导出的 entity_summary
           summarize_entities:
             input: [raw_entities]
             output:
               entity_summary: { type: string }
-            run: "汇总实体列表 variables.raw_entities 生成术语表说明写入 output.entity_summary。"
+            run:
+              executor: builtin
+              content: |
+                return Output(entity_summary=", ".join(input.raw_entities))
 
         # 子图内部控制流：收敛至子图单出口 end
         edges:

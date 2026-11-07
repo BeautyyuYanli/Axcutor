@@ -6,7 +6,7 @@
 
 ## 一、 静态类型结构化等价判定（$T_1 \equiv T_2$）
 
-设 $T_1, T_2$ 为满足 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 良构性公理的两个 `TypeSpec`，其基础类型算子 $\text{BaseType}(T)$、可空性谓词 $\text{Nullable}(T)$ 与可空性提升算子 $\text{MakeNullable}(T)$ 均按 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 定义。$T_1$ 与 $T_2$ 静态结构化等价（记作 $T_1 \equiv T_2$），用于校验同一栈帧内多处显式声明同一变量名时的类型一致性（$\Sigma_G(v) \equiv T$），当且仅当递归满足以下全部条件：
+设 $T_1, T_2$ 为满足 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 良构性公理的两个 `TypeSpec`，其基础类型算子 $\text{BaseType}(T)$、可空性谓词 $\text{Nullable}(T)$ 与可空性提升算子 $\text{MakeNullable}(T)$ 均按 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 定义。$T_1$ 与 $T_2$ 静态结构化等价（记作 $T_1 \equiv T_2$），用于校验同一栈帧内多处显式声明同一变量名时的类型一致性（$\Sigma_G(v) \equiv T$），当且仅当递归满足以下全部条件（注：`description` 注释信息以及 `enum`、`properties`、`required` 的书写次序不影响结构化等价判定）：
 
 1. **基础类型与可空性一致**：
    * $\text{BaseType}(T_1) = \text{BaseType}(T_2)$；
@@ -90,8 +90,8 @@ $$T_1.\text{additionalProperties} <: T_2.\text{additionalProperties}$$
 2. **非空字面量规则（当 $L \neq \texttt{null}$ 时）**：
    * **标量匹配**：
      * $\text{BaseType}(T) = \texttt{string} \implies L$ 必须为字符串；
-     * $\text{BaseType}(T) = \texttt{integer} \implies L$ 必须为整数（非布尔值）；
-     * $\text{BaseType}(T) = \texttt{number} \implies L$ 允许为**整数字面量**（如 `0`）或**浮点数字面量**（如 `0.0`）；
+     * $\text{BaseType}(T) = \texttt{integer} \implies L$ 必须为词法整数字面量（带小数点或指数的浮点数字面量如 `1.0` 不满足 `integer`，布尔值 `true` / `false` 亦不视为整数）；
+     * $\text{BaseType}(T) = \texttt{number} \implies L$ 允许为**整数字面量**（如 `0`）或**有限浮点数字面量**（如 `0.0`，布尔值不视为数值）；
      * $\text{BaseType}(T) = \texttt{boolean} \implies L$ 必须为布尔值 `true` 或 `false`；
      * 若 $T$ 声明了 `enum`，则还必须满足 $L \in T.\text{enum}$。
    * **列表字面量匹配（$\text{BaseType}(T) = \texttt{array}$）**：

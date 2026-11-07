@@ -10,9 +10,9 @@ Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通
 
 | 异常选择器 | 触发条件 |
 | :--- | :--- |
-| **`execution`** | 1. `run` 节点的业务执行器返回执行错误（如函数抛出异常、RPC/API 调用失败、脚本非零退出）；<br>2. 内联 `graph` 或 `use` 子工作流内部走向了 `-> fail` 异常终点。 |
+| **`execution`** | 1. `run` 节点的业务执行器返回执行错误（如函数抛出未捕获异常、RPC/API 调用失败、脚本非零退出）；<br>2. 内联 `graph` 或 `use` 子工作流内部走向了 `-> fail` 异常终点。 |
 | **`timeout`** | 节点单次尝试耗时超过其配置的 `timeout_ms`。 |
-| **`contract`** | 节点执行器返回的数据结构未通过 `output` 的 `TypeSpec` 校验，或返回了未声明的分支名。 |
+| **`contract`** | 节点执行器返回的数据结构未通过 `output` 的 `TypeSpec` 校验（如 `builtin` 执行器构造 `Output` / `Branch` 触发 `ValidationError`），或返回了非法分支对象。 |
 | **`max_steps`** | 内联 `graph` 或 `use` 子工作流的累计调度步数超过其 `graph.max_steps` 上限（注：原子 `run` 节点与顶层 `run` 工作流不存在图步数计数器，禁止在其 `retry.on` 或 `catch` 显式列表中声明 `max_steps`）。 |
 
 ---
@@ -39,7 +39,10 @@ nodes:
     input: [query_key]
     output:
       record: { type: string }
-    run: "从主服务查询 variables.query_key，写入 output.record。"
+    run:
+      executor: builtin
+      content: |
+        return Output(record=f"Primary record for {input.query_key}")
 
   # 形态 B：按异常类型分流至不同恢复出边（contract 未列出，发生时直接向父图冒泡）
   autonomous_research_subgraph:
@@ -70,21 +73,30 @@ nodes:
     input: [query_key]
     output:
       record: { type: string }
-    run: "从主库查询 variables.query_key 写入 output.record。"
+    run:
+      executor: builtin
+      content: |
+        return Output(record=f"Primary:{input.query_key}")
 
   # 补偿节点：在 .fallback 路径上为 record 提供定值，满足下游 render_view 的必达定值要求
   load_default_record:
     input: [query_key]
     output:
       record: { type: string }
-    run: "生成 variables.query_key 的默认兜底记录写入 output.record。"
+    run:
+      executor: builtin
+      content: |
+        return Output(record=f"Default:{input.query_key}")
 
   # 汇合节点：无论走主路径还是 .fallback 补偿路径，record 均已定值
   render_view:
     input: [record]
     output:
       html: { type: string }
-    run: "渲染记录 variables.record，写入 output.html。"
+    run:
+      executor: builtin
+      content: |
+        return Output(html=f"<div>{input.record}</div>")
 
 edges:
   - start -> query_primary
@@ -158,29 +170,42 @@ graph:
             input: [order_id]
             output:
               reservation_id: { type: string }
-            run: "为订单 variables.order_id 预扣库存，写入 output.reservation_id。"
+            run:
+              executor: builtin
+              content: |
+                return Output(reservation_id=f"RES-{input.order_id}")
 
           # 步骤 1.2：校验结算金额合规性
           audit_payment_limit:
             input: [order_id, amount, reservation_id]
             branches:
-              pass: "金额合规，允许扣款"
+              approved: "金额合规，允许扣款"
               reject: "金额超限，触发子图回滚"
-            run: "审核订单 variables.order_id 的金额 variables.amount；合规选 pass，超限选 reject。"
+            run:
+              executor: builtin
+              content: |
+                if 0.0 < input.amount <= 10000.0:
+                    return Branch.approved()
+                return Branch.reject()
 
-          # 步骤 1.3：仅在 pass 分支下执行最终扣款并生成 settlement_receipt
+          # 步骤 1.3：仅在 approved 分支下执行最终扣款并生成 settlement_receipt
           charge_and_issue_receipt:
             input: [order_id, amount, reservation_id]
             output:
               settlement_receipt: { type: string }
-            run: "基于预扣单 variables.reservation_id 扣款 variables.amount，生成凭证写入 output.settlement_receipt。"
+            run:
+              executor: builtin
+              content: |
+                return Output(
+                    settlement_receipt=f"SETTLED:{input.reservation_id}:{input.amount:.2f}"
+                )
 
         # 子图内部控制流：reject 分支走向 fail，回滚子图未提交的 variables 并向父节点抛出 execution 异常
         edges:
           - start -> reserve_inventory
           - reserve_inventory -> audit_payment_limit
           - audit_payment_limit.reject -> fail
-          - audit_payment_limit.pass -> charge_and_issue_receipt
+          - audit_payment_limit.approved -> charge_and_issue_receipt
           - charge_and_issue_receipt -> end
 
     # 阶段 2（业务补偿节点）：当 settlement_transaction 进入 .tx_aborted 分支时冲正外部预占资源并通知
@@ -188,7 +213,10 @@ graph:
       input: [order_id]
       output:
         cancel_notice: { type: string }
-      run: "冲正订单 variables.order_id 的预占资源并生成取消通知，写入 output.cancel_notice。"
+      run:
+        executor: builtin
+        content: |
+          return Output(cancel_notice=f"Order {input.order_id} cancelled and rolled back.")
 
   # 3. 主图控制流连边：正常路径走向 end.settled，异常捕获路径经补偿节点走向 end.cancelled
   edges:

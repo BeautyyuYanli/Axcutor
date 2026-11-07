@@ -21,7 +21,12 @@ verify_signature:
   branches:
     valid: "签名校验通过"
     invalid: "签名不匹配或已过期"
-  run: "校验 variables.payload 的签名 variables.signature，有效则选择 valid，否则选择 invalid。"
+  run:
+    executor: builtin
+    content: |
+      if input.signature.startswith("sig_") and len(input.payload) > 0:
+          return Branch.valid()
+      return Branch.invalid()
 ```
 
 ### 2. 分支按需产出子集（`<choice>: { description: "...", output: [<field>, ...] }`）
@@ -42,7 +47,18 @@ inspect_order:
     rejected:
       description: "订单不合规，记录驳回原因"
       output: [reject_reason, audit_timestamp]
-  run: "审核 variables.order_request；若合规写入 output.approved_invoice 并选择 approved；否则写入 output.reject_reason 并选择 rejected。均写入时间戳 output.audit_timestamp。"
+  run:
+    executor: builtin
+    content: |
+      if input.order_request.amount > 0:
+          return Branch.approved(
+              approved_invoice=f"INV-{input.order_request.id}",
+              audit_timestamp=1700000000,
+          )
+      return Branch.rejected(
+          reject_reason="Invalid order amount",
+          audit_timestamp=1700000000,
+      )
 ```
 
 ---
@@ -102,7 +118,7 @@ graph:
 ### 1. [`builtin:switch`](../../reference/builtins/switch.md)：布尔与枚举多路路由
 
 * **布尔路由**：绑定 `type: boolean` 变量或结构体字段路径时，自动暴露 **`.true`** 与 **`.false`** 两个分支。
-* **枚举多路路由**：绑定 `type: string, enum: [<v1>, <v2>, ...]` 变量或结构体字段路径时，要求每个枚举值 `<vi>` 均为合法分支标识符（匹配 `^[a-zA-Z_][a-zA-Z0-9_]*$` 且不为 `start`、`end`、`fail`），自动暴露与各枚举值同名的 **`.<v1>`**、**`.<v2>`** 分支。
+* **枚举多路路由**：绑定 `type: string, enum: [<v1>, <v2>, ...]` 变量或结构体字段路径时，要求每个枚举值 `<vi>` 均为合法受限标识符（匹配 `^[a-zA-Z_][a-zA-Z0-9_]*$` 且不为控制流保留字或 Python 硬关键字），自动暴露与各枚举值同名的 **`.<v1>`**、**`.<v2>`** 分支。
 
 ```yaml
 nodes:
@@ -268,14 +284,24 @@ graph:
       input: [ticket, assigned_operator]
       output:
         resolution_report: { type: string }
-      run: "由 variables.assigned_operator 处理常规工单 variables.ticket.id，结果写入 output.resolution_report。"
+      run:
+        executor: builtin
+        content: |
+          return Output(
+              resolution_report=f"Ticket {input.ticket.id} resolved by {input.assigned_operator}"
+          )
 
     # 步骤 3b：紧急分支处理节点，仅产出 escalated 出口所需的 escalation_id
     handle_urgent:
       input: [ticket, assigned_operator]
       output:
         escalation_id: { type: string }
-      run: "由 variables.assigned_operator 升级紧急工单 variables.ticket.id，升级单号写入 output.escalation_id。"
+      run:
+        executor: builtin
+        content: |
+          return Output(
+              escalation_id=f"ESC-{input.ticket.id}-{input.assigned_operator}"
+          )
 
   # 4. 控制流连边：两条分支路径分别汇聚至 end.resolved 与 end.escalated
   edges:

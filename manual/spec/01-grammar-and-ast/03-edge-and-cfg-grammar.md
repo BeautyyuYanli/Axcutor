@@ -32,7 +32,7 @@ EndEndpoint     ::= "end"
 ### 词法空白字符规则（Whitespace Rules）
 
 * **允许水平空白的位置**：整条边字符串的首尾，以及定界符 `->`、`,`、`[`、`]` 的两侧，均允许出现任意数量（0 个或多个）的水平空白字符（ASCII 空格 `U+0020` 或水平制表符 `\t` `U+0009`）。解析器在构建 AST 时自动剥离这些空白字符。
-* **禁止空白的位置**：成员访问点号 `.` 的两侧（即 `NodeId.BranchOrCatchId` 与 `end.HostBranchId` 内部）**严禁**出现任何空白字符；`NodeId`、`BranchOrCatchId`、`HostBranchId` 及保留字（`start`、`end`、`fail`）内部亦不可被空白字符截断。违反此规则的边字符串直接判定为词法解析错误。
+* **禁止空白的位置**：成员访问点号 `.` 的两侧（即 `NodeId.BranchOrCatchId` 与 `end.HostBranchId` 内部）**严禁**出现任何空白字符；`NodeId`、`BranchOrCatchId`、`HostBranchId` 及控制流端点保留字（`start`、`end`、`fail`）内部亦不可被空白字符截断。违反此规则的边字符串直接判定为词法解析错误。
 * **禁止换行符**：单条边字符串内禁止包含换行符（`\n` 或 `\r`）。
 
 ---
@@ -88,7 +88,7 @@ type JoinTargetAst =
 
 `ForkJoinEdge(source, workers, join_target)` 对应 `SourceEndpoint -> [worker_1, worker_2, ...] -> JoinTarget`。在 AST 归一化阶段，解析器与静态校验器强制执行以下语法级良构性断言（Well-formedness Assertions）：
 
-* **保留字隔离断言**：所有出现的标识符 `NodeId`、`BranchOrCatchId`、`HostBranchId` 必须符合合法标识符词法规范，且 `NodeId` 严禁使用控制流保留字 `start`、`end`、`fail`。
+* **保留字隔离断言**：所有出现的标识符 `NodeId`、`BranchOrCatchId`、`HostBranchId` 必须符合受限标识符词法规范（属于 $\text{Identifier} \setminus \mathcal{R}$，严禁使用控制流保留字 `start`、`end`、`fail` 或宿主代码生成保留关键字）。
 * **并发基数与互异性断言**：对于 `ForkJoinEdge.workers = [w_1, w_2, ..., w_k]`，必须满足：
   $$\text{length}(\text{workers}) = k \ge 2 \quad \land \quad \forall 1 \le i < j \le k,\; w_i \neq w_j$$
   即并发组至少包含 2 个工作节点，且列表内节点名两两互异（禁止在同一并发组中重复列出同一节点名），同时保留源码中的声明顺序。

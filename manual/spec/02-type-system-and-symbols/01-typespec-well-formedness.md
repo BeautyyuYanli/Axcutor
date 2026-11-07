@@ -1,6 +1,6 @@
 # 01. `TypeSpec` 良构性公理（Well-Formedness Rules）
 
-Axcutor 的类型系统采用标准 JSON Schema 的**闭合强类型子集（`TypeSpec`）**。静态检查器在编译期首先对所有出现的 `TypeSpec` 执行良构性校验（Well-Formedness Validation），不满足以下公理的 Schema 在编译期被拒绝。
+Axcutor 的类型系统采用标准 JSON Schema 的**闭合强类型子集（`TypeSpec`）**。静态检查器在编译期首先对所有出现的 `TypeSpec` 执行良构性校验（Well-Formedness Validation），不满足以下公理的 Schema 在编译期被拒绝。通过校验后，编译器前端将其归一化为标准化的 JSON Schema `TypeSpec` 对象（可空类型统一规范化为 `type: [b, "null"]`，`TypedDict` 显式填充 `required` 列表，且保留声明字段顺序），直接作为跨组件与执行器边界的权威类型表示，无需引入额外的中间表示（IR）。
 
 ---
 
@@ -41,15 +41,15 @@ $$\mathcal{B} = \{\texttt{"string"}, \texttt{"integer"}, \texttt{"number"}, \tex
 
 ### 2. 强类型列表构造器（$b = \texttt{"array"}$）
 * **必填字段**：必须声明 `items: TypeSpec`，且 `items` 的值必须是一个递归良构的 `TypeSpec`（禁止 `items` 为数组或布尔值）。
-* 禁止出现 `properties`、`required`、`additionalProperties`、`enum`。
+* 允许可选字段 `description: String`；禁止出现 `properties`、`required`、`additionalProperties`、`enum`。
 
 ### 3. 强类型结构体构造器（`TypedDict`：$b = \texttt{"object"} \land \texttt{properties} \in \text{dom}(T)$）
-* **必填字段**：`properties: Map<Identifier, TypeSpec>` 必须为**非空映射**，每个键必须为合法 `Identifier`，每个值必须为递归良构的 `TypeSpec`。
-* **可选字段 `required: List<Identifier>`**：
+* **必填字段**：`properties: Map<RestrictedIdentifier, TypeSpec>` 必须为**非空映射**，每个键必须为排除了全局保留字集合 $\mathcal{R}$ 的受限标识符（$\text{Identifier} \setminus \mathcal{R}$，详见 [`01-document-and-node-grammar.md`](../01-grammar-and-ast/01-document-and-node-grammar.md)），每个值必须为递归良构的 `TypeSpec`。
+* **可选字段 `required: List<RestrictedIdentifier>`**：
   * 若省略 `required`，编译器将其规范化为 `required = dom(properties)`（默认全部字段必填）；
   * 若显式声明 `required`，其元素必须无重复且满足 $\text{set}(\text{required}) \subseteq \text{dom}(\text{properties})$。
-* **互斥与闭合约束**：禁止出现 `additionalProperties`、`items`、`enum`。运行时校验时视为 `additionalProperties: false`（闭合结构体，不允许未声明的额外字段）。
+* **互斥与闭合约束**：允许可选字段 `description: String`；禁止出现 `additionalProperties`、`items`、`enum`。运行时校验时视为 `additionalProperties: false`（闭合结构体，不允许未声明的额外字段）。
 
 ### 4. 强类型有序映射构造器（`OrderedMap`：$b = \texttt{"object"} \land \texttt{additionalProperties} \in \text{dom}(T)$）
 * **必填字段**：`additionalProperties: TypeSpec` 必须是一个递归良构的 `TypeSpec`（禁止将 `additionalProperties` 设为布尔值 `true` 或 `false`）。
-* **互斥与闭合约束**：禁止出现 `properties`、`required`、`items`、`enum`。
+* **互斥与闭合约束**：允许可选字段 `description: String`；禁止出现 `properties`、`required`、`items`、`enum`。

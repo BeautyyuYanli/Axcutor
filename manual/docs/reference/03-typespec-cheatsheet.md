@@ -11,9 +11,9 @@ Axcutor 中所有的 `input`、`output` 及 `graph.variables` 均采用 **标准
 
 | 构造类别 | YAML 必填/可选字段 | 适用场景 |
 | :--- | :--- | :--- |
-| **1. 基础标量与枚举** | `type: string \| integer \| number \| boolean`<br>`enum: [...]` *(可选)* | 字符串、整数、浮点数、布尔值及有限字面量枚举（若 `string` `enum` 用于 `builtin:switch` 路由，每个枚举值均须为合法分支标识符 `^[a-zA-Z_][a-zA-Z0-9_]*$` 且不可为 `start`/`end`/`fail`）。 |
+| **1. 基础标量与枚举** | `type: string \| integer \| number \| boolean`<br>`enum: [...]` *(可选)* | 字符串、整数、浮点数、布尔值及有限字面量枚举（若 `string` `enum` 用于 `builtin:switch` 路由，每个枚举值均须为合法受限标识符 `^[a-zA-Z_][a-zA-Z0-9_]*$` 且不可为 `start`/`end`/`fail` 或 Python 硬关键字）。 |
 | **2. 强类型列表（Array）** | `type: array`<br>`items: <TypeSpec>` *(必填)* | 同质元素有序列表（支持 `for_each` 遍历、`builtin:length` 长度计算、`builtin:array_get` 下标随机访问、`builtin:array_shift` 首元素弹出、`builtin:array_append` 末尾追加、`builtin:array_concat` 列表拼接与 `builtin:array_flatten` 二维列表展平）。 |
-| **3. 强类型结构体（TypedDict）** | `type: object`<br>`properties: { <k>: <TypeSpec> }` *(必填非空)*<br>`required: [...]` *(可选，省略时默认全部必填)* | 固定字段记录结构（支持通过 `builtin:object_merge` 不可变构造或覆盖更新字段；非空时支持 `var.field` 静态字段路径投影并配合 `builtin:assign` 提取嵌套字段，详见下方投影规则）。 |
+| **3. 强类型结构体（TypedDict）** | `type: object`<br>`properties: { <k>: <TypeSpec> }` *(必填非空，键名 `<k>` 须为合法受限标识符)*<br>`required: [...]` *(可选，省略时默认全部必填)* | 固定字段记录结构（支持通过 `builtin:object_merge` 不可变构造或覆盖更新字段；非空时支持 `var.field` 静态字段路径投影并配合 `builtin:assign` 提取嵌套字段，详见下方投影规则）。 |
 | **4. 强类型有序映射（Ordered Map）** | `type: object`<br>`additionalProperties: <TypeSpec>` *(必填，不可为布尔值)* | 动态 `string` 键、同质值的有序字典（运行时保持插入顺序，支持 `for_each` 遍历、`builtin:length` 键值对计数，以及 `builtin:map_get` 动态键查找、`builtin:map_set` 写入与 `builtin:map_delete` 移除）。 |
 | **5. 显式可空类型（`Optional<T>`）** | `type: [<BaseType>, "null"]`<br>*(配套字段与 `<BaseType>` 一致)* | 表示可能为 `null` 的外部输入或可选字段（可通过 `builtin:unwrap` 拆包收窄为非空 `T`）。 |
 
@@ -34,7 +34,7 @@ count:
   description: "计数"
 
 # 2. 强类型枚举（enum）
-# 注：当用于 builtin:switch 时，枚举元素必须为合法标识符且不可为 start / end / fail
+# 注：当用于 builtin:switch 时，枚举元素必须为合法受限标识符（不可为 start / end / fail 或 Python 硬关键字）
 status:
   type: string
   enum: [pending, running, completed, failed]
