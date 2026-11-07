@@ -44,7 +44,11 @@ graph:
         nested_tags:
           type: array
           items: { type: string }
-      run: "提取文章 variables.article.title 的标签列表，写入 output.nested_tags。"
+      run:
+        executor: builtin
+        content: |
+          tags = [w.lower() for w in input.article.title.split() if len(w) > 3]
+          return Output(nested_tags=tags)
 
     # 步骤 2：调用 builtin:array_flatten 将二维列表 nested_tags 展平为一维列表 all_tags
     flatten_all_tags:

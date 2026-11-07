@@ -39,7 +39,7 @@ graph: ...
 | :--- | :--- | :--- | :--- |
 | `variables` | 可选 | `{ <var>: { <TypeSpec>, default?: <literal> } }` | 图级局部变量声明表（不可与当前图的宿主输入变量重名）。每个值必须是一个良构的 `TypeSpec` 映射对象，可选配 `default: <literal>`：包含 `default` 时在图启动处赋予初始定值；省略 `default` 时仅在符号表中声明变量类型，图启动时处于未定值状态（`Unbound`）。 |
 | `max_steps` | 可选 | 正整数（默认 `1000`） | 当前图栈帧允许调度的最大步数上限（用于包含环路的图）。 |
-| `nodes` | **必填** | `{ <node_id>: <NodeSpec> }` | 图内非空子节点字典（节点名不可使用保留字 `start`、`end`、`fail`）。 |
+| `nodes` | **必填** | `{ <node_id>: <NodeSpec> }` | 图内非空子节点字典（节点名及所有变量名、分支名、结构体字段名均不可使用控制流保留字 `start`、`end`、`fail` 或 Python 硬关键字）。 |
 | `edges` | **必填** | `[ "<edge_expr>", ... ]` | 非空控制流连边列表（详见 [02. 6 种控制边语法速查表](./02-edge-syntax-cheatsheet.md)）。 |
 
 ```yaml
@@ -65,7 +65,7 @@ graph:
 
 | 字段 | `run` 动作节点 | 内联 `graph` 子图节点 | `use` 调用节点 |
 | :--- | :--- | :--- | :--- |
-| **执行体鉴别字段** | `run`（**必填**） | `graph`（**必填**） | `use: workflow:<path> \| builtin:<op>`（**必填**） |
+| **执行体鉴别字段** | `run: { executor: ..., ... }`（**必填**） | `graph`（**必填**） | `use: workflow:<path> \| builtin:<op>`（**必填**） |
 | `input` | 可选，`[<var_name>, ...]`（默认 `[]`） | 可选，`[<var_name>, ...]`（默认 `[]`） | *不支持*（通过 `with.input` 绑定） |
 | `output` | 可选，`{ <var>: <TypeSpec> }`（默认 `{}`） | 可选，`{ <var>: <TypeSpec> }`（默认 `{}`） | *不支持*（通过 `with.output` 映射） |
 | `with` | *不支持* | *不支持* | 可选，`{ input?: {...}, output?: {...} }` |
@@ -83,9 +83,18 @@ graph:
 
 ---
 
-## 四、 节点修饰符子结构字段表
+## 四、 `run` 执行体配置与节点修饰符子结构字段表
 
-### 1. `with`（用于 `use` 节点）
+### 1. `run`（结构化业务执行体配置）
+
+`run` 字段必须是一个以 `executor` 为鉴别键的映射对象（不支持裸字符串简写）。标准内置受信任 Python 执行器（`executor: builtin`）字段如下：
+
+| 字段 | 必填/可选 | 格式 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `executor` | **必填** | `builtin`（或宿主注册的扩展执行器名） | 执行器类型鉴别键。 |
+| `content` | **必填**（当 `executor: builtin` 时） | 非空多行 Python 代码字符串 | 作为 `async def execute(input: Input) -> ReturnType:` 的函数体执行。通过只读冻结模型 `input.<var>` 读取输入快照（其中 `type: number` 自动映射为原生 `float`）；无分支节点返回 `Output(...)`，有分支节点返回 `Branch.<branch_id>(...)`。 |
+
+### 2. `with`（用于 `use` 节点）
 
 | 字段 | 格式 | 说明 |
 | :--- | :--- | :--- |
@@ -104,7 +113,7 @@ graph:
 - **挂载 `for_each` 时的输出映射规则**：
   - 当节点挂载 `for_each` 时，`with.output` 必填非空，且映射的外层目标变量 `<target_var_name>` 类型对应为一阶同构提升后的集合类型（`Array<U>` 或 `OrderedMap<string, U>`）。
 
-### 2. `for_each`（用于集合遍历）
+### 3. `for_each`（用于集合遍历）
 
 | 字段 | 必填/可选 | 格式 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -116,7 +125,7 @@ graph:
 
 *(注：挂载 `for_each` 的节点直接复用节点自身的 `output`、`with.output` 与 `branches.<branch>.output` 声明目标输出集合变量与按分支过滤子集，要求至少绑定 1 个目标输出变量。)*
 
-### 3. `retry` 与 `catch`（用于容错恢复）
+### 4. `retry` 与 `catch`（用于容错恢复）
 
 | 字段 | 格式 | 说明 |
 | :--- | :--- | :--- |

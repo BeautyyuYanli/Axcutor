@@ -106,7 +106,12 @@ graph:
             input: [current_task]
             output:
               completed_outputs: { type: string }
-            run: "在沙箱中执行任务 variables.current_task.task_id 的脚本 variables.current_task.script，将标准输出写入 output.completed_outputs。"
+            run:
+              executor: builtin
+              content: |
+                return Output(
+                    completed_outputs=f"Task {input.current_task.task_id}: {input.current_task.script}"
+                )
 
           # 子图步骤 2a：在 on_timeout 分支上，零拷贝将原始 current_task 赋值给 timed_out_tasks
           record_timed_out:

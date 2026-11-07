@@ -80,7 +80,16 @@ graph:
         failed:
           description: "当前节点调用失败，产出单条错误摘要"
           output: [error_entry]
-      run: "向节点 variables.current_endpoint 发送请求 variables.request_payload；成功则写入 output.response_data 并选择 success；失败则将节点名与错误原因写入 output.error_entry 并选择 failed。"
+      run:
+        executor: builtin
+        content: |
+          if input.current_endpoint.startswith("https://"):
+              return Branch.success(
+                  response_data=f"OK from {input.current_endpoint}: {input.request_payload}"
+              )
+          return Branch.failed(
+              error_entry=f"{input.current_endpoint}: connection refused"
+          )
 
     # 步骤 3：将单次失败摘要 error_entry 追加至 failed_trace 列表末尾并重新绑定至同名变量
     record_failure:

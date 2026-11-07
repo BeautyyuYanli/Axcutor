@@ -119,7 +119,12 @@ branches:
   rejected:
     description: "内容违规"
     output: [violation_note]
-run: "..."
+run:
+  executor: builtin
+  content: |
+    if "forbidden" in input.text:
+        return Branch.rejected(violation_note="Contains forbidden keyword")
+    return Branch.approved(certificate_id="CERT-001")
 ```
 
 在父工作流中调用该子工作流时，直接在 `edges` 中通过 `<use_node>.<branch> -> target` 路由各分支：
@@ -213,7 +218,12 @@ graph:
       input: [user_submission, normalized_body, audit_cert_id]
       output:
         published_url: { type: string }
-      run: "使用合规凭证 variables.audit_cert_id 发布标题为 variables.user_submission.title 的正文 variables.normalized_body，将链接写入 output.published_url。"
+      run:
+        executor: builtin
+        content: |
+          slug = input.user_submission.title.lower().replace(" ", "-")
+          url = f"https://example.com/posts/{slug}?cert={input.audit_cert_id}"
+          return Output(published_url=url)
 
   # 4. 控制流连边：audit_doc 透明继承子工作流的 approved 与 rejected 分支
   edges:

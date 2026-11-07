@@ -57,14 +57,20 @@ nodes:
           output:
             # 3. 私有中间变量：raw_draft 未列入外层 draft_and_sanitize.output，仅在子图内可见
             raw_draft: { type: string }
-          run: "围绕 variables.raw_topic 生成初稿写入 output.raw_draft。"
+          run:
+            executor: builtin
+            content: |
+              return Output(raw_draft=f"Draft about {input.raw_topic}")
 
         redact_sensitive_info:
           input: [raw_draft]
           output:
             # 产出与子图 output 契约同名的导出变量
             clean_summary: { type: string }
-          run: "移除 variables.raw_draft 中的敏感信息，写入 output.clean_summary。"
+          run:
+            executor: builtin
+            content: |
+              return Output(clean_summary=input.raw_draft.replace("SECRET", "[REDACTED]"))
       edges:
         - start -> generate_draft
         - generate_draft -> redact_sensitive_info
@@ -128,7 +134,12 @@ graph:
             output:
               base_subtotal: { type: number }
               promo_deduction: { type: number }
-            run: "汇总 variables.cart_items 原价写入 output.base_subtotal，并计算优惠码 variables.coupon_code 抵扣额写入 output.promo_deduction。"
+            run:
+              executor: builtin
+              content: |
+                subtotal = sum(item.unit_price * item.quantity for item in input.cart_items)
+                deduction = 10.0 if input.coupon_code == "SAVE10" else 0.0
+                return Output(base_subtotal=subtotal, promo_deduction=deduction)
 
           # 子图步骤 2.2：读取子图私有变量，产出对外导出的 final_amount 与 pricing_breakdown
           finalize_price:
@@ -136,7 +147,12 @@ graph:
             output:
               final_amount: { type: number }
               pricing_breakdown: { type: string }
-            run: "用 variables.base_subtotal 减去 variables.promo_deduction 写入 output.final_amount，生成账单说明写入 output.pricing_breakdown。"
+            run:
+              executor: builtin
+              content: |
+                final_amt = max(0.0, input.base_subtotal - input.promo_deduction)
+                breakdown = f"Subtotal: {input.base_subtotal:.2f}, Discount: -{input.promo_deduction:.2f}"
+                return Output(final_amount=final_amt, pricing_breakdown=breakdown)
 
         # 子图内部控制流：到达子图 end 时，仅将 final_amount 与 pricing_breakdown 提交回主图
         edges:

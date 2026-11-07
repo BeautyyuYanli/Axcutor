@@ -2,7 +2,7 @@
 
 Axcutor 是面向复杂业务编排的工作流语言与运行时引擎。它采用单令牌结构化并发控制流图（Structured CFG）描述执行拓扑，并通过闭合静态强类型系统（JSON Schema 子集 `TypeSpec`）约束全链路的数据契约。
 
-在 Axcutor 中，每个工作流文件本身都是一个具备明确函数签名的节点，其输入、控制分支与输出遵循统一的映射关系：$\text{Input} \to (\text{Branch}, \text{Output})$。图内的 `run` 节点可承载任意满足该签名约束的业务实现，涵盖本地或远程函数、脚本沙箱、HTTP/RPC 微服务接口、数据库事务以及结构化模型调用。类型检查、栈帧作用域隔离、并发无锁同步与异常原子回滚均由编译器和运行时统一保障。
+在 Axcutor 中，每个工作流文件本身都是一个具备明确函数签名的节点，其输入、控制分支与输出遵循统一的映射关系：$\text{Input} \to (\text{Branch}, \text{Output})$。图内的 `run` 节点通过结构化的 `executor` 契约承载任意满足该签名约束的业务实现，既支持内置受信任的强类型 Python 执行器（`executor: builtin`），也可扩展至脚本沙箱、HTTP/RPC 微服务接口、数据库事务以及结构化模型调用。类型检查、栈帧作用域隔离、并发无锁同步与异常原子回滚均由编译器和运行时统一保障。
 
 ---
 
@@ -58,7 +58,10 @@ graph:
       input: [order_id, amount]
       output:
         receipt_id: { type: string }
-      run: "为订单 variables.order_id（金额 variables.amount）签发收据，并将收据编号写入 output.receipt_id。"
+      run:
+        executor: builtin
+        content: |
+          return Output(receipt_id=f"RCPT-{input.order_id}-{input.amount:.2f}")
 
   edges:
     - start -> verify_order

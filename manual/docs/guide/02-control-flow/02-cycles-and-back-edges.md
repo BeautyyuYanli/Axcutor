@@ -27,7 +27,10 @@ graph:
       output:
         candidate: { type: string }
         attempts: { type: integer }
-      run: "..."
+      run:
+        executor: builtin
+        content: |
+          ...
 ```
 
 ### 2. 环路必须存在可达 `end` 的退出分支
@@ -39,7 +42,7 @@ edges:
   - start -> generate_candidate
   - generate_candidate -> verify_candidate
   - verify_candidate.retry -> generate_candidate  # 成环回边：继续下一轮迭代
-  - verify_candidate.pass -> end                  # 环路出口：跳出循环到达终点
+  - verify_candidate.passed -> end                # 环路出口：跳出循环到达终点
 ```
 
 ### 3. 通过 `max_steps` 限制单图最大执行步数
@@ -116,7 +119,12 @@ graph:
         failed:
           description: "请求失败，记录错误并继续尝试下一项"
           output: [fail_msg]
-      run: "请求 variables.current_url；成功写入 output.page_body 并选 ok，失败写入 output.fail_msg 并选 failed。"
+      run:
+        executor: builtin
+        content: |
+          if input.current_url.startswith("https://"):
+              return Branch.ok(page_body=f"Fetched {input.current_url}")
+          return Branch.failed(fail_msg=f"Insecure URL: {input.current_url}")
 
     # 3. 将单次失败原因 fail_msg 追加至 error_logs 列表末尾
     append_error:
@@ -268,23 +276,32 @@ graph:
       input: [task_spec, last_error, attempts]
       output:
         candidate: { type: string }
-      run: "根据需求 variables.task_spec 与上次报错 variables.last_error（第 variables.attempts 次尝试）生成代码写入 output.candidate。"
+      run:
+        executor: builtin
+        content: |
+          code = f"# Attempt {input.attempts}\ndef solve():\n    return {input.task_spec!r}\n"
+          return Output(candidate=code)
 
     # 循环体步骤 3：校验候选代码
-    # - pass 分支声明 output: []，保持原有状态直接退出
+    # - passed 分支声明 output: []，保持原有状态直接退出
     # - retry 分支声明 output: [last_error]，更新错误反馈供下一轮读取
     verify_candidate:
       input: [candidate, attempts]
       output:
         last_error: { type: string }
       branches:
-        pass:
+        passed:
           description: "校验通过，结束循环"
           output: []
         retry:
           description: "校验未通过，携带 last_error 回边重试"
           output: [last_error]
-      run: "检验 variables.candidate；通过则选择 pass，否则将错误原因写入 output.last_error 并选择 retry。"
+      run:
+        executor: builtin
+        content: |
+          if "def solve" in input.candidate and input.attempts >= 1:
+              return Branch.passed()
+          return Branch.retry(last_error="Missing entrypoint solve()")
 
   # 4. 控制流连边：包含回边与退环出口
   edges:
@@ -294,7 +311,7 @@ graph:
     # 成环回边：将更新后的 last_error 带回 increment_attempts 进入下一轮
     - verify_candidate.retry -> increment_attempts
     # 退环出口：candidate 与 attempts 均已定值，正常结束工作流
-    - verify_candidate.pass -> end
+    - verify_candidate.passed -> end
 ```
 
 > 包含最大重试次数早退分支及队列回退链的生产级模板，可参阅 Cookbook：

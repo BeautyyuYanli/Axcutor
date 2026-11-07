@@ -146,7 +146,10 @@ nodes:
           input: [draft]
           output:
             draft: { type: string }
-          run: "润色已有的 variables.draft 并写回 output.draft。"
+          run:
+            executor: builtin
+            content: |
+              return Output(draft=input.draft.strip())
       edges:
         - start -> polish
         - polish -> end
@@ -167,7 +170,10 @@ nodes:
           input: [raw_data, report]
           output:
             report: { type: string }
-          run: "基于 variables.raw_data 补充 variables.report，写入 output.report。"
+          run:
+            executor: builtin
+            content: |
+              return Output(report=f"{input.report}\n{input.raw_data}")
       edges:
         - start -> append_detail
         - append_detail -> end
@@ -194,7 +200,10 @@ nodes:
     input: [order_total]
     output:
       discount_amount: { type: number }  # 在 .true 路径上通过业务节点计算 discount_amount
-    run: "计算 VIP 折扣写入 output.discount_amount。"
+    run:
+      executor: builtin
+      content: |
+        return Output(discount_amount=round(input.order_total * 0.1, 2))
 
   # 在 .false 路径上使用 builtin:assign 零开销将 discount_amount 定值为常量 0.0
   assign_zero_discount:
@@ -210,7 +219,10 @@ nodes:
     input: [order_total, discount_amount]
     output:
       final_pay: { type: number }
-    run: "计算 variables.order_total - variables.discount_amount 写入 output.final_pay。"
+    run:
+      executor: builtin
+      content: |
+        return Output(final_pay=input.order_total - input.discount_amount)
 
 edges:
   - start -> route_tier
@@ -255,7 +267,10 @@ graph:
       input: [raw_query]
       output:
         query_result: { type: string }
-      run: "查询 variables.raw_query 的缓存结果，写入 output.query_result。"
+      run:
+        executor: builtin
+        content: |
+          return Output(query_result=f"[CACHED] {input.raw_query}")
 
     # 分支 B（.false）：通过内联子图执行多步检索，同样为汇合变量 query_result 赋值
     # 子图仅捕获 raw_query，未捕获主图的 trace_tag
@@ -274,13 +289,19 @@ graph:
             input: [raw_query, trace_tag]
             output:
               expanded_query: { type: string }
-            run: "结合标记 variables.trace_tag 改写检索词 variables.raw_query，写入 output.expanded_query。"
+            run:
+              executor: builtin
+              content: |
+                return Output(expanded_query=f"[{input.trace_tag}] {input.raw_query}")
 
           execute_search:
             input: [expanded_query]
             output:
               query_result: { type: string }
-            run: "执行检索 variables.expanded_query，将结果写入 output.query_result。"
+            run:
+              executor: builtin
+              content: |
+                return Output(query_result=f"Search results for {input.expanded_query}")
         edges:
           - start -> rewrite_query
           - rewrite_query -> execute_search
@@ -291,7 +312,10 @@ graph:
       input: [query_result, trace_tag]
       output:
         final_response: { type: string }
-      run: "附加主图标记 variables.trace_tag 格式化结果 variables.query_result，写入 output.final_response。"
+      run:
+        executor: builtin
+        content: |
+          return Output(final_response=f"[{input.trace_tag}] {input.query_result}")
 
   # 3. 控制流边：两条分支均产出 query_result 后汇合至 format_output
   edges:

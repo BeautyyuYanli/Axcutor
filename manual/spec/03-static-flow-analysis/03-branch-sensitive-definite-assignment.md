@@ -37,9 +37,9 @@
    | 节点 $N$ 类型与配置 | 分支 $b$ | $KillVars(N, b)$ | $OutVars(N, b)$ |
    | :--- | :--- | :--- | :--- |
    | 未声明 `default` 的 `builtin:unwrap`、`builtin:map_get`、`builtin:array_get`（输出绑定为 $v_{\text{out}}$），或未声明 `default` 的 `builtin:math`（`op` $\in \{\texttt{"div"}, \texttt{"mod"}\}$，输出绑定为 $v_{\text{res}}$，下同记作 $v_{\text{out}}$） | `none` | $\{v_{\text{out}}\}$ | $\emptyset$ |
-   | 上述节点 | `some` / `ok` | $\emptyset$ | $\{v_{\text{out}}\}$ |
+   | 上述节点 | `some` | $\emptyset$ | $\{v_{\text{out}}\}$ |
    | `builtin:array_shift`（元素输出绑定为 $v_{\text{item}}$，余下数组输出绑定为 $v_{\text{rest}}$） | `empty` | $\{v_{\text{item}}\}$ | $\emptyset$ |
-   | `builtin:array_shift` | `item` | $\emptyset$ | $\{v_{\text{item}}, v_{\text{rest}}\} \cap \text{dom}(N.\text{output})$ |
+   | `builtin:array_shift` | `some` | $\emptyset$ | $\{v_{\text{item}}, v_{\text{rest}}\}$ |
    | 其余所有分支节点（含自定义 `ActionNode`、`InlineGraphNode`、`CallNode` 及其他内置算子） | 任意业务分支 $b$ | $\emptyset$ | 分支 $b$ 契约声明在 $N$ 上的绑定目标变量集合 |
 
    *(注：在静态分析中引入 $KillVars(N, b)$ 旨在防止 $v_{\text{out}} \in \text{HostIn}(G)$ 或前序节点的旧定值在 `.none` / `.empty` 分支上向下游泄露，同时允许同一张图中多个独立的 `unwrap`、`map_get`、`array_get`、`math` 或 `array_shift` 节点合法复用同名输出变量。有关运行期进入对应分支时同步将当前栈帧绑定置为 `Unbound` 的状态转移语义，详见 [`05-builtin-operational-semantics.md`](../04-runtime-execution-model/05-builtin-operational-semantics.md)。)*
