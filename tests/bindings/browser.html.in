@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Axcutor browser WASM verification</title>
+<pre id="result">RUNNING</pre>
+<script type="module">
+import {initSync} from 'AXCUTOR_GLUE_URL';
+import * as api from 'AXCUTOR_GLUE_URL';
+const result = document.querySelector('#result');
+try {
+  const decode = text => Uint8Array.from(atob(text), char => char.charCodeAt(0));
+  initSync({module: decode('AXCUTOR_WASM_BASE64')});
+  const oracle = JSON.parse(new TextDecoder().decode(decode('AXCUTOR_ORACLE_BASE64')));
+  const expectHostError = callback => {
+    let threw = false;
+    try { callback(); } catch (error) { threw = error instanceof Error && !(error instanceof WebAssembly.RuntimeError); }
+    if (!threw) throw new Error('host error did not throw');
+  };
+  let queries = 0;
+  let invalidQueries = 0;
+  for (const [index, entry] of oracle.entries()) {
+    if (api.compile_workflow(entry.request_json) !== entry.result_json) throw new Error(`compile case ${index}`);
+    for (const query of entry.queries) {
+      if (api.get_available_vars_at_node(query.analysis_json, query.node_id, query.expected_json) !== query.vars_json) throw new Error(`completion case ${index}`);
+      if (api.derive_node_ports(query.analysis_json, query.node_id) !== query.ports_json) throw new Error(`port case ${index}`);
+      queries++;
+    }
+    for (const query of entry.invalid_queries) {
+      expectHostError(() => api.get_available_vars_at_node(query.analysis_json, query.node_id, query.expected_json));
+      if (query.check_ports) expectHostError(() => api.derive_node_ports(query.analysis_json, query.node_id));
+      invalidQueries++;
+    }
+  }
+  const shallow = oracle[0].queries[0].analysis_json;
+  const deepType = '{"type":"array","items":'.repeat(2048) + '{"type":"integer"}' + '}'.repeat(2048);
+  const deepAnalysis = shallow.slice(0, -1) + ',"extra":' + '['.repeat(2048) + '0' + ']'.repeat(2048) + '}';
+  for (const callback of [
+    () => api.compile_workflow('{}'),
+    () => api.compile_workflow('not JSON'),
+    () => api.get_available_vars_at_node('{}', 'n'),
+    () => api.derive_node_ports('not JSON', 'n'),
+    () => api.get_available_vars_at_node(shallow, 'n', deepType),
+    () => api.get_available_vars_at_node(deepAnalysis, 'n'),
+    () => api.derive_node_ports(deepAnalysis, 'n'),
+  ]) {
+    expectHostError(callback);
+  }
+  result.textContent = `PASS: Browser WebAssembly: ${oracle.length} compile cases, ${queries} canvas queries, ${invalidQueries} rejected query groups`;
+} catch (error) {
+  result.textContent = `FAIL: ${error.stack || error}`;
+}
+</script>

@@ -1,0 +1,86 @@
+[
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input:\n  scalar: {type: number, enum: [123456789012345678901234567890, 1.0]}\noutput: {}\ngraph:\n  variables:\n    huge: {type: integer, default: 123456789012345678901234567890}\n    precise: {type: number, default: 1.0000000000000000000000000001}\n    ordered:\n      type: object\n      additionalProperties: {type: integer}\n      default: {\"10\": 10, \"2\": 2, \"0\": 0, a: 1}\n  nodes:\n    n: {input: [scalar], run: 'read variables.scalar'}\n  edges: ['start -> n', 'n -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"json","text":"{\"input\":{},\"output\":{},\"graph\":{\"variables\":{\"x\":{\"type\":\"integer\",\"default\":1.0}},\"nodes\":{\"n\":{\"run\":\"work\"}},\"edges\":[\"start -> n\",\"n -> end\"]}}"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input:\n  items: {type: array, items: {type: string}}\noutput:\n  results: {type: array, items: {type: string}}\ngraph:\n  nodes:\n    each:\n      for_each: {source: items, item: item, index: idx}\n      output: {results: {type: string}}\n      graph:\n        nodes:\n          one:\n            use: builtin:assign\n            with: {input: {source: item}, output: {value: results}}\n        edges: ['start -> one', 'one -> end']\n  edges: ['start -> each', 'each -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input:\n  user:\n    type: object\n    properties:\n      id: {type: integer}\n      optional: {type: string}\n    required: [id]\noutput: {}\ngraph:\n  nodes:\n    n:\n      input: [user]\n      branches: {ok: done, skip: {description: skip, output: []}}\n      catch: {err: '*'}\n      run: 'read variables.user.id.'\n  edges: ['start -> n', 'n.ok -> end', 'n.skip -> end', 'n.err -> fail']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {}\ninput: {}\noutput: {}\nrun: work\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {}\noutput: {x: {type: integer}}\ngraph:\n  nodes:\n    call:\n      use: workflow:main\n      with: {output: {x: x}}\n  edges: ['start -> call', 'call -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {}\noutput: {}\ngraph:\n  nodes:\n    bad: {run: '', extra: 1}\n    good:\n      graph:\n        nodes:\n          inner: {input: [missing], run: work}\n        edges: ['start -> inner', 'inner -> end']\n  edges: ['start -> good', 'good -> end', 'start -> bad -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {}\noutput: {}\ngraph:\n  nodes:\n    a: {run: work, output: {x: {type: integer}}}\n    b: {input: [x], run: 'read variables.x'}\n  edges: ['start -> [a, b] -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {maybe: {type: [integer, 'null']}}\noutput: {}\ngraph:\n  variables:\n    x: {type: integer, default: 1}\n  nodes:\n    un:\n      use: builtin:unwrap\n      with: {input: {source: maybe}, output: {value: x}}\n    read: {input: [x], run: 'read variables.x'}\n  edges: ['start -> un', 'un.some -> end', 'un.none -> read', 'read -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {flag: {type: boolean}}\noutput: {}\ngraph:\n  variables: {x: {type: integer, default: 0}}\n  nodes:\n    test: {input: [flag, x], branches: {again: continue, done: stop}, run: work}\n    update:\n      use: builtin:math\n      with: {input: {op: {value: add}, left: x, right: 1}, output: {result: x}}\n  edges: ['start -> test', 'test.again -> update', 'update -> test', 'test.done -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {flag: {type: boolean}}\noutput: {}\ngraph:\n  nodes:\n    invert:\n      use: builtin:logic\n      with: {input: {op: {value: not}, source: flag}}\n  edges: ['start -> invert', 'invert.true -> end', 'invert.false -> fail']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {array: {type: array, items: {type: string}}}\noutput: {}\ngraph:\n  variables:\n    item: {type: string}\n    rest: {type: array, items: {type: string}}\n  nodes:\n    shift:\n      use: builtin:array_shift\n      with: {input: {source: array}, output: {item: item, rest: rest}}\n  edges: ['start -> shift', 'shift.some -> end', 'shift.empty -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"json","text":"{\"input\":{},\"output\":{},\"graph\":{\"variables\":{\"huge\":{\"type\":\"integer\",\"default\":1234567890123456789012345678901234567890},\"precise\":{\"type\":\"number\",\"default\":1.000000000000000000000000001},\"exponent\":{\"type\":\"number\",\"default\":1e10000},\"ordered\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"},\"default\":{\"10\":\"ten\",\"2\":\"two\",\"0\":\"zero\",\"$serde_json::private::Number\":\"ordinary\"}}},\"nodes\":{\"n\":{\"run\":\"work \\ud83d\\ude00\"}},\"edges\":[\"start -> n\",\"n -> end\"]}}"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"json","text":"{\"input\":{},\"output\":{},\"run\":\"work \\ud83d\"}"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"json","text":"{\"input\":{},\"output\":{},\"run\":\"work\",\"\\u0072un\":\"duplicate\"}"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: !!map {}\noutput: {}\ngraph:\n  variables:\n    text: {type: string, default: !!str 01}\n    integer: {type: integer, default: !!int '001'}\n    float: {type: number, default: !!float 1}\n    bool: {type: boolean, default: !!bool 'TRUE'}\n    nil: {type: [string, 'null'], default: !!null null}\n    array: {type: array, items: {type: string}, default: !!seq [a]}\n    map: {type: object, additionalProperties: {type: integer}, default: !!map {x: 1}}\n  nodes: {n: {run: !!str work}}\n  edges: !!seq ['start -> n', 'n -> end']\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"yaml","text":"input: {}\noutput: {}\nrun: !!bool yes\n"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"json","text":"{\"input\":{},\"output\":{},\"run\":\"work\",\"timeout_ms\":123456789012345678901234567890,\"retry\":{\"max_attempts\":123456789012345678901234567890,\"backoff_ms\":-0}}"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"json","text":"{\"input\":{},\"output\":{},\"run\":\"work\",\"retry\":{\"max_attempts\":2,\"backoff_ms\":-0.0}}"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"json","text":"{\"input\":{},\"output\":{},\"run\":\"work\",\"timeout_ms\":-0}"}}
+  },
+  {
+    "entry": "main",
+    "sources": {"main": {"format":"json","text":"{\"input\":{},\"output\":{},\"run\":\"work\",\"retry\":{\"max_attempts\":2,\"backoff_ms\":-123456789012345678901234567890}}"}}
+  }
+]

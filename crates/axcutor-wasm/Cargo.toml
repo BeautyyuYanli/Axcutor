@@ -1,0 +1,13 @@
+[package]
+name = "axcutor-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+axcutor-core.workspace = true
+wasm-bindgen.workspace = true
