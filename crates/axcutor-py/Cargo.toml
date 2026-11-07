@@ -1,0 +1,17 @@
+[package]
+name = "axcutor-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "axcutor_core"
+crate-type = ["cdylib"]
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+axcutor-compiler-core = { package = "axcutor-core", path = "../axcutor-core" }
+pyo3.workspace = true

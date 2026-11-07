@@ -1,0 +1,54 @@
+name: Compiler
+
+on:
+  push:
+    paths: ['Cargo.toml', 'Cargo.lock', 'crates/**', 'tests/bindings/**', 'manual/spec/**', 'manual/docs/**', '.github/workflows/compiler.yml']
+  pull_request:
+    paths: ['Cargo.toml', 'Cargo.lock', 'crates/**', 'tests/bindings/**', 'manual/spec/**', 'manual/docs/**', '.github/workflows/compiler.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  minimum-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install 1.85.0 --profile minimal
+      - run: cargo +1.85.0 test --workspace --locked
+
+  compiler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install Rust tools
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
+          rustup default stable
+      - name: Format, lint and native tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+          cargo build --workspace --release --locked
+      - name: Generate native binding oracle
+        run: cargo run --quiet --locked -p axcutor-core --example binding_oracle -- tests/bindings/cases.json target/bindings-oracle.json
+      - name: Build and invoke Python extension
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install 'maturin>=1.9,<2'
+          .venv/bin/maturin build --locked --release --manifest-path crates/axcutor-py/Cargo.toml --interpreter .venv/bin/python --out target/wheels
+          .venv/bin/python -m pip install --force-reinstall target/wheels/*.whl
+          .venv/bin/python tests/bindings/python_smoke.py target/bindings-oracle.json
+      - name: Build and execute WebAssembly
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.129 --locked
+          cargo build --locked --release -p axcutor-wasm --target wasm32-unknown-unknown
+          wasm-bindgen --target nodejs --out-dir target/wasm-node target/wasm32-unknown-unknown/release/axcutor_wasm.wasm
+          wasm-bindgen --target web --out-dir target/wasm-web target/wasm32-unknown-unknown/release/axcutor_wasm.wasm
+          node tests/bindings/wasm_smoke.cjs target/wasm-node/axcutor_wasm.js target/bindings-oracle.json
+          python3 tests/bindings/browser_smoke.py
