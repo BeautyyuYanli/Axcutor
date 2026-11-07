@@ -6,13 +6,13 @@
 
 ## 一、 参数与分支契约
 
-| 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
+| 方向 | 参数名 | 必填条件 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `op` | **必填** | 字符串常量字面量 `{ value: "<op>" }`，取值属于 `{"and", "or", "not"}`。 |
-| **`with.input`** | `left` | 当 `op` 为 `"and"` / `"or"` 时**必填** | 绑定已定值的非空 `type: boolean` 变量、结构体静态字段路径或布尔常量字面量（当 `op` 为 `"not"` 时**禁止声明**）。 |
-| **`with.input`** | `right` | 当 `op` 为 `"and"` / `"or"` 时**必填** | 绑定已定值的非空 `type: boolean` 变量、结构体静态字段路径或布尔常量字面量（当 `op` 为 `"not"` 时**禁止声明**）。 |
-| **`with.input`** | `source` | 当 `op` 为 `"not"` 时**必填** | 绑定已定值的非空 `type: boolean` 变量、结构体静态字段路径或布尔常量字面量（当 `op` 为 `"and"` / `"or"` 时**禁止声明**）。 |
-| **`with.output`** | `result` | 可选 | 若声明，写入当前图符号表中已声明的目标顶层变量 $v_{\text{res}}$，要求满足 $\{ \texttt{type}: \texttt{boolean} \} <: \Sigma(v_{\text{res}})$。 |
+| **`with.input`** | `op` | **必填** | 字符串常量字面量 `{ value: "<op>" }`，可选值：`"and"`、`"or"`、`"not"`。 |
+| **`with.input`** | `left` | `op` 为 `"and"` / `"or"` 时**必填**<br>（`op` 为 `"not"` 时**禁止声明**） | 已定值的非空 `boolean` 变量、结构体静态字段路径或布尔常量字面量 `{ value: true \| false }`。 |
+| **`with.input`** | `right` | `op` 为 `"and"` / `"or"` 时**必填**<br>（`op` 为 `"not"` 时**禁止声明**） | 已定值的非空 `boolean` 变量、结构体静态字段路径或布尔常量字面量 `{ value: true \| false }`。 |
+| **`with.input`** | `source` | `op` 为 `"not"` 时**必填**<br>（`op` 为 `"and"` / `"or"` 时**禁止声明**） | 已定值的非空 `boolean` 变量、结构体静态字段路径或布尔常量字面量 `{ value: true \| false }`。 |
+| **`with.output`** | `result` | 可选 | 若声明，将运算结果写入当前图中已声明的 `boolean`（或 `[boolean, "null"]`）顶层变量。 |
 
 ### 控制流分支与输出行为
 

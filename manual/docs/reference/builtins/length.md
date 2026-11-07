@@ -8,8 +8,8 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `source` | **必填** | 绑定已定值的非空 `Array<T>`（`type: array`）、非空 `OrderedMap<string, V>`（`type: object` + `additionalProperties`）或非空 `type: string`（支持顶层变量、结构体静态字段路径或常量字面量；禁止传入可空类型、固定属性结构体 `TypedDict`、`integer`、`number` 或 `boolean`）。 |
-| **`with.output`** | `result` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{res}}$，要求满足 $\{ \texttt{type}: \texttt{integer} \} <: \Sigma(v_{\text{res}})$。 |
+| **`with.input`** | `source` | **必填** | 绑定已定值的非空列表 `Array<T>`（`type: array`）、非空有序映射 `OrderedMap<string, V>`（`type: object` 且配置 `additionalProperties`）或非空字符串 `string`。支持传入顶层变量、结构体静态字段路径或常量字面量；禁止传入可空类型、固定属性结构体 `TypedDict`、`integer`、`number` 或 `boolean`。 |
+| **`with.output`** | `result` | **必填** | 写入已在当前图中声明为 `integer`（或兼容的 `number` / 可空数值类型）的目标顶层变量。 |
 
 ### 控制流与运行期求值行为
 

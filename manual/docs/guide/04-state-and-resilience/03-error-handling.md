@@ -1,6 +1,6 @@
 # 03. 错误处理：异常捕获（`catch`）与主动回滚（`fail`）
 
-Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通过 **`catch`** 将未被 `retry` 消化的运行时异常物化为图内控制分支，子图可通过 **`-> fail`** 主动中止当前图栈帧并回滚未提交的状态修改。
+Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通过 **`catch`** 将未被 `retry` 消化的运行时异常物化为图内控制分支，子图可通过 **`-> fail`** 主动中止当前图栈帧并回滚未提交的图变量状态。
 
 ---
 
@@ -13,7 +13,7 @@ Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通
 | **`execution`** | 1. `run` 节点的业务执行器返回执行错误（如函数抛出异常、RPC/API 调用失败、脚本非零退出）；<br>2. 内联 `graph` 或 `use` 子工作流内部走向了 `-> fail` 异常终点。 |
 | **`timeout`** | 节点单次尝试耗时超过其配置的 `timeout_ms`。 |
 | **`contract`** | 节点执行器返回的数据结构未通过 `output` 的 `TypeSpec` 校验，或返回了未声明的分支名。 |
-| **`max_steps`** | 内联 `graph` 或 `use` 子工作流的累计调度步数超过其 `graph.max_steps` 上限（注：原子 `run` 节点与顶层 `RootRunNode` 不存在图步数计数器，禁止在其 `retry.on` 或 `catch` 显式列表中声明 `max_steps`）。 |
+| **`max_steps`** | 内联 `graph` 或 `use` 子工作流的累计调度步数超过其 `graph.max_steps` 上限（注：原子 `run` 节点与顶层 `run` 工作流不存在图步数计数器，禁止在其 `retry.on` 或 `catch` 显式列表中声明 `max_steps`）。 |
 
 ---
 
@@ -57,10 +57,10 @@ nodes:
 
 ### 2. `catch` 分支的零脏写回滚与补偿定值
 
-当节点进入 `catch.<branch>` 分支时，运行时保证以下两项数据流语义：
+当节点进入 `catch.<branch>` 分支时，运行时保证以下数据流与状态边界语义：
 
-1. **零脏写回滚**：该节点（或子图）在失败尝试期间产生的一切半成品修改全部丢弃，不会写回外层图的 `variables`。
-2. **输出集等价于 `output: []`**：进入 `catch` 分支时，该节点声明的 `output` 变量均未定值。若下游汇合节点需要读取该变量（如 `record`），必须在 `catch` 分支路径上串联一个补偿节点为 `record` 赋兜底值后再汇合：
+1. **零脏写回滚与外部副作用补偿**：运行时自动丢弃当前节点或子图栈帧中未提交的图变量状态（`variables`），确保半成品数据不会写回外层图。注意自动回滚仅作用于内存中的 `variables`；若前序步骤已对外部系统产生了 I/O 副作用（如预扣外部库存），则应通过 `catch` 分支路由至业务补偿节点完成外部状态冲正。
+2. **输出集等价于 `output: []`**：进入 `catch` 分支时，该节点声明的 `output` 变量均未定值。若下游汇合节点需要读取该变量（如 `record`），必须在 `catch` 分支路径上串联补偿节点为其赋兜底值后再汇合：
 
 ```yaml
 nodes:
@@ -100,7 +100,7 @@ edges:
 
 在 `graph.edges` 中，除正常提交出口 `-> end` 外，可将任意节点或分支连向异常回滚终点 **`-> fail`**：
 
-* **原子丢弃当前图未提交状态**：控制流到达 `-> fail` 时，立即中止当前图栈帧，丢弃当前图内所有节点对 `variables` 的修改（不会向父图提交任何 `output`）。
+* **回滚当前栈帧未提交的图变量状态**：控制流到达 `-> fail` 时，立即中止当前图栈帧并丢弃其中所有未提交的 `variables` 修改（不会向父图提交任何 `output`）。对于前序节点已产生的外部系统 I/O 副作用，需由父节点通过 `catch` 分支路由至业务补偿节点（如下节示例中的冲正通知节点）执行外部状态冲正。
 * **免除 `output` 定值要求**：通往 `-> fail` 的路径无需为当前图的 `output` 变量赋值。
 * **向父节点抛出 `execution` 异常**：若当前图为内联 `graph` 或 `use` 子工作流，向父调用节点抛出 `execution` 异常（可被父节点的 `catch` 捕获）；若当前图为顶层根图，则直接以失败状态终止整个工作流。
 
@@ -108,7 +108,7 @@ edges:
 edges:
   - start -> debit_account
   - debit_account -> verify_compliance
-  # 当合规校验不通过时，主动 -> fail：丢弃前序 debit_account 在子图内的状态产出，并向父图抛出 execution 异常
+  # 当合规校验不通过时，主动 -> fail：丢弃前序 debit_account 在子图栈帧中未提交的 variables 修改，并向父图抛出 execution 异常
   - verify_compliance.invalid -> fail
   - verify_compliance.valid -> commit_ledger
   - commit_ledger -> end
@@ -116,9 +116,9 @@ edges:
 
 ---
 
-## 四、 完整示例：多步子图原子回滚（`-> fail`）与外层异常捕获（`catch`）
+## 四、 完整示例：多步子图回滚（`-> fail`）与外层补偿（`catch`）
 
-以下完整工作流使用内联 `graph` 封装多步订单结算事务：若子图内部库存锁定或风控校验失败，通过 `-> fail` 回滚子图栈帧；外层主图通过 `catch` 捕获该异常并转入取消通知分支：
+以下工作流使用内联 `graph` 封装多步订单结算：若子图内部库存预扣或金额审核失败，通过 `-> fail` 自动回滚子图栈帧中未提交的 `variables`；外层主图通过 `catch` 捕获异常后路由至补偿节点 `notify_transaction_cancelled`，冲正外部预占资源并发送取消通知：
 
 ```yaml
 # 1. 根节点输入与输出契约
@@ -140,7 +140,7 @@ branches:
 
 graph:
   nodes:
-    # 阶段 1：使用内联 graph 构成原子结算边界，挂载 catch 拦截任何执行失败或主动 -> fail
+    # 阶段 1：使用内联 graph 封装多步结算，挂载 catch 拦截执行失败或子图主动 -> fail
     settlement_transaction:
       input: [order_id, amount]
       output:
@@ -149,7 +149,7 @@ graph:
         tx_aborted: [execution, timeout]
       graph:
         nodes:
-          # 事务步骤 1.1：预扣库存，产出子图内部凭证 reservation_id
+          # 步骤 1.1：预扣外部库存，产出子图内部凭证 reservation_id
           reserve_inventory:
             timeout_ms: 3000
             retry:
@@ -160,22 +160,22 @@ graph:
               reservation_id: { type: string }
             run: "为订单 variables.order_id 预扣库存，写入 output.reservation_id。"
 
-          # 事务步骤 1.2：校验结算金额合规性
+          # 步骤 1.2：校验结算金额合规性
           audit_payment_limit:
             input: [order_id, amount, reservation_id]
             branches:
               pass: "金额合规，允许扣款"
-              reject: "金额超限，触发事务回滚"
+              reject: "金额超限，触发子图回滚"
             run: "审核订单 variables.order_id 的金额 variables.amount；合规选 pass，超限选 reject。"
 
-          # 事务步骤 1.3：仅在 pass 分支下执行最终扣款并生成 settlement_receipt
+          # 步骤 1.3：仅在 pass 分支下执行最终扣款并生成 settlement_receipt
           charge_and_issue_receipt:
             input: [order_id, amount, reservation_id]
             output:
               settlement_receipt: { type: string }
             run: "基于预扣单 variables.reservation_id 扣款 variables.amount，生成凭证写入 output.settlement_receipt。"
 
-        # 子图内部控制流：reject 分支直接走向 fail，丢弃子图状态并向父节点抛出 execution 异常
+        # 子图内部控制流：reject 分支走向 fail，回滚子图未提交的 variables 并向父节点抛出 execution 异常
         edges:
           - start -> reserve_inventory
           - reserve_inventory -> audit_payment_limit
@@ -183,7 +183,7 @@ graph:
           - audit_payment_limit.pass -> charge_and_issue_receipt
           - charge_and_issue_receipt -> end
 
-    # 阶段 2（异常恢复节点）：当 settlement_transaction 进入 .tx_aborted 分支时执行补偿通知
+    # 阶段 2（业务补偿节点）：当 settlement_transaction 进入 .tx_aborted 分支时冲正外部预占资源并通知
     notify_transaction_cancelled:
       input: [order_id]
       output:

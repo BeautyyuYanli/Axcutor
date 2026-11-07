@@ -1,26 +1,34 @@
 # Axcutor 文档中心（Manual）
 
-Axcutor 是一套基于**单令牌结构化并发控制流图（Structured CFG）**与**闭合静态强类型系统（JSON Schema 子集 `TypeSpec`）**的工作流编排语言与运行时引擎。
+Axcutor 是面向复杂业务编排的工作流语言与运行时引擎。它采用单令牌结构化并发控制流图（Structured CFG）描述执行拓扑，并通过闭合静态强类型系统（JSON Schema 子集 `TypeSpec`）约束全链路的数据契约。
 
-在 Axcutor 中，每个工作流文件本身即为一个对外暴露明确函数签名（$\text{Input} \to (\text{Branch}, \text{Output})$）的节点。图内的 `run` 节点代表任意满足该签名约束的业务代码（包括本地/远程函数、Python/JS 脚本沙箱、微服务 HTTP/RPC 接口、数据库事务或结构化模型调用），而类型安全、栈帧作用域隔离、并发无竞争同步与异常回滚均由编译器与运行时统一保障。
+在 Axcutor 中，每个工作流文件本身都是一个具备明确函数签名的节点，其输入、控制分支与输出遵循统一的映射关系：$\text{Input} \to (\text{Branch}, \text{Output})$。图内的 `run` 节点可承载任意满足该签名约束的业务实现，涵盖本地或远程函数、脚本沙箱、HTTP/RPC 微服务接口、数据库事务以及结构化模型调用。类型检查、栈帧作用域隔离、并发无锁同步与异常原子回滚均由编译器和运行时统一保障。
 
 ---
 
-## 文档模块划分
+## 核心设计原则
 
-全站文档按受众与工程职责划分为以下模块（可通过顶部导航栏与左侧目录切换）：
+### 1. 统一节点模型
 
-| 模块 | 目标受众 | 核心内容与职责边界 |
-| :--- | :--- | :--- |
-| **[渐进式教程（Guide）](/docs/guide/)** | 工作流编写者、业务开发者 | 按概念递进顺序讲解节点模型、`use` 调用、内联 `graph`、条件分支、成环回边、`for_each`、Fork-Join 并发组、栈帧作用域、执行护栏与 `catch`/`fail` 异常处理。 |
-| **[实战组合配方（Cookbook）](/docs/cookbook/)** | 工作流编写者、架构师 | 针对典型业务场景（动态收敛闭环、候选短路回退链、有状态折叠、并发分流与展平、嵌套并发循环、多步原子事务、批处理死信隔离），提供多原语正交组合的端到端模板。 |
-| **[用户速查字典（Reference）](/docs/reference/)** | 日常开发与自动化 Agent | 提供各层级 YAML 字段表、6 种控制边语法表、`TypeSpec` 类型构造模板以及 16 个零开销运行时内建算子（`builtin:*`）的参数字典。 |
-| **[形式化规范（Spec）](/spec/)** | 编译器、运行时与执行器实现者 | 定义文法与 AST 构造、单遍显式符号表构建与模块化类型检查、CFG 拓扑与全路径必达定值分析、栈帧内存与并发调度状态机，以及 `run` 执行器标准 ABI 契约。 |
-| **[早期原型归档（Prototype）](/prototype/)** | 语言设计研究者 | 归档早期探索阶段的原始设计文稿，仅供演进脉络参考。 |
+工作流文件、外部调用节点（`use`）、内联子图（`graph`）、集合迭代（`for_each`）与业务动作节点（`run`）共享同一节点抽象。无论内部是单步外部调用还是嵌套循环的子图，所有节点对外均暴露相同的 $\text{Input} \to (\text{Branch}, \text{Output})$ 契约，支持任意层级的正交组合与模块化复用。
+
+### 2. 闭合静态强类型与全路径必达定值
+
+所有输入、输出与图内局部变量均通过闭合的 `TypeSpec`（默认遵循 `additionalProperties: false` 语义）显式声明或推导。编译器在执行前静态完成符号表构建、跨节点类型兼容性检查与全路径必达定值分析（Definite Assignment Analysis），确保任何变量与输出字段在被读取或返回前，在所有可达控制流路径上均已完成定值，从编译期消除未初始化读取与隐式字段泄漏。
+
+### 3. 结构化并发与无锁确定性
+
+常规控制流采用单执行令牌（Single Token）沿有向边推进；并发执行严格限定在结构化的 Fork-Join 并发组与 `for_each` 并行迭代内。编译器静态校验并发分支的写入目标互不相交，或仅通过带确定性槽位（Slot）的 `append` 汇聚，无需用户手动加锁即可在运行时实现无数据竞争（Data-Race-Free）的确定性并发。
+
+### 4. 栈帧级异常捕获与原子回滚
+
+每次调用子工作流、进入内联子图或执行单次循环迭代，运行时都会开辟独立的栈帧（Stack Frame）与局部状态空间。当节点触发异常或显式执行 `fail` 时，若当前层级未声明匹配的 `catch` 策略，运行时将自动丢弃该栈帧内的全部中间修改，并向父栈帧冒泡异常，从而保证跨层级调用的原子回滚与故障隔离。
 
 ---
 
 ## 最小工作流结构预览
+
+以下示例展示了一个完整工作流文件的核心构成：顶层输入输出契约、图内局部变量声明、节点定义以及控制流边。
 
 ```yaml
 # 1. 顶层函数契约：输入与输出均采用闭合 JSON Schema 子集（TypeSpec）
@@ -31,12 +39,12 @@ output:
 
 # 2. 控制流图容器：由局部变量声明（variables）、节点定义（nodes）与控制边（edges）构成
 graph:
-  # 显式声明仅由外部调用节点写入的图内局部中间变量类型
+  # 显式声明仅由外部调用节点写入的图内局部变量类型
   variables:
     amount: { type: number }
 
   nodes:
-    # 调用外部独立工作流（Function Frame）
+    # 调用外部独立工作流（创建独立函数栈帧）
     verify_order:
       use: workflow:billing/verify_order
       with:
@@ -45,12 +53,12 @@ graph:
         output:
           verified_amount: amount
 
-    # 执行受签名约束的业务动作（Action Node）
+    # 执行受签名约束的业务动作节点
     issue_receipt:
       input: [order_id, amount]
       output:
         receipt_id: { type: string }
-      run: "为订单 variables.order_id（金额 variables.amount）签发收据，写入 output.receipt_id。"
+      run: "为订单 variables.order_id（金额 variables.amount）签发收据，并将收据编号写入 output.receipt_id。"
 
   edges:
     - start -> verify_order

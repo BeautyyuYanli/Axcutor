@@ -30,7 +30,9 @@
      $$W_i \neq \text{NodeOf}(\text{src}) \;\land\; W_i \neq \text{join\_target}$$
      *(例如禁止书写 `w1 -> [w1, w2] -> next_node` 或 `prev_node -> [w1, w2] -> w1`。)*
    * **跨边完全独占**：在当前图其余所有边 $e' \in G.\text{edges} \setminus \{e\}$ 中，$W_i$ 禁止作为 `SourceEndpoint`、`TargetEndpoint`、`JoinTarget` 或再次出现在其他 `ConcurrentGroup` 中。
-2. **单出口无分支限制**：若 $W_i$ 未挂载 `for_each`，则 $W_i$ **禁止对外暴露任何正常 `branches` 或 `catch`**（包括禁止直接使用带分支的 `builtin:switch`、未声明 `with.output` 的 `builtin:compare` / `builtin:logic`、未传 `default` 的 `builtin:unwrap`、未传 `default` 的 `builtin:map_get`、未传 `default` 的 `builtin:array_get`、未传 `default` 的 `builtin:math`（`div` / `mod`）及 `builtin:array_shift`）。
+2. **单出口无分支限制**：若 $W_i$ 未挂载 `for_each`，则 $W_i$ 的静态正常分支集合与异常分支集合必须均为空：
+   $$\text{Branches}(W_i) = \emptyset \;\land\; \text{CatchBranches}(W_i) = \emptyset$$
+   即 $W_i$ **禁止对外暴露任何正常 `branches` 或 `catch`**（例如禁止直接放置 `builtin:switch`、分支模式的 `builtin:compare` / `builtin:logic` 或未配置 `default` 兜底值而暴露异常分支的内建算子）。
 
 ---
 
@@ -41,9 +43,10 @@
    * 若当前图宿主声明了非空 `branches`，图内禁止出现无后缀的 `end`，所有正常终态边必须指向合法的 `end.<branch>`（其中 `<branch>` $\in \text{dom}(\text{host.branches})$）。
 2. **前向可达性（No Dead Code）**：
    * 图内每一个节点 $N \in \text{dom}(G.\text{nodes})$ 必须存在至少一条从 `start` 出发的有向路径到达 $N$。
-3. **后向正常出口可达性（No Inescapable Cycles / Must Have Normal Exit）**：
-   * 整张图必须至少存在一条从 `start` 到达 `end`（或某个 `end.<branch>`）的路径（不允许全图仅有 `fail` 而无 `end`）。
-   * 图内每一个节点 $N \in \text{dom}(G.\text{nodes})$（包含处于环路中的节点），在图拓扑上必须至少存在一条从 $N$ 出发到达 `end`（或某个 `end.<branch>`）或 `fail` 的有向路径；且对于每个强连通分量（SCC / 环路），必须至少存在一条跳出该环路通向终态的出边。
+3. **后向出口可达性（No Inescapable Cycles / Must Have Normal Exit）**：
+   * **全局正常出口存在性**：整张图必须至少存在一条从 `start` 到达 `end`（或某个 `end.<branch>`）的有向路径（不允许全图仅有 `fail` 而无 `end`）。
+   * **节点终态可达性**：图内每一个节点 $N \in \text{dom}(G.\text{nodes})$ 必须至少存在一条从 $N$ 出发到达终态（`end`、`end.<branch>` 或 `fail`）的有向路径。
+   * **环路可退性（无死循环）**：对于图中的每一个非平凡强连通分量（SCC / 环路），必须至少存在一条跳出该环路并通向终态（`end`、`end.<branch>` 或 `fail`）的退环路径。
 
 ---
 

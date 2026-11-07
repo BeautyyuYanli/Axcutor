@@ -32,7 +32,8 @@ graph: ...
 在节点定义中，`run` 表示执行具体计算或 I/O 的最小原子执行体。
 
 > [!IMPORTANT]
-> **`run` 代表任意满足节点签名约束的业务代码，不局限于提示词或大模型调用。**\n> 任何能够接收节点 `input` 只读参数、并在完成后返回所选 `branch` 及符合 `output` `TypeSpec` 数据的执行单元，均可作为 `run` 的实现载体，包括本地/远程函数、Python/JS 脚本沙箱、微服务 HTTP/RPC 接口、数据库查询、规则引擎或结构化模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
+> **`run` 代表任意满足节点签名约束的业务代码，不局限于提示词或大模型调用。**
+> 任何能够接收节点 `input` 只读参数、并在完成后返回所选 `branch` 及符合 `output` `TypeSpec` 数据的执行单元，均可作为 `run` 的实现载体，包括本地/远程函数、Python/JS 脚本沙箱、微服务 HTTP/RPC 接口、数据库查询、规则引擎或结构化模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
 
 运行时对 `run` 节点执行两项隔离与校验保障：
 
@@ -78,8 +79,8 @@ run: "计算 variables.raw_price * variables.discount_rate 并保留两位小数
 
 当需要编排多个步骤时，在顶层声明 `graph`。`graph` 由三个核心字段构成：
 
-* **`variables`（可选）**：图级共享局部变量声明表（每个条目均为显式 `TypeSpec` 映射，可选配 `default` 初始值）。进入顶层 `graph` 时，顶层 `input` 中的所有参数自动作为已定值变量注入图级上下文；同时可在 `graph.variables` 中声明图内部使用的带初值状态变量（包含 `default` 键）或未初始化的局部变量类型（省略 `default` 键，等价于 `let v: T;`）。
-  * **同帧声明等价与流转子类型兼容**：同一栈帧内对同一变量名的多处显式 `TypeSpec` 声明必须保持双向等价（$T_1 \equiv T_2$）；而在通过 `builtin:assign`、`use` 等向目标变量写入值时，支持单向静态子类型兼容（$T_{\text{actual}} <: T_{\text{expected}}$，如将非空 `T` 赋给可空 `[T, "null"]`、将 `integer` 赋给 `number`，或将带 `enum` 的字符串赋给普通 `string`）。
+* **`variables`（可选）**：图级共享局部变量声明表（每个条目均为显式 `TypeSpec` 映射，可选配 `default` 初始值）。进入顶层 `graph` 时，顶层 `input` 中的所有参数自动作为已定值变量注入图级上下文；同时可在 `graph.variables` 中声明图内部使用的带初值状态变量（包含 `default` 键）或未初始化的局部变量类型（省略 `default` 键，由后续节点写入定值）。
+  * **同名变量类型一致**：同一图内若在多处（如 `graph.variables`、节点 `output` 或顶层 `output`）对同一变量名声明了 `TypeSpec`，各处的类型定义必须完全一致（跨节点与子工作流传递时的子类型兼容规则见后续章节）。
 * **`nodes`（必填）**：定义图内的子节点字典。
 * **`edges`（必填）**：定义控制令牌（Control Token）从起点 `start` 到终点 `end` 的流转路径。
 
@@ -98,20 +99,17 @@ graph:
       default: "v1"
     # 2. 未初始化的局部变量声明（仅声明 TypeSpec，省略 default，由后续节点写入定值）
     normalized_id:
-      type: [string, "null"]
+      type: string
 
   # 必填：声明图内子节点
   nodes:
-    # 子类型兼容：将非空 string 类型的 request_id 直接赋给可空 [string, "null"] 类型的 normalized_id
     normalize_id:
-      use: builtin:assign
-      with:
-        input:
-          source: request_id
-        output:
-          value: normalized_id
+      input: [request_id]
+      output:
+        normalized_id: { type: string }
+      run: "去除 variables.request_id 首尾空白并转为大写，写入 output.normalized_id。"
 
-    step_a:
+    build_result:
       input: [normalized_id, step_tag]
       output:
         result_text: { type: string }
@@ -120,8 +118,8 @@ graph:
   # 必填：声明从 start 到 end 的控制流边
   edges:
     - start -> normalize_id
-    - normalize_id -> step_a
-    - step_a -> end
+    - normalize_id -> build_result
+    - build_result -> end
 ```
 
 ---
@@ -131,30 +129,13 @@ graph:
 由于图级符号表已统一维护所有变量的类型，图内 `run` 节点按以下规则声明读写集：
 
 1. **读取声明（`input: [<var_name>, ...]`）**：仅列出需要从当前图 `variables` 中读取的顶层变量名，无需重复声明 `TypeSpec`。
-2. **结构体字段访问**：若某变量为强类型结构体（`type: object` + `properties`），只需在 `input` 中列出其根变量名（如 `input: [order_info]`），即可在节点内通过点分路径（如 `variables.order_info.subtotal`）读取嵌套字段。
+2. **结构体字段访问**：若某变量为强类型结构体（`type: object` + `properties`），只需在 `input` 中列出其**根变量名**（如 `input: [order_info]`），即可在节点内通过点分路径（如 `variables.order_info.subtotal`）读取嵌套字段。
 3. **写入声明（`output: { <var_name>: <TypeSpec> }`）**：声明节点完成后向当前图 `variables` 新增或更新的变量及其类型。当控制流到达 `end` 时，运行时自动从 `variables` 中提取与顶层 `output` 同名的变量作为整个工作流的返回值。
 
-```yaml
-nodes:
-  # 节点 1：产出强类型结构体变量 order_info 写入当前图 variables
-  parse_order:
-    input: [order_payload]
-    output:
-      order_info:
-        type: object
-        properties:
-          order_id: { type: string }
-          subtotal: { type: number }
-        required: [order_id, subtotal]
-    run: "解析 variables.order_payload，写入 output.order_info。"
-
-  # 节点 2：input 仅列出根变量名 order_info，无需重复声明 TypeSpec
-  calculate_tax:
-    input: [order_info, tax_rate]
-    output:
-      total_amount: { type: number }
-    run: "读取嵌套字段 variables.order_info.subtotal 与 variables.tax_rate 计算含税总额，写入 output.total_amount。"
-```
+| 声明位置 | 语法形式 | 作用与约束 |
+| :--- | :--- | :--- |
+| 节点 `input` | `input: [order_info, tax_rate]` | 按变量名引用图内已有变量（只读快照）；结构体只需声明根变量名即可访问 `variables.order_info.subtotal` |
+| 节点 `output` | `output: { total_amount: { type: number } }` | 声明写回图内 `variables` 的变量名与 `TypeSpec`；若与已有变量同名，类型必须一致 |
 
 ---
 

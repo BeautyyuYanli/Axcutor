@@ -8,8 +8,8 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `source` | **必填** | 绑定已定值的非空二维列表 `{ type: array, items: { type: array, items: W } }`（外层与内层列表均不可为 `[array, "null"]`）。 |
-| **`with.output`** | `result` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{res}}$，要求展平后的一维列表类型 $T_{\text{res}} = \{ \texttt{type}: \texttt{array}, \texttt{items}: W \}$ 满足对目标变量类型的子类型兼容 $T_{\text{res}} <: \Sigma(v_{\text{res}})$。 |
+| **`with.input`** | `source` | **必填** | 绑定已定值的非空二维列表 `Array<Array<W>>`（即 `{ type: array, items: { type: array, items: W } }`，外层与内层列表均不可为 `[array, "null"]`）。 |
+| **`with.output`** | `result` | **必填** | 写入当前图中已声明的目标一维列表顶层变量，要求展平后的一维列表类型 `Array<W>`（即 `{ type: array, items: W }`）与目标变量声明的类型及元素类型兼容。 |
 
 ### 控制流与纯函数式不可变行为
 

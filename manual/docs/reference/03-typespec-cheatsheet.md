@@ -12,10 +12,16 @@ Axcutor 中所有的 `input`、`output` 及 `graph.variables` 均采用 **标准
 | 构造类别 | YAML 必填/可选字段 | 适用场景 |
 | :--- | :--- | :--- |
 | **1. 基础标量与枚举** | `type: string \| integer \| number \| boolean`<br>`enum: [...]` *(可选)* | 字符串、整数、浮点数、布尔值及有限字面量枚举（若 `string` `enum` 用于 `builtin:switch` 路由，每个枚举值均须为合法分支标识符 `^[a-zA-Z_][a-zA-Z0-9_]*$` 且不可为 `start`/`end`/`fail`）。 |
-| **2. 强类型列表（Array）** | `type: array`<br>`items: <TypeSpec>` *(必填)* | 同质元素有序列表（支持 `for_each` 遍历、`builtin:array_shift` 首元素弹出、`builtin:array_append` 末尾追加与 `builtin:array_flatten` 二维列表展平）。 |
-| **3. 强类型结构体（TypedDict）** | `type: object`<br>`properties: { <k>: <TypeSpec> }` *(必填非空)*<br>`required: [...]` *(可选，省略时默认全部必填)* | 固定字段记录结构，支持通过 `builtin:object_merge` 不可变构造或覆盖更新字段，且非空时支持 `var.field` 静态字段路径投影（可配合 `builtin:assign` 提取嵌套字段）：中间穿透路径上的字段必须列入 `required` 且非空；最末级叶子字段若未列入 `required`，投影时静态类型自动提升为显式可空类型 `[<BaseType>, "null"]`（运行期缺失键时求值为 `null`，可通过 `builtin:unwrap` 拆包）。 |
-| **4. 强类型有序映射（Ordered Map）** | `type: object`<br>`additionalProperties: <TypeSpec>` *(必填，不可为布尔值)* | 动态 `string` 键、同质值的有序字典（运行时保持插入顺序，支持 `for_each` 遍历以及 `builtin:map_get` 动态键查找、`builtin:map_set` 写入与 `builtin:map_delete` 移除）。 |
+| **2. 强类型列表（Array）** | `type: array`<br>`items: <TypeSpec>` *(必填)* | 同质元素有序列表（支持 `for_each` 遍历、`builtin:length` 长度计算、`builtin:array_get` 下标随机访问、`builtin:array_shift` 首元素弹出、`builtin:array_append` 末尾追加、`builtin:array_concat` 列表拼接与 `builtin:array_flatten` 二维列表展平）。 |
+| **3. 强类型结构体（TypedDict）** | `type: object`<br>`properties: { <k>: <TypeSpec> }` *(必填非空)*<br>`required: [...]` *(可选，省略时默认全部必填)* | 固定字段记录结构（支持通过 `builtin:object_merge` 不可变构造或覆盖更新字段；非空时支持 `var.field` 静态字段路径投影并配合 `builtin:assign` 提取嵌套字段，详见下方投影规则）。 |
+| **4. 强类型有序映射（Ordered Map）** | `type: object`<br>`additionalProperties: <TypeSpec>` *(必填，不可为布尔值)* | 动态 `string` 键、同质值的有序字典（运行时保持插入顺序，支持 `for_each` 遍历、`builtin:length` 键值对计数，以及 `builtin:map_get` 动态键查找、`builtin:map_set` 写入与 `builtin:map_delete` 移除）。 |
 | **5. 显式可空类型（`Optional<T>`）** | `type: [<BaseType>, "null"]`<br>*(配套字段与 `<BaseType>` 一致)* | 表示可能为 `null` 的外部输入或可选字段（可通过 `builtin:unwrap` 拆包收窄为非空 `T`）。 |
+
+> [!NOTE]
+> **结构体静态字段路径投影规则（`.field`）**
+> * **适用前提**：仅非空 `TypedDict`（`type: object` 且声明 `properties`）支持通过 `var.field.subfield` 语法进行静态字段路径投影（常配合 `builtin:assign` 提取嵌套字段）。
+> * **中间穿透路径约束**：多层投影路径上的所有**中间层字段**必须列入对应结构体的 `required` 且静态类型为非空 `TypedDict`。
+> * **末级可选字段自动可空提升**：路径**最末级叶子字段**若已列入 `required`，投影结果为该字段原声明的 `<TypeSpec>`；若未列入 `required`（可选属性），投影时的静态类型自动提升为显式可空类型 `[<BaseType>, "null"]`（运行期缺失该键时求值为 `null`，可通过 `builtin:unwrap` 拆包）。
 
 ---
 
@@ -115,7 +121,7 @@ Axcutor 严格区分**同帧同名变量声明（双向等价 $T_1 \equiv T_2$�
 | **2. 数值与枚举拓宽** | • `integer` $<:$ `number`<br>• 子枚举 `enum: [a, b]` $<:$ 父枚举 `enum: [a, b, c]` $<:$ 无 `enum` 基础标量 | 将 `integer` 计数传给期望 `number` 的计算节点；将带 `enum` 的分类状态传给通用 `string` 日志参数。 |
 | **3. 列表协变（`Array`）** | 若 $T_1 <: T_2$，则 `Array<T1>` $<:$ `Array<T2>` | 将 `Array<integer>` 赋给 `Array<number>`，或将 `Array<string(enum)>` 传给期望 `Array<string>` 的子工作流。 |
 | **4. 有序映射协变（`OrderedMap`）** | 若 $V_1 <: V_2$，则 `OrderedMap<string, V1>` $<:$ `OrderedMap<string, V2>` | 将非空值映射 `OrderedMap<string, string>` 赋给允许空值的 `OrderedMap<string, [string, "null"]>`。 |
-| **5. 结构体深度协变与必填强化（`TypedDict`）** | $\text{set}(T_2.\text{required}) \subseteq \text{set}(T_1.\text{required})$，$\text{dom}(T_1.\text{properties}) \subseteq \text{dom}(T_2.\text{properties})$，且共有属性满足 $T_1.\text{properties}[f] <: T_2.\text{properties}[f]$ | 将全部字段必填且非空的精确结构体，赋给部分字段可选（非 `required`）或字段类型为可空/父类型的同构目标结构体。 |
+| **5. 结构体深度协变与必填强化（`TypedDict`）** | 若 $T_1 <: T_2$，须同时满足：<br>• **必填集强化**：$\text{set}(T_2.\text{required}) \subseteq \text{set}(T_1.\text{required})$（目标必填字段在源类型中均必填）<br>• **字段集闭合**：$\text{dom}(T_1.\text{properties}) \subseteq \text{dom}(T_2.\text{properties})$（源类型不含目标未声明的多余字段）<br>• **共有属性协变**：$\forall f \in \text{dom}(T_1.\text{properties}),\ T_1.\text{properties}[f] <: T_2.\text{properties}[f]$ | 将全部字段必填且非空的精确结构体，赋给部分字段可选（非 `required`）或字段类型为可空/父类型的同构目标结构体。 |
 
 ```yaml
 graph:

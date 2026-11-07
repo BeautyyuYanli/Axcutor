@@ -56,32 +56,17 @@ graph:
 
 ---
 
-## 二、 循环与流水线中的确定性标量、算术与集合操作算子
+## 二、 两类典型确定性循环模式
 
-在成环回边循环或串行流水线中，若需执行计数器自增与算术累加、数值阈值判断、测量集合长度、按索引随机读取或拼接列表、从队列头部逐个弹出元素执行短路遍历或**跨元素有状态串行折叠（Stateful Sequential Fold）**、读写/删除有序映射键值对，或不可变地组装/更新强类型结构体（`TypedDict`），可直接调用以下运行时内建算子（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）：
+在成环回边循环中，通常结合运行时确定性内建算子推进队列消费、维护下标计数与更新跨轮状态（通用内建算子与数据操作的完整说明见下一节 [03. Builtins：确定性内建算子与数据操作](./03-builtin-operators.md) 及 [内建节点字典](../../reference/builtins/index.md)）。以下为最常用的两类确定性循环模式：
 
-| 内建算子 | 核心用途 | 控制分支与输出契约 |
-| :--- | :--- | :--- |
-| **[`builtin:assign`](../../reference/builtins/assign.md)** | 将变量、结构体字段路径（如 `request.items`）或常量字面量绑定写入顶层变量 `value` | 无分支单出边，输出目标变量 `value` |
-| **[`builtin:compare`](../../reference/builtins/compare.md)** | 对两个操作数执行相等性（`eq`, `ne`）或序关系（`lt`, `lte`, `gt`, `gte`）比较 | • **省略 `with.output`**：暴露 **`.true`** / **`.false`**<br>• **声明 `result`**：无分支单出边，输出 `result: boolean` |
-| **[`builtin:logic`](../../reference/builtins/logic.md)** | 对非空布尔值执行逻辑与（`and`）、逻辑或（`or`）或逻辑非（`not`）运算 | • **省略 `with.output`**：暴露 **`.true`** / **`.false`**<br>• **声明 `result`**：无分支单出边，输出 `result: boolean` |
-| **[`builtin:math`](../../reference/builtins/math.md)** | 对非空数值执行二元算术运算（`add`, `sub`, `mul`, `div`, `mod`） | • **`add`/`sub`/`mul` 或带 `default`**：无分支单出边，输出 `result`<br>• **`div`/`mod` 且无 `default`**：暴露 **`.some`**（定值 `result`）与 **`.none`** |
-| **[`builtin:length`](../../reference/builtins/length.md)** | 非破坏性地获取非空 `Array`、`OrderedMap` 或 `string` 的长度 | 无分支单出边，输出 `result: integer`（$\ge 0$） |
-| **[`builtin:array_get`](../../reference/builtins/array-get.md)** | 按整数下标 `index`（支持负数倒数索引）非破坏性读取列表元素 | • **省略 `default`**：暴露 **`.some`**（定值 `value`）与 **`.none`**<br>• **传入 `default`**：无分支单出边，输出 `value` |
-| **[`builtin:array_shift`](../../reference/builtins/array-shift.md)** | 从列表头部弹出首元素 `item` 与剩余切片 `rest` | • **`.some`**：队列非空，`item` 与 `rest` 获得定值<br>• **`.empty`**：队列已空，不写入 `item` 与 `rest` |
-| **[`builtin:array_append`](../../reference/builtins/array-append.md)** | 将单步产出的元素 `item` 追加至列表 `source` 末尾 | 无分支单出边，输出更新后的列表 `result` |
-| **[`builtin:array_concat`](../../reference/builtins/array-concat.md)** | 将两个同构列表 `left` 与 `right` 按顺序首尾拼接为新列表 | 无分支单出边，输出拼接后的列表 `result` |
-| **[`builtin:array_flatten`](../../reference/builtins/array-flatten.md)** | 将非空二维列表 `Array<Array<W>>` 按序首尾拼接展平为一维列表 `Array<W>` | 无分支单出边，输出展平后的列表 `result` |
-| **[`builtin:map_set`](../../reference/builtins/map-set.md)** | 将键值对 `key -> value` 插入或更新至有序映射 `source` | 无分支单出边，输出更新后的有序映射 `result` |
-| **[`builtin:map_get`](../../reference/builtins/map-get.md)** | 按动态键 `key` 从有序映射 `source` 中查找对应值（可选配 `default`） | • **省略 `default`**：暴露 **`.some`**（定值 `value`）与 **`.none`**<br>• **传入 `default`**：无分支单出边，输出 `value` |
-| **[`builtin:map_delete`](../../reference/builtins/map-delete.md)** | 按动态键 `key` 从有序映射 `source` 中移除条目并返回新副本 | 无分支单出边，输出更新后的有序映射 `result` |
-| **[`builtin:object_merge`](../../reference/builtins/object-merge.md)** | 构造新的 `TypedDict` 或基于已有结构体 `base` 不可变覆盖更新指定字段 | 无分支单出边，输出结构体变量 `result` |
+### 1. 动态队列消费与短路/折叠循环（`builtin:assign` + `builtin:array_shift` + `builtin:array_append`）
 
-### 1. 队列初始化、弹出与列表追加片段（`assign` + `array_shift` + `array_append`）
+[`builtin:assign`](../../reference/builtins/assign.md) + [`builtin:array_shift`](../../reference/builtins/array-shift.md) + [`builtin:array_append`](../../reference/builtins/array-append.md) 配合 CFG 成环回边不仅支持**短路搜索（Short-Circuit）**，同时也是表达**跨元素有状态串行折叠（Stateful Sequential Fold）**的标准方式（支持分支按需更新状态变量或跳过无需更新的分支，详见 [配方 01：有状态串行折叠](../../cookbook/02-collection-and-concurrency/01-stateful-sequential-fold.md)）。
 
-`builtin:assign` + `builtin:array_shift` + `builtin:array_append` 配合 CFG 成环回边不仅支持**短路搜索（Short-Circuit）**，同时也是表达**跨元素有状态串行折叠（Stateful Sequential Fold）**的标准方式（支持分支按需更新状态变量或跳过无需更新的分支，详见 [配方 01：有状态串行折叠](../../cookbook/02-collection-and-concurrency/01-stateful-sequential-fold.md)）。
-
-当待消费的列表位于输入结构体内部（如 `batch_request.urls`）时，先在 `graph.variables` 中声明顶层队列变量 `pending_urls` 与元素变量 `current_url` 的 `TypeSpec`，在入环前通过 `builtin:assign` 将 `batch_request.urls` 提取至 `pending_urls`，再将 `builtin:array_shift` 的 `with.output.rest` 与 `with.input.source` 绑定为同一个顶层变量 `pending_urls`，即可在每轮回边中原地推进剩余队列切片；结合 `builtin:array_append` 可在每轮失败时将错误日志追加至历史列表：
+当待消费的列表位于输入结构体内部（如 `batch_request.urls`）时，先在 `graph.variables` 中声明顶层队列变量 `pending_urls` 与元素变量 `current_url` 的 `TypeSpec`，在入环前通过 `builtin:assign` 将 `batch_request.urls` 绑定至 `pending_urls`。在循环头 `builtin:array_shift` 中，将 `with.output.rest` 与 `with.input.source` 绑定为同一个顶层变量 `pending_urls`：
+* **`.some` 分支（队列非空）**：弹出首元素定值给 `item`（`current_url`），并将首元素之后的新切片副本重新绑定至队列变量 `rest`（`pending_urls`）；结合 `builtin:array_append` 可在每轮失败时将错误日志追加至历史列表并经由回边进入下一轮；
+* **`.empty` 分支（队列已空）**：直接跳出循环，同时将 `with.output.item` 绑定的变量（`current_url`）重置为**未定值（Unassigned）**状态，防止环外下游节点误读最后一轮残留的旧元素。
 
 ```yaml
 graph:
@@ -108,7 +93,7 @@ graph:
         output:
           value: pending_urls
 
-    # 1. 从队列头部弹出首元素 current_url，并将剩余切片写回 pending_urls
+    # 1. 从队列头部弹出首元素 current_url，并将剩余新切片副本重新绑定至 pending_urls
     pop_url:
       use: builtin:array_shift
       with:
@@ -150,12 +135,12 @@ graph:
     - try_fetch.ok -> end.success        # 命中即停：无需遍历剩余元素，直接退出
     - try_fetch.failed -> append_error
     - append_error -> pop_url            # 成环回边：回到 pop_url 弹出下一个候选元素
-    - pop_url.empty -> end.exhausted     # 队列已空：跳出循环
+    - pop_url.empty -> end.exhausted     # 队列已空：跳出循环并重置 current_url 定值状态
 ```
 
-### 2. 非破坏性下标计数循环片段（`length` + `compare` + `array_get` + `math`）
+### 2. 非破坏性下标计数循环（`builtin:length` + `builtin:compare` + `builtin:array_get` + `builtin:math`）
 
-当需要在不拆解原列表的前提下按索引遍历或抽样访问列表（如 `while (idx < n)`），可组合使用 [`builtin:length`](../../reference/builtins/length.md)、[`builtin:compare`](../../reference/builtins/compare.md)、[`builtin:array_get`](../../reference/builtins/array-get.md) 与 [`builtin:math`](../../reference/builtins/math.md)，无需调用任何外部 `run` 执行器即可在图内零开销维护下标与数值累加：
+当需要在不消费原列表的前提下按索引遍历或抽样访问列表（如 `while (idx < n)`），可组合使用 [`builtin:length`](../../reference/builtins/length.md)、[`builtin:compare`](../../reference/builtins/compare.md)、[`builtin:array_get`](../../reference/builtins/array-get.md) 与 [`builtin:math`](../../reference/builtins/math.md)，无需调用任何外部 `run` 执行器即可在图内零开销维护下标与数值累加：
 
 ```yaml
 graph:
@@ -231,56 +216,6 @@ graph:
     - add_to_total -> increment_idx
     - increment_idx -> check_bound       # 成环回边：回到循环头检查下一轮下标
     - check_bound.false -> end           # 遍历完毕：跳出循环
-```
-
-### 3. 有序映射读写与结构体不可变更新片段（`map_get` / `map_set` + `object_merge`）
-
-当需要在循环中按动态键查询或更新有序映射（`type: object` + `additionalProperties`），或不可变地更新结构体（`TypedDict`）的某个字段时，组合使用 `builtin:map_get`、`builtin:map_set` 与 `builtin:object_merge`：
-
-```yaml
-graph:
-  variables:
-    # 初始化空有序映射
-    probe_results:
-      type: object
-      additionalProperties: { type: string }
-      default: {}
-    # 声明由 builtin:map_get 写入的局部变量类型
-    prev_status:
-      type: string
-
-  nodes:
-    # 1. 按动态键名 current_host 查找缓存字典，未命中时回退为 "unknown"
-    read_previous_status:
-      use: builtin:map_get
-      with:
-        input:
-          source: probe_results
-          key: current_host
-          default: { value: "unknown" }
-        output:
-          value: prev_status
-
-    # 2. 将最新探测结果写入有序映射 probe_results
-    record_probe_status:
-      use: builtin:map_set
-      with:
-        input:
-          source: probe_results
-          key: current_host       # 动态键名（type: string）
-          value: current_status   # 对应键值
-        output:
-          result: probe_results   # 原地写回更新后的有序映射副本
-
-    # 3. 基于已有结构体 host_summary 不可变更新 last_status 字段并写回 host_summary
-    update_host_summary:
-      use: builtin:object_merge
-      with:
-        input:
-          base: host_summary
-          last_status: current_status
-        output:
-          result: host_summary
 ```
 
 ---
@@ -368,4 +303,4 @@ graph:
 
 ---
 
-下一节：[01. 同构结构化并发：集合遍历（`for_each`）](../03-concurrency/01-for-each.md)。
+下一节：[03. Builtins：确定性内建算子与数据操作](./03-builtin-operators.md)。

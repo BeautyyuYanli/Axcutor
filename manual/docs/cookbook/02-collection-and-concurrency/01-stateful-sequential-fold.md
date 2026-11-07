@@ -13,25 +13,9 @@
 
 1. **条件拆包（[`builtin:unwrap`](../../reference/builtins/unwrap.md) 模式 A）**：省略 `default` 参数调用 `builtin:unwrap`，暴露 `.some`（产出非空 `valid_context_text`）与 `.none` 两个分支；`.some` 分支经 `init_context_summary` 覆写 `rolling_summary`，`.none` 分支直接汇合至队列初始化节点。
 2. **工作队列消费与有状态回边折叠（[`builtin:assign`](../../reference/builtins/assign.md) + [`builtin:array_shift`](../../reference/builtins/array-shift.md) + [`builtin:array_append`](../../reference/builtins/array-append.md) + CFG 回边）**：
-   * 在入环前通过 `builtin:assign` 将结构体字段 `document.sections` 绑定至工作队列 `pending_sections`；
-   * 在循环头 `next_section` 使用 `builtin:array_shift` 逐项弹出 `current_section` 并原地写回剩余切片 `pending_sections`；
-   * 在 `read_single_section` 中，`updated` 分支更新 `rolling_summary` 并经 `record_note` 追加 `single_note` 后回边至 `next_section`，而 `skipped` 分支直接声明 `output: []` 连回 `next_section`（无需重抄未修改的状态变量）：
-
-```yaml
-read_single_section:
-  input: [document, current_section, rolling_summary]
-  output:
-    rolling_summary: { type: string }
-    single_note: { type: string }
-  branches:
-    updated:
-      description: "有效分片，原地更新 rolling_summary 并产出 single_note"
-      output: [rolling_summary, single_note]
-    skipped:
-      description: "无关分片，不修改任何变量，直接进入下一轮"
-      output: []
-  run: "..."
-```
+   * 入环前通过 `builtin:assign` 将 `document.sections` 绑定至工作队列 `pending_sections`。
+   * 循环头 `next_section` 使用 `builtin:array_shift` 弹出首项 `current_section`，并绑定剩余切片副本至同名变量 `pending_sections`。
+   * `read_single_section.updated` 分支覆写更新 `rolling_summary` 变量绑定，并经 `record_note` 追加 `single_note` 后回边至 `next_section`；`skipped` 分支直接声明 `output: []` 连回 `next_section`，无需重抄未修改的状态变量。
 
 ---
 
@@ -102,7 +86,7 @@ graph:
         output:
           value: pending_sections
 
-    # 步骤 4（循环头）：弹出首分片 current_section，剩余切片写回 pending_sections
+    # 步骤 4（循环头）：弹出首分片 current_section，绑定剩余切片副本至同名变量 pending_sections
     next_section:
       use: builtin:array_shift
       with:
@@ -120,15 +104,15 @@ graph:
         single_note: { type: string }
       branches:
         updated:
-          description: "有效分片，原地更新 rolling_summary 并产出 single_note"
+          description: "有效分片，覆写更新 rolling_summary 变量绑定并产出 single_note"
           output: [rolling_summary, single_note]
         skipped:
           description: "无关分片，不修改任何变量，直接进入下一轮"
           output: []
-      run:
-        - "阅读《variables.document.title》的分片内容：variables.current_section。"
-        - "若分片有效，结合上一分片累积摘要 variables.rolling_summary 更新全局摘要写入 output.rolling_summary，生成当前分片的独立审查记录写入 output.single_note，并选择 updated 分支。"
-        - "若分片无关，直接选择 skipped 分支。"
+      run: |
+        阅读《variables.document.title》的分片内容：variables.current_section。
+        若分片有效，结合上一分片累积摘要 variables.rolling_summary 更新全局摘要写入 output.rolling_summary，生成当前分片的独立审查记录写入 output.single_note，并选择 updated 分支。
+        若分片无关，直接选择 skipped 分支。
 
     # 步骤 6：仅在 updated 分支下将 single_note 追加至 section_notes
     record_note:

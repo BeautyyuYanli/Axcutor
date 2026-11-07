@@ -5,26 +5,14 @@
 给定按优先级排列的候选服务地址列表 `candidate_endpoints` 与请求报文 `request_payload`，需满足以下编排行为：
 
 1. **按序逐个尝试与命中即停（Short-Circuit）**：按列表顺序依次向候选节点发起请求；一旦某个节点成功返回响应，立即结束工作流并返回结果，不再访问队列中剩余的候选节点（因此不使用全量遍历的 `for_each`）。
-2. **失败轨迹累积**：若当前节点调用失败，将该节点的失败摘要追加至 `failed_trace` 列表，继续弹出下一个节点尝试，直至某个节点成功或候选队列耗尽。
+2. **失败轨迹累积**：若当前节点调用失败，将该节点的失败摘要追加至 `failed_trace` 列表，继续取出下一个节点尝试，直至某个节点成功或候选队列耗尽。
 
 ---
 
 ## 二、 核心原语组合要点
 
-1. **队列首元素弹出（[`builtin:array_shift`](../../reference/builtins/array-shift.md)）**：从 `candidate_endpoints` 头部弹出首元素 `current_endpoint`（在 `graph.variables` 中声明其 `TypeSpec`），并将剩余切片 `rest` 原地写回 `candidate_endpoints`。队列非空时走 `.some` 分支，队列耗尽时走 `.empty` 分支。
-2. **失败记录追加（[`builtin:array_append`](../../reference/builtins/array-append.md)）**：在 `try_call.failed` 分支下，将单步产出的 `error_entry` 追加至 `failed_trace` 列表末尾，随后沿回边跳回 `pop_endpoint`。
-
-```yaml
-# 原地弹出队列首元素并更新剩余列表
-pop_endpoint:
-  use: builtin:array_shift
-  with:
-    input:
-      source: candidate_endpoints
-    output:
-      item: current_endpoint
-      rest: candidate_endpoints
-```
+1. **队列首元素拆分与重绑定（[`builtin:array_shift`](../../reference/builtins/array-shift.md)）**：遵循纯函数式写时复制（Copy-on-Write）不可变语义，从 `candidate_endpoints` 头部取出首元素绑定至 `current_endpoint`（在 `graph.variables` 中声明其 `TypeSpec`），同时将剩余切片 `rest` 构造为剩余元素的新列表副本并重新绑定至同名变量 `candidate_endpoints`。队列非空时走 `.some` 分支，队列耗尽时走 `.empty` 分支。
+2. **失败记录追加（[`builtin:array_append`](../../reference/builtins/array-append.md)）**：在 `try_call.failed` 分支下，将单步产出的 `error_entry` 追加至 `failed_trace` 列表末尾（生成新列表副本并重新绑定至 `failed_trace`），随后沿回边跳回 `pop_endpoint`。
 
 ---
 
@@ -59,7 +47,7 @@ branches:
 graph:
   max_steps: 50
 
-  # 4. 声明带初值的失败轨迹列表与未初始化的弹出元素变量 current_endpoint
+  # 4. 声明带初值的失败轨迹列表与未初始化的当前节点变量 current_endpoint
   variables:
     failed_trace:
       type: array
@@ -69,7 +57,7 @@ graph:
       type: string
 
   nodes:
-    # 步骤 1：从队列头部弹出首元素 current_endpoint，剩余切片写回 candidate_endpoints
+    # 步骤 1：取出首元素 current_endpoint，构造剩余元素的新列表副本并重新绑定至同名变量 candidate_endpoints
     pop_endpoint:
       use: builtin:array_shift
       with:
@@ -79,7 +67,7 @@ graph:
           item: current_endpoint
           rest: candidate_endpoints
 
-    # 步骤 2：调用当前弹出的候选节点
+    # 步骤 2：调用当前取出的候选节点
     try_call:
       input: [current_endpoint, request_payload]
       output:
@@ -94,7 +82,7 @@ graph:
           output: [error_entry]
       run: "向节点 variables.current_endpoint 发送请求 variables.request_payload；成功则写入 output.response_data 并选择 success；失败则将节点名与错误原因写入 output.error_entry 并选择 failed。"
 
-    # 步骤 3：将单次失败摘要 error_entry 追加至 failed_trace 列表末尾
+    # 步骤 3：将单次失败摘要 error_entry 追加至 failed_trace 列表末尾并重新绑定至同名变量
     record_failure:
       use: builtin:array_append
       with:
@@ -111,7 +99,7 @@ graph:
     - pop_endpoint.some -> try_call
     # 命中即停（短路早退）：直接跳出循环至 end.ok，不再消费剩余候选节点
     - try_call.success -> end.ok
-    # 当前节点失败：追加错误记录后沿回边跳回 pop_endpoint 继续弹出下一项
+    # 当前节点失败：追加错误记录后沿回边跳回 pop_endpoint 继续取出下一项
     - try_call.failed -> record_failure
     - record_failure -> pop_endpoint
     # 队列已空（.empty）：所有候选节点均已耗尽，进入 end.all_failed

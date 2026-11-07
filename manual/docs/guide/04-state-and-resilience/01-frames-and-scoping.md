@@ -1,24 +1,22 @@
 # 01. 图栈帧与命名空间（Stack Frames & Scoping）
 
-在组合使用跨文件子工作流（`use`）、内联子图（`graph`）与集合遍历（`for_each`）时，Axcutor 通过严格的栈帧隔离边界、单遍显式符号表构建、宿主输入互斥规则与全路径必达定值分析，在编译期排除变量命名冲突与未初始化读取。
+在组合使用跨文件子工作流（`use`）、内联子图（`graph`）与集合遍历（`for_each`）时，Axcutor 通过严格的栈帧隔离边界、显式变量表声明、宿主输入互斥规则与全路径必达定值分析，在编译期排除变量命名冲突与未初始化读取。
 
 ---
 
 ## 一、 三类栈帧与作用域隔离边界
 
-运行时通过三类栈帧管理变量的生命周期与可见性：
+运行时通过三类栈帧管理变量的生命周期与可见性（底层内存模型与形式化语义详见 [规范：`04-runtime-execution-model/01-frame-memory-model.md`](../../../spec/04-runtime-execution-model/01-frame-memory-model.md)）：
 
 1. **函数调用栈帧（`Function Frame` —— 根工作流与 `use` 调用）**：
-   * 每次通过 `use` 调用外部工作流（或 `builtin:*`）时，创建与调用方完全隔离的命名空间。
-   * 被调用方不可读取父图的任何变量，仅接收通过 `with.input` 显式传入的值，并在退出时通过 `with.output` 显式写回父图。
+   * 每次通过 `use` 调用外部工作流（或 `builtin:*`）时，都会创建与调用方完全隔离的独立命名空间。
+   * 被调用方不可直接读取父图的任何变量，仅接收通过 `with.input` 显式传入的值，并在退出时通过 `with.output` 显式写回父图。
 2. **块级作用域栈帧（`Block Frame` —— 内联 `graph` 节点）**：
    * 内联 `graph` 节点采用**显式按名捕获（Explicit Capture）**：仅列入内联 `graph` 节点 `input: [<var>, ...]` 的外层变量（以及挂载 `for_each` 时自动注入的 `item` / `key` / `index`）会进入子图的初始 `variables` 表。
    * **未捕获变量隔离与同名无冲突**：未列入 `input: [...]` 的外层变量对子图不可见。子图内部可声明与外层未捕获变量同名的私有变量（如 `temp_buffer`、`retry_count`），两者位于不同栈帧，互不覆盖。
 3. **单次迭代局部隔离帧（`Iteration Frame` —— 挂载 `for_each` 的 `run` 与 `use` 节点）**：
-   * 当 `run`（`ActionNode`）或 `use`（`CallNode`）挂载 `for_each` 时，针对每个元素构造单次迭代局部符号表 $\Sigma_{\text{iter}} = \Sigma_{\text{outer}} \uplus \Sigma_{\text{injected}}$（`item` / `key` / `index` 不可与外层图变量同名）。
-   * **挂载 `for_each` 时的 `input` 声明差异**：
-     * 在 **`run` 节点**上，`input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index` 及外层变量（未列入 `input` 的变量不会进入传给执行器的 `input_snapshot`）；
-     * 在 **内联 `graph` 节点**上，由于 `item` / `key` / `index` 已自动注入子图的 `Block Frame`，内联 `graph` 的 `input: [...]` 仅用于捕获外层普通变量，**禁止**重复列出 `item` / `key` / `index`。
+   * 当 `run` 或 `use` 节点挂载 `for_each` 时，运行时会为每个待遍历元素创建独立的单次迭代局部帧，在外层图只读变量的基础上注入当前元素的 `item` / `key` / `index` 局部变量（为避免遮蔽冲突，`item` / `key` / `index` 不可与外层图已有变量同名）。
+   * 各次元素迭代之间相互隔离，单次迭代的产出在全部元素执行完毕后由屏障统一按序归集回外层图。关于 `run`、`use` 与内联 `graph` 三类节点挂载 `for_each` 时的 `input` / `output` 声明规则差异，请参阅 [01. 同构结构化并发：集合遍历（`for_each`）](../03-concurrency/01-for-each.md)。
 
 ```yaml
 graph:
@@ -57,9 +55,9 @@ graph:
 
 ---
 
-## 二、 单遍显式符号表构建与 `graph.variables` 的两种声明形态
+## 二、 显式变量表与 `graph.variables` 的两种声明形态
 
-编译器遵循**显式符号表原则（Declaration-Before-Use）**，在单遍 $O(N)$ 扫描中直接从四类显式 `TypeSpec` 契约源（宿主输入 `host.input`、宿主输出 `host.output`、图级变量表 `graph.variables`，以及图内未挂载 `for_each` 的 `run` / 内联 `graph` 节点的 `output`）构建每张图的符号表 $\Sigma_G$，随后无序独立地对图内每个节点执行静态类型检查。
+编译器遵循**先声明后使用（Declaration-Before-Use）**的显式变量表原则：每张图的变量表直接由四类显式 `TypeSpec` 契约源汇总构建——当前图的宿主 `input`、宿主 `output`、图级变量表 `graph.variables`，以及图内未挂载 `for_each` 的 `run` / 内联 `graph` 节点的 `output`。汇总生成图变量表后，编译器即可独立校验图内每个节点的输入与输出类型（符号表构建与类型检查算法详见 [规范：`02-type-system-and-symbols/03-two-phase-symbol-resolution.md`](../../../spec/02-type-system-and-symbols/03-two-phase-symbol-resolution.md)）。
 
 在 `graph.variables` 中声明图级局部变量时，每个条目均必须是一个良构的 **`TypeSpec` 映射对象**，并根据是否包含可选的 **`default`** 键区分两种语义：
 
@@ -67,8 +65,8 @@ graph:
 
 当变量需要在图启动（`start`）时持有初始值（如循环计数器、空列表缓冲、默认配置常量）时，在 `TypeSpec` 中同时指定 `default: <literal>`：
 
-* 编译期立即校验初始字面量与该 `TypeSpec` 的实例兼容性（$\text{default} \models \text{TypeSpec}$）；
-* 该变量自动加入图起点初始定值集 $Def_{\text{in}}(\text{start})$，运行期栈帧创建时以 `default` 字面量的深拷贝完成初始化。
+* 编译期立即校验 `default` 初始字面量是否符合该变量声明的 `TypeSpec` 类型契约；
+* 该变量在图入口 `start` 处即处于**已赋值（已定值）状态**，无需经过前置节点写入即可被下游节点直接读取；运行期创建栈帧时，会以 `default` 字面量的深拷贝完成初始化。
 
 ```yaml
 graph:
@@ -96,8 +94,8 @@ graph:
 
 当图内某局部中间变量仅由 `builtin:*` 算子、`use: workflow:<path>` 子工作流调用或挂载了 `for_each` 的节点写入，且既不属于宿主 `input` / `output` 也不属于其他未挂载 `for_each` 的 `run` / `graph` 节点的显式 `output` 时，在 `graph.variables` 中仅声明其 `TypeSpec` 而省略 `default` 键（等价于 TypeScript / Rust 中的 `let v: T;`）：
 
-* 该变量在符号表 $\Sigma_G$ 中获得明确的静态类型；
-* 在图起点 `start` 处处于**未定值状态（`Unbound`）**，必须经由后续节点写入定值后方可被下游节点读取（受阶段 03 全路径必达定值分析严格保护）。
+* 该变量在当前图变量表中获得明确的静态类型，可供 `with.output` 或挂载 `for_each` 的节点绑定写入；
+* 在图入口 `start` 处处于**未定值状态（`Unbound`）**，必须先由后续节点完成写入定值，方可被下游节点读取（详见下文第四节“编译期全路径必达定值分析”）。
 
 ```yaml
 graph:
@@ -114,7 +112,7 @@ graph:
 
 ## 三、 宿主输入与 `graph.variables` 互斥规则
 
-为防止外部传入的参数被 `graph.variables` 重复声明或静默覆盖，编译器强制执行**宿主输入与 `graph.variables` 互斥规则**：
+为防止外部传入的参数被 `graph.variables` 重复声明或静默覆盖，编译器强制执行**宿主输入与 `graph.variables` 互斥规则**（详见 [规范：`03-static-flow-analysis/02-scoping-and-collision-rules.md`](../../../spec/03-static-flow-analysis/02-scoping-and-collision-rules.md)）：
 
 > 凡是进入当前图时已由宿主环境提供的变量——包括根工作流的顶层 `input` 参数、内联 `graph` 节点的 `input: [...]` 捕获变量，以及挂载在当前内联 `graph` 上的 `for_each` 所注入的 `item` / `key` / `index` 变量——**禁止在当前图的 `graph.variables` 中重复声明类型或初值**。
 
@@ -179,7 +177,7 @@ nodes:
 
 ## 四、 编译期全路径必达定值分析（Definite Assignment）
 
-编译器在运行前对控制流图执行分支敏感的全路径必达定值分析：
+编译器在运行前对控制流图执行分支敏感的全路径必达定值分析（底层数据流方程详见 [规范：`03-static-flow-analysis/03-branch-sensitive-definite-assignment.md`](../../../spec/03-static-flow-analysis/03-branch-sensitive-definite-assignment.md)）：
 
 * 若某节点在 `input`（或 `with.input`）中声明读取变量 `X`，则**从 `start` 到达该节点的每一条可行控制流路径上，`X` 都必须已完成定值**。
 * 若多条分支路径在下游汇合，而其中某条分支遗漏了对 `X` 的赋值，编译期静态检查将直接报错。当某条分支仅需为汇合变量赋予常量值、拷贝已有变量或提取结构体字段时，可使用 [`builtin:assign`](../../reference/builtins/assign.md) 完成零开销定值（若需构造或不可变更新 `TypedDict` 结构体，则可使用 [`builtin:object_merge`](../../reference/builtins/object-merge.md)）。

@@ -1,6 +1,20 @@
 # 01. 栈帧生命周期与内存模型（Frame Memory Model）
 
-运行时引擎维护一个树状激活栈帧结构（支持并发分支沿树分叉）。每个栈帧持有独立的变量绑定表 $\rho : \text{Identifier} \rightharpoonup \text{Value}$。
+运行时引擎维护一个树状激活栈帧结构（支持并发分支沿树分叉）。每个栈帧持有独立的变量环境（变量绑定表）：
+
+$$\rho : \text{dom}(\Sigma_G) \to \text{JSONValue} \cup \{\text{Unbound}\}$$
+
+其中：
+* **值域与绑定状态区分**：
+  * $\rho(v) \in \text{JSONValue}$ 表示变量 $v$ 处于**已绑定有效 JSON 值**状态（包含合法的 JSON `null` 值，前提是该变量的 `TypeSpec` 允许 `null`）；
+  * $\rho(v) = \text{Unbound}$ 表示变量 $v$ 处于**未绑定状态（`Unbound`）**（即变量虽在当前图符号表 $\Sigma_G$ 中声明，但尚未被初始值或任何前驱节点写入）。
+  * 等价偏函数表示：记已绑定有效值的变量子集为有效定义域 $\text{dom}_{\text{bound}}(\rho) = \{v \in \text{dom}(\Sigma_G) \mid \rho(v) \neq \text{Unbound}\}$；下文对局部映射片段（如 $\rho_{\text{caller\_in}}$、$\Delta$ 等）省略未绑定项，简记其有效绑定域为 $\text{dom}(\cdot)$。
+* **环境映射与更新算子**：
+  * **子集投影算子 $\rho|_V$**：将环境 $\rho$ 限制在变量子集 $V \subseteq \text{dom}(\Sigma_G)$ 上，满足 $(\rho|_V)(v) = \rho(v)$（当 $v \in V$）且 $(\rho|_V)(v) = \text{Unbound}$（当 $v \notin V$）。
+  * **无交集并算子 $\rho_1 \uplus \rho_2$**：仅当两个映射片段的已绑定变量域互不相交（即 $\text{dom}(\rho_1) \cap \text{dom}(\rho_2) = \emptyset$）时有定义，合并结果满足：
+    $$(\rho_1 \uplus \rho_2)(v) = \begin{cases} \rho_1(v), & v \in \text{dom}(\rho_1) \\ \rho_2(v), & v \in \text{dom}(\rho_2) \\ \text{Unbound}, & \text{otherwise} \end{cases}$$
+  * **右优先覆盖合并算子 $\rho \triangleleft \Delta$**：用新产出的有效绑定增量映射 $\Delta : \text{dom}(\Delta) \to \text{JSONValue}$（其中 $\text{dom}(\Delta) \subseteq \text{dom}(\Sigma_G)$）原子覆盖更新原环境 $\rho$，满足：
+    $$(\rho \triangleleft \Delta)(v) = \begin{cases} \Delta(v), & v \in \text{dom}(\Delta) \\ \rho(v), & v \notin \text{dom}(\Delta) \end{cases}$$
 
 ---
 
@@ -40,4 +54,4 @@
    * 任意节点激活时，运行时仅按其声明的读取集合提取变量快照（不可变视图或深拷贝）传入执行器；执行器在运行期间对传入对象的原地修改不影响栈帧中的 $\rho$。
 2. **原子校验写回（Atomic Validated Commit）**：
    * 节点正常返回 `(branch, raw_output)` 后，运行时首先验证 `branch` 合法，且 `raw_output` 中包含该 `branch` 契约要求的全部字段并逐一通过 `TypeSpec` Schema 校验（若违约则抛出 `contract` 异常并丢弃 `raw_output`）；
-   * 校验全部通过后，仅将该分支契约允许的字段子集一次性原子更新至所属栈帧的 $\rho$（或 `for_each` 的当次迭代槽位缓冲）。
+   * 校验全部通过后，仅将该分支契约允许的字段子集 $\Delta_{\text{valid}}$ 一次性通过右优先覆盖算子 $\rho \leftarrow \rho \triangleleft \Delta_{\text{valid}}$ 原子更新至所属栈帧的 $\rho$（或写入 `for_each` 的当次迭代槽位缓冲）。

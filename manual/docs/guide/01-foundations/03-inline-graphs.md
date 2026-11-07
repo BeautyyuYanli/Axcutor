@@ -29,73 +29,46 @@
 * 列入 `input` 的外层变量以只读快照形式注入子图的初始 `variables` 表。
 * 未列入 `input` 的外层变量对子图内部不可见。
 
-```yaml
-nodes:
-  pricing_subflow:
-    # 仅从外层图捕获 cart_items 与 coupon_code；外层其他变量对子图不可见
-    input: [cart_items, coupon_code]
-    output:
-      final_amount: { type: number }
-    graph:
-      nodes: ...
-      edges: ...
-```
-
 ### 2. 显式输出契约（`output: { <var>: <TypeSpec> }`）
 
-与 `RootNode` 和 `ActionNode`（`run`）完全一致，内联 `graph` 节点通过 `output: { <var>: <TypeSpec> }` 显式声明向父图导出的变量及其 `TypeSpec`：
+与顶层根节点和普通 `run` 节点完全一致，内联 `graph` 节点通过 `output: { <var>: <TypeSpec> }` 显式声明向父图导出的变量名及其类型：
 
-* **父子图模块化边界解耦**：父图在单遍构建符号表时直接读取内联 `graph` 节点的 `output` 映射，无需递归进入子图内部推导；
-* **子图出口契约校验**：子图在独立校验自身时，将其外层 `output` 映射作为子图的宿主输出契约 `host.output` 并入子图符号表（子图内同名显式 `output` 声明保持类型等价 $\equiv$，通过 `builtin:*` 或 `use` 等向输出变量赋值时支持子类型兼容 $<:$；挂载 `for_each` 时单次输出经一阶集合提升后满足 $\text{Lift}(T_{\text{src}}, U) <: \Sigma_{\text{outer}}(v)$），并在子图 `end`（或 `end.<branch>`）处校验全路径必达定值。
-
-```yaml
-nodes:
-  pricing_subflow:
-    input: [cart_items]
-    # 与 run 节点一致，显式声明导出至父图的变量名与 TypeSpec
-    output:
-      final_amount: { type: number }
-    graph:
-      nodes:
-        finalize_price:
-          input: [cart_items]
-          output:
-            final_amount: { type: number }
-          run: "汇总 variables.cart_items 金额写入 output.final_amount。"
-      edges:
-        - start -> finalize_price
-        - finalize_price -> end
-```
+* **为什么需要显式声明 `output` 契约**：显式 `output` 为内联子图定义了清晰的对外接口边界。父图中的后续节点只需查看内联 `graph` 节点头部的 `output` 声明，即可直接获知该子图产出哪些变量及具体类型，而无需深入子图内部逐个检查节点；同时，校验器也会依据该契约，检查子图内部所有通向 `end` 的执行路径是否都确实产出了这些变量且类型一致。
+* **到达子图 `end` 时的原子提交**：子图执行期间，内部各步骤对变量的写入都暂存在子图独立的块级栈帧（`Block Frame`）中，父图在子图运行过程中看不到任何半成品状态。只有当子图顺利到达 `end` 出口时，列入内联 `graph` 节点 `output` 的变量才会一次性原子写回父图的 `variables` 表。
 
 ### 3. 内部私有中间变量隔离
 
-子图内部节点产出的变量中，只有列入内联 `graph` 节点 `output` 的变量会在子图到达 `end` 时原子写回外层图；其余未导出的中间变量仅存在于子图的 `Block Frame` 内，子图退出后即销毁：
+子图内部节点产出的变量分为两类：列入内联 `graph` 节点 `output` 的**导出变量**，以及未列入 `output` 的**私有中间变量**。私有中间变量仅在子图的 `Block Frame` 内流转，子图退出后即自动销毁，不会污染外层图的命名空间。
+
+以下局部片段以“文本草稿生成与脱敏清洗”子图为例，串联展示上述三条规则：
 
 ```yaml
 nodes:
-  pricing_subflow:
-    input: [cart_items, coupon_code]
-    # 仅导出 final_amount；内部中间变量 base_subtotal 与 promo_deduction 不会进入外层图
+  draft_and_sanitize:
+    # 1. 显式输入捕获：仅从父图捕获 raw_topic；父图其他变量对子图不可见
+    input: [raw_topic]
+    # 2. 显式输出契约：声明子图到达 end 时向父图原子提交 clean_summary
     output:
-      final_amount: { type: number }
+      clean_summary: { type: string }
     graph:
       nodes:
-        calc_discounts:
-          input: [cart_items, coupon_code]
+        generate_draft:
+          input: [raw_topic]
           output:
-            base_subtotal: { type: number }    # 子图私有变量
-            promo_deduction: { type: number }  # 子图私有变量
-          run: "计算原价 output.base_subtotal 与抵扣额 output.promo_deduction。"
+            # 3. 私有中间变量：raw_draft 未列入外层 draft_and_sanitize.output，仅在子图内可见
+            raw_draft: { type: string }
+          run: "围绕 variables.raw_topic 生成初稿写入 output.raw_draft。"
 
-        apply_deduction:
-          input: [base_subtotal, promo_deduction]
+        redact_sensitive_info:
+          input: [raw_draft]
           output:
-            final_amount: { type: number }     # 导出至外层图的目标变量
-          run: "计算 variables.base_subtotal - variables.promo_deduction 写入 output.final_amount。"
+            # 产出与子图 output 契约同名的导出变量
+            clean_summary: { type: string }
+          run: "移除 variables.raw_draft 中的敏感信息，写入 output.clean_summary。"
       edges:
-        - start -> calc_discounts
-        - calc_discounts -> apply_deduction
-        - apply_deduction -> end
+        - start -> generate_draft
+        - generate_draft -> redact_sensitive_info
+        - redact_sensitive_info -> end
 ```
 
 ---

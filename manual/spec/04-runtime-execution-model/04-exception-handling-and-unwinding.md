@@ -16,6 +16,8 @@
 | **不可恢复引擎 Panic** | `MaxStepsExceededError` | 根工作流（Root Graph）自身超出 `max_steps` | **禁止拦截**（直接穿透终止） |
 | **不可恢复引擎 Panic** | `CancelledError` | 外部宿主取消信号、并发兄弟分支 Fail-Fast 协同取消，或图栈帧 `max_steps` 超限时的在途并发任务取消 | **禁止拦截**（直接穿透终止） |
 
+> **内建算子无运行时可恢复异常**：内建算子（`use: builtin:<op>`）属于引擎内部纯确定性同步求值原语，其输出类型契约与合法分支在编译期已完全静态锁定，且禁止挂载 `timeout_ms`、`retry` 与 `catch`。因此在运行期，内建算子**永不产生可恢复运行时异常**（`execution` / `timeout` / `contract` / `max_steps`）；其运行期求值语义详见 [`05-builtin-operational-semantics.md`](./05-builtin-operational-semantics.md)。
+
 ---
 
 ## 二、 节点级执行、重试与捕获状态机（Node Execution State Machine）
@@ -49,15 +51,15 @@ stateDiagram-v2
 ## 三、 `-> fail` 终态与未捕获异常栈展开（Stack Unwinding & Fail-Fast Cancellation）
 
 ### 1. 主动到达 `-> fail` 终态
-当图 $G$ 内的控制令牌沿边 `src -> fail` 到达 `fail` 终态时：
-1. 立即停止图 $G$ 的调度，若 $F_G$ 下仍有尚未完成的并发任务，向其广播不可捕获的 `CancelledError` 并等待其退出，随后销毁图栈帧 $F_G$ 并丢弃其全部局部变量修改；
-2. 构造一个可恢复异常 $E = \texttt{execution}$，并将其抛向包裹图 $G$ 的父节点边界（若 $G$ 为根图，则整个工作流以未捕获 `execution` 异常失败终止）。
+当图 $G$ 内的控制令牌沿边 `src -> fail` 到达 `fail` 终态时，引擎立即停止图 $G$ 的后续调度，构造一个未捕获的可恢复异常 $E = \texttt{execution}$，并直接转入下文第 2 小节的栈展开协议统一处理。
 
 ### 2. 未捕获异常的协同取消与跨帧冒泡
-当图 $G$ 内的节点（或并发分支 / `for_each` 迭代）抛出未被局部 `catch` 拦截的异常 $E$，或图 $G$ 自身触发 $\text{steps}(F_G) > G.\text{max\_steps}$ 超限时：
+当图栈帧 $F_G$ 产生未捕获异常 $E$——包括主动到达 `-> fail` 终态（$E = \texttt{execution}$）、图内节点（或并发分支 / `for_each` 迭代）抛出未被局部 `catch` 拦截的异常，或图 $G$ 自身触发 $\text{steps}(F_G) > G.\text{max\_steps}$ 步数超限（子图产生 $E = \texttt{max\_steps}$，根图产生不可恢复的 `MaxStepsExceededError`）——引擎按以下三步协议有序执行栈展开：
+
 1. **在途并发任务 Fail-Fast 协同取消**：
-   * 若出错点位于 Fork-Join 并发组 `[W_1, ..., W_k]` 或并发 `for_each` 内部，或图栈帧 $F_G$ 因 `max_steps` 超限中断时存在在途并发任务，协调器立即向 $F_G$ 下所有尚未完成的并发分支/迭代及子栈帧发送不可捕获的 `CancelledError`（触发底层执行器 `abort_signal`）并等待其全部退出，丢弃已暂存的全部缓冲槽位。
-2. **当前图栈帧回滚中断**：
-   * 销毁当前图栈帧 $F_G$，不向父栈帧提交任何输出。
-3. **向父栈帧传播**：
-   * 将异常 $E$（保留其原始选择器类型 `execution` / `timeout` / `contract` / `max_steps`；若 $G$ 为根图且因步数超限中断则为不可恢复的 `MaxStepsExceededError`）传递至父栈帧中调用该子图的 `InlineGraphNode` 或 `CallNode` 边界，进入父节点的 `retry` / `catch` 状态机处理。
+   * 若出错点位于 Fork-Join 并发组 `[W_1, ..., W_k]` 或并发 `for_each` 内部，或图栈帧 $F_G$ 下仍存在尚未完成的在途并发分支、迭代及子栈帧，协调器立即向其广播不可捕获的 `CancelledError`（触发底层执行器 `abort_signal`）并等待其全部退出，同时丢弃已暂存的全部并发缓冲槽位。
+2. **当前图栈帧销毁与回滚**：
+   * 销毁当前图栈帧 $F_G$，丢弃其全部局部变量修改，不向父栈帧提交任何输出。
+3. **跨栈帧向父边界传播**：
+   * 若 $G$ 为子图，将异常 $E$（保留其原始选择器类型 `execution` / `timeout` / `contract` / `max_steps`，或透传不可恢复 Panic）传递至父栈帧中调用该子图的 `InlineGraphNode` 或 `CallNode` 边界，进入父节点的 `retry` / `catch` 状态机处理；
+   * 若 $G$ 为根图（Root Graph），整个工作流立即以未捕获异常 $E$ 失败终止。

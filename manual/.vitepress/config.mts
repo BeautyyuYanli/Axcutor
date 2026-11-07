@@ -38,7 +38,7 @@ export default withMermaid(
           {
             text: '渐进式教程导读',
             items: [
-              { text: '教程总览与原语体系', link: '/docs/guide/' }
+              { text: '教程总览', link: '/docs/guide/' }
             ]
           },
           {
@@ -51,11 +51,12 @@ export default withMermaid(
             ]
           },
           {
-            text: '02. 条件分支与动态循环',
+            text: '02. 条件分支、循环与内建算子',
             collapsed: false,
             items: [
               { text: '01. Branches：排他分支与按需产出', link: '/docs/guide/02-control-flow/01-branches' },
-              { text: '02. 成环回边：动态条件循环 (While)', link: '/docs/guide/02-control-flow/02-cycles-and-back-edges' }
+              { text: '02. 成环回边：动态条件循环 (While)', link: '/docs/guide/02-control-flow/02-cycles-and-back-edges' },
+              { text: '03. Builtins：确定性内建算子与数据操作', link: '/docs/guide/02-control-flow/03-builtin-operators' }
             ]
           },
           {
@@ -81,7 +82,7 @@ export default withMermaid(
           {
             text: '实战组合配方导读',
             items: [
-              { text: '工程模式选型矩阵', link: '/docs/cookbook/' }
+              { text: '配方设计原则与组合范式', link: '/docs/cookbook/' }
             ]
           },
           {
@@ -125,7 +126,7 @@ export default withMermaid(
             text: '运行时内建节点字典 (builtin:*)',
             collapsed: false,
             items: [
-              { text: '内建节点总览与通用约定', link: '/docs/reference/builtins/' },
+              { text: '内建节点通用约定', link: '/docs/reference/builtins/' },
               { text: 'builtin:assign (变量赋值/字段提取)', link: '/docs/reference/builtins/assign' },
               { text: 'builtin:unwrap (可空拆包/默认值)', link: '/docs/reference/builtins/unwrap' },
               { text: 'builtin:switch (布尔/枚举路由)', link: '/docs/reference/builtins/switch' },
@@ -150,7 +151,7 @@ export default withMermaid(
           {
             text: '语言与运行时形式化规范',
             items: [
-              { text: '规范总纲与子系统架构', link: '/spec/' }
+              { text: '规范总纲与一致性要求', link: '/spec/' }
             ]
           },
           {
@@ -190,7 +191,8 @@ export default withMermaid(
               { text: '01. 栈帧生命周期与内存模型', link: '/spec/04-runtime-execution-model/01-frame-memory-model' },
               { text: '02. Fork-Join 与 for_each 调度状态机', link: '/spec/04-runtime-execution-model/02-fork-join-and-for-each-scheduler' },
               { text: '03. 运行护栏精确计量规则', link: '/spec/04-runtime-execution-model/03-guardrails-and-step-accounting' },
-              { text: '04. 三级异常、retry/catch/fail 与栈展开', link: '/spec/04-runtime-execution-model/04-exception-handling-and-unwinding' }
+              { text: '04. 三级异常、retry/catch/fail 与栈展开', link: '/spec/04-runtime-execution-model/04-exception-handling-and-unwinding' },
+              { text: '05. 内建算子运行期求值语义', link: '/spec/04-runtime-execution-model/05-builtin-operational-semantics' }
             ]
           },
           {

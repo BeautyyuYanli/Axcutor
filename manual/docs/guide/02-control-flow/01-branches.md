@@ -1,8 +1,8 @@
 # 01. Branches：排他条件分支与按需产出
 
-在业务流程中，节点通常需要根据执行结果走向不同控制分支（如校验通过或驳回、命中缓存或回源查询），且不同分支往往产出不同的字段子集。
+在业务流程中，节点常需根据执行结果走向不同的控制分支（如校验通过或驳回、命中缓存或回源查询），且不同分支往往只产出各自所需的字段子集。
 
-Axcutor 通过 **`branches`（排他控制分支）** 与 **分支关联输出契约（Branch-Scoped Output / Tagged Union）**，支持每个分支仅声明并产出该分支所需的非空字段，无需将互斥分支的字段声明为 `[T, "null"]` 或填充 `null` 占位值。
+Axcutor 通过 **`branches`（排他控制分支）** 与 **分支按需产出契约（Branch-Scoped Output）**，允许每个分支仅声明并产出当前路径实际生成的非空字段，无需将互斥分支的专属字段妥协声明为可空类型 `[T, "null"]` 或填充 `null` 占位值。
 
 ---
 
@@ -12,7 +12,7 @@ Axcutor 通过 **`branches`（排他控制分支）** 与 **分支关联输出�
 
 ### 1. 全量产出简写（`<choice>: "<description>"`）
 
-当各分支均产出节点 `output` 中的全部字段，或节点仅执行条件路由而不产出 `output` 字段时，直接将分支值写为描述字符串：
+当各分支均产出节点 `output` 中的全部字段，或节点仅执行条件路由而不产出任何 `output` 字段时，直接将分支映射为描述字符串：
 
 ```yaml
 verify_signature:
@@ -26,7 +26,7 @@ verify_signature:
 
 ### 2. 分支按需产出子集（`<choice>: { description: "...", output: [<field>, ...] }`）
 
-当不同分支产出不同字段子集时，通过 `output: [<field>, ...]` 显式指定该分支承诺产出的字段列表（若某分支不产出任何字段，可写 `output: []`）：
+当不同分支产出不同的字段子集时，通过 `output: [<field>, ...]` 显式声明该分支承诺产出的字段列表（若某分支不产出任何字段，可声明 `output: []`）：
 
 ```yaml
 inspect_order:
@@ -49,22 +49,24 @@ inspect_order:
 
 ## 二、 分支连边与分支终点（`end.<branch>`）
 
-### 1. 穷尽分支出边（`node.<choice> -> target`）
+### 1. 穷尽分支出边与定值隔离（`node.<choice> -> target`）
 
-未挂载 `for_each` 的有分支节点，必须在 `graph.edges` 中为每一个声明的分支编写唯一一条出边。各分支下游路径仅获得该分支 `output` 子集的定值：
+未挂载 `for_each` 的有分支节点，必须在 `graph.edges` 中为每一个声明的分支编写唯一一条出边。
+
+编译器按分支精确追踪变量的定值状态：沿 `node.<choice>` 出边进入下游时，仅将该分支 `output` 列表中的字段标记为**已定值（Gen）**，同时将节点 `output` 中未列入该分支的其他字段执行**反定值（Kill，即从当前路径的已定值集合中移除）**。这一机制从静态编译期杜绝了下游节点误读未命中分支专属字段或残留旧值的可能：
 
 ```yaml
 edges:
   - start -> inspect_order
-  # approved 分支下游可安全读取 approved_invoice 与 audit_timestamp
+  # approved 分支下游仅定值 approved_invoice 与 audit_timestamp（reject_reason 未定值，不可读取）
   - inspect_order.approved -> issue_shipment
-  # rejected 分支下游可安全读取 reject_reason 与 audit_timestamp
+  # rejected 分支下游仅定值 reject_reason 与 audit_timestamp（approved_invoice 未定值，不可读取）
   - inspect_order.rejected -> send_rejection_notice
 ```
 
 ### 2. 分支出口终点（`-> end.<branch>`）
 
-当根工作流或内联 `graph` 自身声明了 `branches` 时，图内控制流通过 `-> end.<branch>` 退出。通往 `end.<branch>` 的路径只需确保该分支关联的 `output` 子集已定值，其他分支专属的输出变量无需赋值：
+当根工作流或内联 `graph` 自身声明了 `branches` 时，图内控制流通过 `-> end.<branch>` 退出。通往 `end.<branch>` 的路径只需确保该分支声明的 `output` 子集均已定值，其他分支的专属输出字段无需赋值：
 
 ```yaml
 output:
@@ -91,14 +93,16 @@ graph:
 
 ---
 
-## 三、 确定性路由、比较、逻辑、拆包与查找内建算子
+## 三、 确定性条件路由与可空拆包算子
 
-当图中条件判断与数据读取不涉及外部 I/O 或复杂业务推理时，可直接调用运行时内建算子执行**零外部执行器开销**的确定性路由、比较、布尔逻辑组合、可空拆包、按键/按索引安全查找或分支常量定值（注意：所有内建算子的输出目标变量均须已在当前图符号表中显式声明类型，完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）。
+当图中的条件分流与可空值判空不涉及外部 I/O 或复杂推理时，可直接调用内建算子执行**零外部执行器开销**的确定性路由与拆包（所有内建算子的输出目标变量均须在当前图符号表中显式声明类型，完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）。
 
-### 1. [`builtin:switch`](../../reference/builtins/switch.md)：布尔与枚举确定性路由
+> 若需在多条分支汇合前为公共变量赋予常量初值或拷贝字段，可使用 [`builtin:assign`](../../reference/builtins/assign.md) 直接完成定值而无需调用 `run` 节点；关于 `builtin:assign` 以及 `builtin:map_get`、`builtin:array_get` 等容器查找与数据操作算子的详细用法，请参阅 [03. Builtins：确定性内建算子与数据操作](./03-builtin-operators.md)。
 
-* 绑定 `type: boolean` 变量或结构体字段路径时，自动暴露 **`.true`** 与 **`.false`** 分支。
-* 绑定 `type: string, enum: [<v1>, <v2>, ...]` 变量或结构体字段路径时，要求每个枚举值 `<vi>` 均为合法分支标识符（匹配 `^[a-zA-Z_][a-zA-Z0-9_]*$` 且不属于 `start`/`end`/`fail`），自动暴露与各枚举值同名的 **`.<v1>`**、**`.<v2>`** 分支。
+### 1. [`builtin:switch`](../../reference/builtins/switch.md)：布尔与枚举多路路由
+
+* **布尔路由**：绑定 `type: boolean` 变量或结构体字段路径时，自动暴露 **`.true`** 与 **`.false`** 两个分支。
+* **枚举多路路由**：绑定 `type: string, enum: [<v1>, <v2>, ...]` 变量或结构体字段路径时，要求每个枚举值 `<vi>` 均为合法分支标识符（匹配 `^[a-zA-Z_][a-zA-Z0-9_]*$` 且不为 `start`、`end`、`fail`），自动暴露与各枚举值同名的 **`.<v1>`**、**`.<v2>`** 分支。
 
 ```yaml
 nodes:
@@ -125,10 +129,10 @@ edges:
   - route_priority.low -> batch_handler
 ```
 
-### 2. [`builtin:compare`](../../reference/builtins/compare.md) 与 [`builtin:logic`](../../reference/builtins/logic.md)：二元比较与布尔逻辑组合
+### 2. [`builtin:compare`](../../reference/builtins/compare.md) 与 [`builtin:logic`](../../reference/builtins/logic.md)：比较与逻辑分支路由
 
-* **[`builtin:compare`](../../reference/builtins/compare.md)**：支持相等性比较（`eq`、`ne`，按 JSON 深度值比较且允许可空变量与 `null` 判等）与非空标量序比较（`lt`、`lte`、`gt`、`gte`，支持 `integer`/`number` 数值大小比较与 `string` 字典序比较）。省略 `with.output` 时直接暴露 **`.true`** / **`.false`** 分支；声明 `with.output.result` 时将布尔结果写入变量（无分支单出边）。
-* **[`builtin:logic`](../../reference/builtins/logic.md)**：对非空 `boolean` 执行逻辑与（`and`）、逻辑或（`or`）或逻辑非（`not`）。同样支持省略 `with.output` 直接暴露 **`.true`** / **`.false`** 分支，或声明 `with.output.result` 输出布尔变量。
+* **[`builtin:compare`](../../reference/builtins/compare.md)**：支持相等性比较（`eq`、`ne`，按 JSON 深度值判等，且允许可空变量与 `null` 比较）与非空标量序比较（`lt`、`lte`、`gt`、`gte`，支持 `integer`/`number` 数值比较与 `string` 字典序比较）。省略 `with.output` 时直接作为路由节点暴露 **`.true`** / **`.false`** 分支；声明 `with.output.result` 时将布尔结果写入目标变量（收敛为无分支单出边）。
+* **[`builtin:logic`](../../reference/builtins/logic.md)**：对非空 `boolean` 执行逻辑与（`and`）、逻辑或（`or`）或逻辑非（`not`）。同样支持省略 `with.output` 直接暴露 **`.true`** / **`.false`** 分支，或声明 `with.output.result` 将布尔结果写入变量。
 
 ```yaml
 graph:
@@ -166,20 +170,20 @@ graph:
 
 ### 3. [`builtin:unwrap`](../../reference/builtins/unwrap.md)：可空类型拆包与默认值合并
 
-`builtin:unwrap` 将可空类型 `[T, "null"]`（包括显式声明为 `[T, "null"]` 的变量/字段，以及在 `TypedDict.properties` 中声明但未列入 `required`、投影时自动提升为 `[T, "null"]` 的可选叶子字段）收窄为非空类型 `T`，支持两种模式：
+`builtin:unwrap` 将可空类型 `[T, "null"]`（包括显式声明为 `[T, "null"]` 的变量/字段，以及 `TypedDict.properties` 中未列入 `required`、在路径投影时自动提升为 `[T, "null"]` 的可选字段）收窄为非空类型 `T`，支持两种工作模式：
 
-* **模式 A（省略 `default`）**：暴露 **`.some`** 与 **`.none`** 两个分支；在 `.some` 分支下产出非空类型 `T` 的目标变量 `value`，在 `.none` 分支下不产出 `value`（`output: []`，且从定值集反定值移除 `value`）。
-* **模式 B（传入 `default`）**：无分支单出边（`node -> target`）；当 `source` 为 `null`（或可选字段缺失）时自动回退为非空 `default` 值，直接产出非空类型 `T` 的 `value`。
+* **条件拆包模式（省略 `default`）**：暴露 **`.some`** 与 **`.none`** 两个分支。当源值非空时走 `.some` 分支，将拆包后的非空值写入目标变量 `value`；当源值为 `null`（或可选字段缺失）时走 `.none` 分支，不产出 `value`（`output: []`，并在该分支路径上对 `value` 执行反定值，防止下游误读旧值）。
+* **默认值合并模式（传入 `default`）**：收敛为无分支单出边（`node -> target`）。当 `source` 为 `null`（或可选字段缺失）时自动回退为非空 `default` 值，始终产出非空类型 `T` 的目标变量 `value`。
 
 ```yaml
 graph:
-  # 显式声明仅由 builtin:unwrap 写入的局部目标变量类型
+  # 显式声明由 builtin:unwrap 写入的目标变量类型
   variables:
     reviewer_id: { type: string }
     operator_name: { type: string }
 
   nodes:
-    # 模式 A（省略 default）：条件拆包，暴露 .some（产出 reviewer_id）与 .none（不产出）
+    # 条件拆包（省略 default）：暴露 .some（定值 reviewer_id）与 .none（不产出并反定值 reviewer_id）
     check_assigned_reviewer:
       use: builtin:unwrap
       with:
@@ -188,7 +192,7 @@ graph:
         output:
           value: reviewer_id
 
-    # 模式 B（传入 default）：默认值合并，无分支单出边，直接产出非空 string 变量 operator_name
+    # 默认值合并（传入 default）：无分支单出边，始终产出非空 string 变量 operator_name
     resolve_operator_with_default:
       use: builtin:unwrap
       with:
@@ -203,50 +207,6 @@ graph:
     - resolve_operator_with_default -> check_assigned_reviewer
     - check_assigned_reviewer.some -> notify_specific_reviewer
     - check_assigned_reviewer.none -> assign_from_pool
-```
-
-### 4. [`builtin:map_get`](../../reference/builtins/map-get.md)、[`builtin:array_get`](../../reference/builtins/array-get.md) 与 [`builtin:assign`](../../reference/builtins/assign.md)：容器安全查找与分支常量定值
-
-* **[`builtin:map_get`](../../reference/builtins/map-get.md)**：按动态字符串键 `key` 查询有序映射 `OrderedMap<string, V>`。省略 `default` 时暴露 **`.some`**（键存在，定值 `value`）与 **`.none`**（键不存在，反定值移除 `value`）两个分支；传入 `default` 时收敛为无分支单出边。
-* **[`builtin:array_get`](../../reference/builtins/array-get.md)**：按整数下标 `index`（支持负数倒数索引，如 `-1` 表示末尾元素）非破坏性地读取列表 `Array<T>` 元素。省略 `default` 时暴露 **`.some`**（下标未越界，定值 `value`）与 **`.none`**（越界，反定值移除 `value`）两个分支；传入 `default` 时收敛为无分支单出边。
-* **[`builtin:assign`](../../reference/builtins/assign.md)**：将变量、结构体字段路径或常量字面量直接绑定写入目标顶层变量 `value`，常用于在分支合流前无需调用 `run` 即可完成变量的默认定值或字段提取。
-
-```yaml
-graph:
-  variables:
-    final_answer: { type: string }
-    top_candidate: { type: string }
-    audit_tag: { type: string }
-
-  nodes:
-    # 1. 按动态键 query_id 查找缓存字典 answer_cache：存在走 .some，不存在走 .none
-    lookup_cached_answer:
-      use: builtin:map_get
-      with:
-        input:
-          source: answer_cache
-          key: query_id
-        output:
-          value: final_answer
-
-    # 2. 按下标 0 安全读取候选列表首元素：非空走 .some，空列表越界走 .none
-    read_first_candidate:
-      use: builtin:array_get
-      with:
-        input:
-          source: ranked_candidates
-          index: 0
-        output:
-          value: top_candidate
-
-    # 3. 在无需计算的分支上，使用 builtin:assign 直接将常量赋给汇合变量 audit_tag
-    set_cache_hit_tag:
-      use: builtin:assign
-      with:
-        input:
-          source: { value: "cache_hit" }
-        output:
-          value: audit_tag
 ```
 
 ---

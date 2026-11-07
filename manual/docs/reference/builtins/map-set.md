@@ -1,6 +1,6 @@
 # `builtin:map_set`：有序映射键值写入
 
-在成环回边循环或串行流程中，向强类型有序映射（Ordered Mapping：`type: object` + `additionalProperties: TV`）插入或更新键值对，并保持 Ordered Map 的插入顺序。
+在成环回边循环或串行流程中，向强类型有序映射（`OrderedMap`：`type: object` + `additionalProperties: <值类型>`）插入或更新键值对，并保持 `OrderedMap` 的插入顺序。
 
 ---
 
@@ -8,16 +8,16 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型有序映射 $T_{\text{src}}$，且满足对目标映射类型的协变子类型兼容 $T_{\text{src}} <: \Sigma(v_{\text{res}})$。 |
-| **`with.input`** | `key` | **必填** | 绑定满足 $\text{TypeOf}(\Sigma, \text{key}) <: \{ \texttt{type}: \texttt{string} \}$ 的非空字符串变量、结构体字段路径或 `{ value: "<str>" }` 常量字面量。 |
-| **`with.input`** | `value` | **必填** | 绑定满足子类型兼容 $\text{TypeOf}(\Sigma, \text{value}) <: T_{V,\text{target}}$ 的变量/结构体字段路径，或兼容 $T_{V,\text{target}}$ 的常量字面量。 |
-| **`with.output`** | `result` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{res}}$，要求 $\Sigma(v_{\text{res}}) = \{ \texttt{type}: \texttt{object}, \texttt{additionalProperties}: T_{V,\text{target}} \}$ 为非空有序映射。可与 `source` 绑定同一个顶层映射变量名以更新变量绑定。 |
+| **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型有序映射（`type: object` 且声明了 `additionalProperties`），其值类型须与目标变量 `result` 声明的值类型兼容（相同或为其子类型）。 |
+| **`with.input`** | `key` | **必填** | 绑定非空字符串（`type: string`）类型的变量、结构体字段路径，或 `{ value: "<str>" }` 字符串常量字面量。 |
+| **`with.input`** | `value` | **必填** | 绑定与目标映射值类型（`result` 的 `additionalProperties` 类型）兼容的变量、结构体字段路径或常量字面量。 |
+| **`with.output`** | `result` | **必填** | 写入当前图 `variables` 中已声明的目标顶层变量，要求其类型为非空有序映射（`type: object` 且声明了 `additionalProperties`）。可与 `source` 绑定同一个顶层映射变量名，以写时复制方式更新该变量。 |
 
-### 控制流、纯函数式不可变更新与键序不变式
+### 控制流、写时复制更新与键序保持规则
 
-* **无分支单出边（`node -> target`）**：以纯函数式不可变方式（Copy-on-Write）构造并返回更新后的新有序映射副本写入 `result`（不原地修改输入快照引用），同时严格遵循 **`OrderedMap` 键序不变式**：
-  * **键已存在（$k \in \text{dom}(source)$）**：更新该键关联的值，并**保持键 $k$ 原有的插入位置不变**；
-  * **键不存在（$k \notin \text{dom}(source)$）**：将新键值对 $(k, value)$ **追加在遍历序列末尾**。
+* **无分支单出边（`node -> target`）**：以写时复制（Copy-on-Write）的不可变方式构造并返回更新后的新 `OrderedMap` 副本写入 `result`（不原地修改 `source` 原始映射），同时严格遵循 **`OrderedMap` 键序保持规则**：
+  * **已有键（`key` 已存在于 `source` 中）**：**原位更新**该键关联的值，保持该键原有的插入位置与遍历顺序不变；
+  * **新键（`key` 不存在于 `source` 中）**：将新键值对 **`key: value` 追加在末尾**。
 
 ---
 

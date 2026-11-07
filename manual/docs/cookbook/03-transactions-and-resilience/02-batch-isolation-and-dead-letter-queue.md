@@ -2,57 +2,24 @@
 
 ## 一、 场景与需求
 
-批量并发执行沙箱脚本任务列表 `raw_tasks` 时，需实现元素级容错与分流：
+批量并发执行沙箱脚本任务列表 `raw_tasks` 时，需按故障性质实现元素级容错隔离与分级分流：
 
-1. **单元素超时原地重试**：单个任务单次尝试超时上限为 `5000ms`；若发生超时（`timeout`），仅对该任务原地重试 1 次（`max_attempts: 2`），同批次其他任务不受影响。
-2. **元素级异常隔离与死信分流**：
-   * 重试后仍超时的任务（`timeout`），通过 [`builtin:assign`](../../reference/builtins/assign.md) 将其原始结构体零拷贝归入 `timed_out_tasks` 列表；
-   * 执行期报错崩溃的任务（`execution`），通过 `builtin:assign` 将其原始结构体零拷贝归入 `crashed_tasks` 死信列表；
-   * 正常完成的任务，将其标准输出收集至 `completed_outputs` 列表。
-3. **契约违约整批快速失败（Fail-Fast）**：若发生未在 `catch` 中列出的 `contract` 异常，立即取消同批在途任务并向上冒泡。
+1. **单元素超时原地重试**：单个任务单次尝试限时 `5000ms`；若执行超时，仅对该任务原地重试 1 次，同批次其他任务不受影响。
+2. **元素级异常隔离与死信分流**：单个任务的超时或运行期崩溃不中断整批任务，而是按单元素最终结局分流归集：
+   * 正常完成的任务，收集其标准输出至 `completed_outputs` 列表；
+   * 重试耗尽仍超时的任务，保留其原始任务结构体并归入 `timed_out_tasks` 列表；
+   * 运行期报错崩溃的任务，保留其原始任务结构体并归入 `crashed_tasks` 死信列表。
+3. **契约违约整批快速失败（Fail-Fast）**：若任意任务发生输入/输出结构不合法的契约违约，立即取消同批在途任务并向上冒泡终止整批流程。
 
 ---
 
 ## 二、 核心原语组合要点
 
-将 `for_each` 挂载在 SESE 内联 `graph` 节点上，并在子图内部的动作节点 `run_sandbox` 上组合 `timeout_ms`、`retry`、`catch` 与 `builtin:assign`：
+将 `for_each` 挂载在 SESE 内联 `graph` 节点上，把单次元素迭代的超时重试、异常捕获与死信分流封装在子图内部：
 
-* `run_sandbox` 的 `catch` 将单次元素迭代的 `timeout` 与 `execution` 异常分别物化为异常分支 `on_timeout` 与 `on_crash`。
-* 在 `on_timeout` 与 `on_crash` 分支下分别串联 `builtin:assign`，零拷贝将原始任务结构体 `current_task` 赋值给 `timed_out_tasks` 与 `crashed_tasks`，并走向子图分支终点 `end.timed_out` 与 `end.crashed`。
-* 外层 `for_each` 按 `branches.<branch>.output` 子集自动将正常完成的输出收集至 `completed_outputs`，将超时与崩溃的原始任务结构体收集至对应死信队列：
-
-```yaml
-batch_execute_scripts:
-  for_each:
-    source: raw_tasks
-    item: current_task
-    concurrency: 4
-  output:
-    completed_outputs: { type: string }
-    timed_out_tasks:
-      type: object
-      properties:
-        task_id: { type: string }
-        script: { type: string }
-      required: [task_id, script]
-    crashed_tasks:
-      type: object
-      properties:
-        task_id: { type: string }
-        script: { type: string }
-      required: [task_id, script]
-  branches:
-    ok:
-      description: "脚本正常完成，产出标准输出"
-      output: [completed_outputs]
-    timed_out:
-      description: "重试后仍超时，归入超时队列"
-      output: [timed_out_tasks]
-    crashed:
-      description: "脚本运行期崩溃，归入死信队列"
-      output: [crashed_tasks]
-  graph: ...
-```
+* **子图内重试与选择性捕获（`timeout_ms` + `retry` + `catch`）**：在子图动作节点 `run_sandbox` 上声明 `timeout_ms: 5000` 与 `retry: { max_attempts: 2, on: [timeout] }` 实现单元素原地重试；通过 `catch` 仅将 `timeout` 与 `execution` 异常分别物化为 `on_timeout` 与 `on_crash` 分支，未列出的 `contract` 异常直接跨子图向上冒泡以触发整批 Fail-Fast 取消。
+* **死信负载零拷贝透传（[`builtin:assign`](../../reference/builtins/assign.md)）**：在 `on_timeout` 与 `on_crash` 分支下分别串联 `builtin:assign`，将当前迭代项 `current_task` 零拷贝赋值给 `timed_out_tasks` 与 `crashed_tasks`，并分别走向子图分支终点 `end.timed_out` 与 `end.crashed`。
+* **外层按分支子集自动归集（`for_each` + `branches`）**：外层 `for_each` 根据 `branches.<branch>.output` 声明的产出子集，自动将落入 `ok`、`timed_out`、`crashed` 分支的单次迭代产出分别聚合至 `completed_outputs`、`timed_out_tasks` 与 `crashed_tasks` 列表，并在全批结束后收敛为单条无分支出边。
 
 ---
 

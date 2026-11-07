@@ -8,14 +8,14 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型列表 $T_{\text{src}} = \{ \texttt{type}: \texttt{array}, \texttt{items}: T \}$（支持顶层变量或结构体字段路径）。 |
-| **`with.output`** | `item` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{item}}$，要求满足子类型兼容 $T <: \Sigma(v_{\text{item}})$，且不可与 `rest` 同名。 |
-| **`with.output`** | `rest` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{rest}}$，要求满足子类型兼容 $T_{\text{src}} <: \Sigma(v_{\text{rest}})$。可与 `source` 绑定同一个顶层列表变量名，以推进队列切片。 |
+| **`with.input`** | `source` | **必填** | 绑定已定值的强类型列表（即 `type: array` 且明确声明了元素类型 `items`；支持顶层变量或结构体字段路径）。 |
+| **`with.output`** | `item` | **必填** | 写入当前图中已声明的顶层变量；其声明类型必须兼容 `source` 的元素类型，且不可与 `rest` 绑定同一个变量名。 |
+| **`with.output`** | `rest` | **必填** | 写入当前图中已声明的顶层列表变量；其声明类型必须兼容 `source` 的列表类型。可与 `source` 绑定同一个顶层列表变量名，用于在循环中推进队列切片。 |
 
-### 控制流分支行为、不可变切片与反定值（Kill）语义
+### 控制流分支行为与不可变切片语义
 
-* **`.some` 分支（运行时 `len(source) > 0`，关联 `output: [item, rest]`）**：将 `source[0]` 写入 `item`，并以纯函数式不可变方式（Copy-on-Write）构造剩余切片的新列表副本 `source[1:]` 写入 `rest`（不原地篡改输入快照引用）；下游路径上 `item` 与 `rest` 均获得定值。
-* **`.empty` 分支（运行时 `len(source) == 0`，关联 `output: []`，反定值杀死集 `KillVars = {item}`）**：不写入 `item` 与 `rest`；在编译期必达定值分析中从入口定值集移除 `item`（$Def_{\text{out}}(N.\text{empty}) = Def_{\text{in}}(N) \setminus \{item\}$），并在运行期进入 `.empty` 分支时将当前栈帧中的 `item` 置为未绑定（Unbound）。若在 `.empty` 下游重新定值前读取 `item` 将在编译期报错；同时允许同一张图中前后多个独立的 `array_shift` 循环合法复用同一个迭代变量名 `item`。
+* **`.some` 分支（列表非空，产出 `item` 与 `rest`）**：当 `source` 至少包含一个元素时走此分支。节点将首元素 `source[0]` 写入 `item`，并以不可变方式构造除首元素外的剩余切片副本 `source[1:]` 写入 `rest`（不会原地修改原列表引用）；在该分支下游路径上，`item` 与 `rest` 均处于已定值状态，可直接读取。
+* **`.empty` 分支（列表为空，不产出新值并重置 `item` 定值状态）**：当 `source` 为空列表时走此分支。节点不会写入 `item` 与 `rest`，同时会将 `item` 重置为**未定值（未绑定）**状态，防止下游误读上一轮循环残留的旧元素值。若在 `.empty` 分支下游未重新赋值就读取 `item`，静态检查将直接报错；这一机制也允许同一张图中前后多个独立的 `array_shift` 循环安全地复用同一个 `item` 迭代变量名。
 
 ---
 
@@ -45,6 +45,6 @@ graph:
     - pop_next_endpoint.some -> try_request
     - try_request.ok -> end.success
     - try_request.failed -> pop_next_endpoint
-    # 队列耗尽时退出循环（current_endpoint 在 .empty 分支上被反定值置为未绑定）
+    # 队列耗尽时退出循环（current_endpoint 在 .empty 分支上已重置为未定值状态）
     - pop_next_endpoint.empty -> end.all_failed
 ```

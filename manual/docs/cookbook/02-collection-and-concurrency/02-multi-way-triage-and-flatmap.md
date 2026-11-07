@@ -4,58 +4,17 @@
 
 批量并发处理用户反馈列表 `batch.feedbacks` 时，需在遍历中同时完成三项数据汇总：
 
-1. **原元素零拷贝保留**：若某条反馈涉及严重线上故障（走 `urgent` 分支），通过 [`builtin:assign`](../../reference/builtins/assign.md) 将该原始反馈结构体零拷贝保留至 `urgent_feedbacks` 列表，并额外生成紧急工单 `urgent_tickets`；若属无效垃圾信息（走 `spam` 分支），直接跳过且不产出任何字段。
-2. **按分支条件收集（`branches.<branch>.output`）**：所有有效反馈（`urgent` 与 `normal` 分支）均产出结构化情感分析结果，经一阶同构集合提升汇聚为 `analyzed_items` 列表；紧急工单则仅从 `urgent` 分支收集为 `urgent_tickets` 列表。
-3. **二维列表单层展平（[`builtin:array_flatten`](../../reference/builtins/array-flatten.md)）**：每条有效反馈产出的标签列表（单次迭代类型为 `Array<string>`，经 `for_each` 一阶提升为二维列表 `nested_feature_tags: Array<Array<string>>`）通过 `builtin:array_flatten` 按原序展开拼接为一维总表 `all_feature_tags`（`Array<string>`）。
+1. **原元素零拷贝保留**：若反馈涉及严重线上故障，走 `urgent` 分支，通过 [`builtin:assign`](../../reference/builtins/assign.md) 将原始反馈结构体零拷贝保留至 `urgent_feedbacks` 列表，并额外生成紧急工单 `urgent_tickets`；若属垃圾信息，走 `spam` 分支，直接跳过且不产出任何字段。
+2. **按分支条件收集**：`urgent` 与 `normal` 分支均产出结构化情感分析结果，经一阶同构集合提升汇聚为 `analyzed_items` 列表；紧急工单则仅从 `urgent` 分支收集为 `urgent_tickets` 列表。
+3. **二维列表单层展平**：每条有效反馈产出的标签列表 `Array<string>` 经 `for_each` 一阶提升为二维列表 `nested_feature_tags`，再通过 [`builtin:array_flatten`](../../reference/builtins/array-flatten.md) 按原序展开拼接为一维总表 `all_feature_tags`。
 
 ---
 
 ## 二、 核心原语组合要点
 
-1. **在 `for_each` 节点上直接复用 `output` 与 `branches.<branch>.output`**：在 `output` 中直接声明外层集合变量名及其单次迭代元素类型 $U$；通过 `branches.<branch>.output` 控制各分支产出的字段子集（走 `spam` 分支时不产出任何字段，在屏障汇聚时自动跳过）。
-2. **在内联 `graph` 中组合 `builtin:assign` 实现原元素零拷贝透传**：在 `triage_single.urgent` 分支下串联 `builtin:assign` 将原元素 `feedback` 直接赋值给 `urgent_feedbacks`，无需执行器在结构化输出中重复拷贝输入结构体。
-3. **串联 `builtin:array_flatten` 完成二维列表展平**：将 `for_each` 一阶提升得到的二维列表 `nested_feature_tags` 展平为一维列表 `all_feature_tags`：
-
-```yaml
-analyze_each:
-  for_each:
-    source: batch.feedbacks
-    item: feedback
-    index: idx
-    concurrency: 4
-  output:
-    urgent_feedbacks:
-      type: object
-      properties:
-        user_id: { type: string }
-        content: { type: string }
-      required: [user_id, content]
-    analyzed_items:
-      type: object
-      properties:
-        index: { type: integer }
-        user_id: { type: string }
-        sentiment:
-          type: string
-          enum: [positive, neutral, negative]
-      required: [index, user_id, sentiment]
-    urgent_tickets:
-      type: string
-    nested_feature_tags:
-      type: array
-      items: { type: string }
-  branches:
-    urgent:
-      description: "严重线上故障，保留原反馈并额外产出紧急工单"
-      output: [urgent_feedbacks, analyzed_items, urgent_tickets, nested_feature_tags]
-    normal:
-      description: "普通有效反馈，仅产出情感分析与标签"
-      output: [analyzed_items, nested_feature_tags]
-    spam:
-      description: "无意义垃圾信息，不产出任何字段"
-      output: []
-  graph: ...
-```
+1. **在 `for_each` 节点上组合 `output` 与 `branches.<branch>.output`**：在 `output` 中直接声明外层集合变量名及其单次迭代元素类型 $U$，并通过 `branches.<branch>.output` 限定各分支产出的字段子集；当单次迭代以 `end.spam` 结束时，因其声明 `output: []`，屏障汇聚会自动跳过该迭代而不向任何外层列表追加元素。
+2. **在内联 `graph` 中串联 `builtin:assign` 实现原元素零拷贝透传**：在子图的 `triage_single.urgent` 分支后串联 `builtin:assign`，将迭代绑定变量 `feedback` 直接赋值给 `urgent_feedbacks`，无需执行器在结构化输出中重复拷贝输入结构体。
+3. **在 `for_each` 后串联 `builtin:array_flatten` 完成二维列表展平**：`analyze_each` 屏障汇聚完成后，将一阶提升产出的二维中间列表 `nested_feature_tags` 传入 `builtin:array_flatten`，展平为一维总表 `all_feature_tags` 供下游汇总节点消费。
 
 ---
 
@@ -187,11 +146,11 @@ graph:
               spam:
                 description: "无意义垃圾信息"
                 output: []
-            run:
-              - "分析第 variables.idx 条反馈（用户 variables.feedback.user_id）：variables.feedback.content。"
-              - "若为垃圾信息，直接选择 spam 分支。"
-              - "构造结构化分析写入 output.analyzed_items，提取诉求标签列表写入 output.nested_feature_tags。"
-              - "若属严重线上故障，生成工单描述写入 output.urgent_tickets 并选择 urgent；否则选择 normal。"
+            run: |
+              分析第 variables.idx 条反馈（用户 variables.feedback.user_id）：variables.feedback.content。
+              若为垃圾信息，直接选择 spam 分支。
+              构造结构化分析写入 output.analyzed_items，提取诉求标签列表写入 output.nested_feature_tags。
+              若属严重线上故障，生成工单描述写入 output.urgent_tickets 并选择 urgent；否则选择 normal。
 
           # 子图步骤 1.2：仅在 urgent 分支下，通过 builtin:assign 零拷贝透传原始 feedback 结构体
           keep_urgent_feedback:

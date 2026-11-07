@@ -44,12 +44,20 @@
 无论 `CallNode` 是调用外部子工作流（`use: workflow:<path>`）还是调用内建算子（`use: builtin:<op>`），**均不支持 `with.input` 的隐式同名省略**：
 
 * **对 `use: workflow:<path>`**：必须满足 $\text{dom}(N.\text{with.input}) = \text{dom}(\text{target.input})$（当 $\text{target.input}$ 非空时，每个目标参数 $p \in \text{dom}(\text{target.input})$ 均须在 `with.input` 中显式写出；若与外层变量同名，写作 `p: p`；当 $\text{dom}(\text{target.input}) = \emptyset$ 时，允许省略 `with.input`）；缺失任何目标参数或包含不属于 $\text{dom}(\text{target.input})$ 的键名，编译期报错。
-* **对 `use: builtin:<op>`**（其中 `<op>` 必须属于 16 个标准内建算子集合：$\{\texttt{unwrap}, \texttt{switch}, \texttt{assign}, \texttt{array\_shift}, \texttt{array\_append}, \texttt{map\_set}, \texttt{map\_get}, \texttt{map\_delete}, \texttt{object\_merge}, \texttt{array\_flatten}, \texttt{compare}, \texttt{logic}, \texttt{math}, \texttt{length}, \texttt{array\_get}, \texttt{array\_concat}\}$）：
-  * **`with.input` 约束**：算子签名要求的全部必填 `with.input` 参数（如 `source`、`item`、`key`、`value`、`op`、`left`、`right`、`index`；对 `builtin:object_merge` 为可选保留键 `base` 及至少 1 个目标结构体字段名 $f_i$）必须在 `with.input` 中显式写出，缺失任何必填项或包含未知参数名均在编译期报错。
+* **对 `use: builtin:<op>`**（其中 `<op>` 必须属于按逻辑类别划分的 16 个标准内建算子集合）：
+  * **标量、赋值与拆包类（2 个）**：`assign`、`unwrap`；
+  * **路由、比较、逻辑、算术与长度类（5 个）**：`switch`、`compare`、`logic`、`math`、`length`；
+  * **列表操作类（5 个）**：`array_shift`、`array_append`、`array_flatten`、`array_get`、`array_concat`；
+  * **有序映射与结构体操作类（4 个）**：`map_set`、`map_get`、`map_delete`、`object_merge`。
+  * **`with.input` 约束**：算子签名要求的全部必填 `with.input` 参数必须在 `with.input` 中显式写出，缺失任何必填项或包含未知参数名均在编译期报错。各类算子的入参键名分类如下：
+    * 单源输入算子（`assign`、`unwrap`、`switch`、`length`、`array_shift`、`array_flatten`）：必填 `source`；
+    * 二元运算算子（`compare`、`logic`、`math`）：必填 `op`、`left`、`right`；其中一元取反 `logic(op: "not")` 仅需 `op` 与 `left`；
+    * 列表/映射按位或按键访问与修改算子：必填 `source` 及对应的辅助键（`array_append` 需 `item`；`array_get` 需 `index`；`array_concat` 需 `left` 与 `right`；`map_get` 与 `map_delete` 需 `key`；`map_set` 需 `key` 与 `value`）；
+    * 结构体合并算子（`object_merge`）：包含可选保留键 `base` 及至少 1 个目标结构体字段名 $f_i$。
   * **`with.output` 可选性约束**：
     * `builtin:switch` **禁止声明** `with.output`；
     * `builtin:compare` 与 `builtin:logic` 的 `with.output` **可选**（省略 `with.output` 时直接暴露 `.true` / `.false` 控制分支；显式声明 `with.output: { result: <var> }` 时为无分支单出边）；
-    * 其余 13 个内建算子的 `with.output` **必填**，且必须显式写出算子签名要求的全部输出键（`value`、`result` 或 `item` + `rest`）。
+    * 其余 13 个内建算子的 `with.output` **必填**，且必须显式写出算子签名要求的全部输出键（单值透传/读取算子 `assign`、`unwrap`、`array_get`、`map_get` 为 `value`；容器变换与计算算子为 `result`；`array_shift` 为 `item` + `rest`）。
   * 具体各算子的入参、出参及控制分支契约见 [`05-builtin-generic-inference.md`](../02-type-system-and-symbols/05-builtin-generic-inference.md)。
 
 ### 2. `with.input.<param>` 的四态语法解析规则
@@ -72,7 +80,7 @@
 
 * **键与值合法性**：`with.output`（可选，默认 `{}`；当挂载 `for_each` 时要求至少映射 1 个目标输出字段）中的每个键 $f$ 必须满足 $f \in \text{dom}(\text{target.output})$，每个值 `<local_var>` 必须为合法顶层 `Identifier`（**禁止将值设为 `null`**）。
 * **显式映射与未列出字段默认忽略**：
-  1. 对每个显式列出的条目 `f: <local_var>`，将目标输出字段 $f$ 绑定至调用方图的顶层变量 `<local_var>`（若节点未挂载 `for_each`，`<local_var>` 的类型为单次输出类型 $U = \text{target.output}[f]$；若节点挂载了 `for_each`，`<local_var>` 的类型为经一阶同构集合提升后的类型 $\text{Lift}(T_{\text{src}}, U)$，详见 [`03-two-phase-symbol-resolution.md`](../02-type-system-and-symbols/03-two-phase-symbol-resolution.md)）；
+  1. 对每个显式列出的条目 `f: <local_var>`，将目标输出字段 $f$ 绑定至调用方图的顶层变量 `<local_var>`（若节点未挂载 `for_each`，`<local_var>` 的类型为单次输出类型 $U = \text{target.output}[f]$；若节点挂载了 `for_each`，`<local_var>` 的类型为经一阶同构集合提升后的类型 $\text{Lift}(T_{\text{src}}, U)$，详见 [03. 单遍显式符号表与模块化类型检查](../02-type-system-and-symbols/03-two-phase-symbol-resolution.md)）；
   2. 对未在 `with.output` 中列出的任何目标输出字段 $f' \in \text{dom}(\text{target.output}) \setminus \text{dom}(N.\text{with.output})$，默认表示**忽略（Ignore / Discard）**：既不要求在调用方符号表 $\Sigma_{\text{caller}}$ 中存在，也不在运行期写回调用方栈帧（被调用方内部出口仍照常执行 `target.output` 的契约校验）。
 * **单射约束（Injective Mapping）**：
   $$\forall f_1, f_2 \in \text{dom}(N.\text{with.output}), \quad f_1 \neq f_2 \implies N.\text{with.output}[f_1] \neq N.\text{with.output}[f_2]$$

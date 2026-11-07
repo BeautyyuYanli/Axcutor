@@ -11,19 +11,11 @@
 
 ## 二、 核心原语组合要点
 
-1. **内联 `graph` 事务封装**：将三步流程封装在内联 `graph` 节点 `settlement_transaction` 中，在该节点上声明 `timeout_ms: 15000` 与 `catch: { tx_failed: [execution, timeout, contract] }`。
-2. **子图内部主动回滚（`-> fail`）**：当 `verify_amount` 走向 `.invalid` 分支时，通过边 `verify_amount.invalid -> fail` 主动触发子图回滚，向父节点抛出 `execution` 异常。
-3. **外层 `catch` 补偿路由**：父图通过 `settlement_transaction.tx_failed -> enqueue_retry_job` 执行补偿并为 `status_note` 赋值，随后走向 `end.deferred`：
+在工作流中构建多步事务时，需严格区分**子图栈帧内存级原子回滚**与**外部系统业务级补偿**两个层面的职责边界：
 
-```yaml
-# 子图内校验失败时主动走向 fail，触发子图回滚并抛出 execution 异常
-edges:
-  - start -> fetch_order
-  - fetch_order -> verify_amount
-  - verify_amount.invalid -> fail
-  - verify_amount.valid -> submit_clearing
-  - submit_clearing -> end
-```
+1. **内联 `graph` 事务边界与共享超时封装**：将三步流程封装在 SESE（单入口单出口）内联 `graph` 节点 `settlement_transaction` 中，在该节点上统一声明 `timeout_ms: 15000` 与 `catch: { tx_failed: [execution, timeout, contract] }`。子图在运行时会创建独立的块级栈帧（`Block Frame`），仅当控制流正常抵达子图 `end` 时，才会将声明在子图 `output` 中的变量原子化合并（Commit）至父图作用域。
+2. **子图栈帧内存级原子回滚（`-> fail`）**：当子图内任一节点发生未捕获异常、触发总超时，或 `verify_amount` 走向 `.invalid` 分支并通过连边 `verify_amount.invalid -> fail` 主动触发失败时，运行时会立即销毁当前子图的 `Block Frame`，丢弃栈帧内所有未提交的中间变量（如已拉取的 `order_amount`）及半成品状态，确保父图变量表不会受到脏数据污染，随后向父节点抛出 `execution`（或对应类别）异常。
+3. **外部系统业务级补偿（外层 `catch` 路由）**：`Block Frame` 的内存级回滚仅负责清理工作流引擎内部的状态，并不会自动撤销子图对外部系统已产生的副作用。若需在事务中断后执行外部状态冲正（Saga 逆向补偿）或降级兜底，需由父图通过 `settlement_transaction.tx_failed -> enqueue_retry_job` 捕获异常端口，显式路由至补偿节点执行延迟入队或业务冲正，并为父图 `deferred` 分支所需的 `status_note` 提供契约完备定值，最终走向 `end.deferred`。
 
 ---
 

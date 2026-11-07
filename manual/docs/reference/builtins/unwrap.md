@@ -8,16 +8,16 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `source` | **必填** | 绑定已定值的显式可空类型 `[<BaseType>, "null"]` 变量或结构体静态字段路径（包括在 `TypedDict.properties` 中声明但未列入 `required` 的可选最末级字段，其静态投影类型自动提升为 `[<BaseType>, "null"]` 且运行期缺失键时求值为 `null`；若 `source` 推导结果本身是非空类型则编译期报错）。记移除 `"null"` 后的非空内层类型为 $T = \text{StripNull}(T_{\text{src}})$。 |
-| **`with.input`** | `default` | 可选 | 绑定已定值且满足子类型兼容 $\text{TypeOf}(\Sigma, E_{\text{def}}) <: \Sigma(v_{\text{out}})$ 的变量/字段路径，或兼容 $\Sigma(v_{\text{out}})$ 的非空常量字面量（不可为 `null`）。 |
-| **`with.output`** | `value` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{out}}$，要求目标变量本身为非空类型（$\text{Nullable}(\Sigma(v_{\text{out}})) = \texttt{false}$）、满足子类型兼容 $T <: \Sigma(v_{\text{out}})$，且不可与 `source` 的根变量同名。 |
+| **`with.input`** | `source` | **必填** | 绑定已定值的显式可空类型 `[<BaseType>, "null"]` 变量或结构体静态字段路径（包括在 `TypedDict.properties` 中声明但未列入 `required` 的可选最末级字段，其静态投影类型自动视为 `[<BaseType>, "null"]`，运行期缺失键时求值为 `null`）。若 `source` 本身是非空类型，则在编译期报错。 |
+| **`with.input`** | `default` | 可选 | 绑定已定值且类型兼容目标变量 `value` 的变量/字段路径，或兼容目标类型的非空常量字面量（不可为 `null`）。 |
+| **`with.output`** | `value` | **必填** | 写入当前图 `variables` 中已声明的目标顶层变量。要求目标变量本身声明为非空类型、兼容 `source` 去掉 `"null"` 后的非空内层类型 `<BaseType>`，且不可与 `source` 的根变量同名。 |
 
-### 控制流分支行为与反定值（Kill）语义
+### 控制流分支与定值行为
 
 * **模式 A（省略 `default`）**：暴露两个排他分支：
-  * **`.some`**（运行时 `source != null`，关联 `output: [value]`）：将非空值写入 `value`，下游路径上 `value` 已定值且类型为非空 $\Sigma(v_{\text{out}})$；
-  * **`.none`**（运行时 `source == null`，关联 `output: []`，反定值杀死集 `KillVars = {value}`）：在编译期必达定值分析中从入口定值集移除 `value`（$Def_{\text{out}}(N.\text{none}) = Def_{\text{in}}(N) \setminus \{value\}$），并在运行期进入 `.none` 分支时将当前栈帧中的 `value` 置为未绑定（Unbound）。即使 `value` 在进入该节点前曾被赋过值，在 `.none` 下游重新定值前读取 `value` 均会在编译期报错；同时允许同一张图中多个独立的 `unwrap` 节点合法复用同一个 `value` 变量名。
-* **模式 B（传入 `default`）**：**无分支单出边（`node -> target`）**。若 `source != null` 则取 `source`，否则取 `default` 写入 `value`，直接提供非空定值。
+  * **`.some`**（运行时 `source != null`，关联 `output: [value]`）：将非空值写入 `value`，下游路径上 `value` 已定值且为非空类型；
+  * **`.none`**（运行时 `source == null`，关联 `output: []`）：将 `value` 重置为未定值（未绑定）状态。即使 `value` 在进入该节点前曾被赋过值，在 `.none` 下游重新定值前读取 `value` 均会在编译期报错；同时允许同一张图中多个独立的 `unwrap` 节点复用同一个 `value` 变量名。
+* **模式 B（传入 `default`）**：**无分支单出边（`node -> target`）**。若 `source != null` 则取 `source`，否则取 `default` 写入 `value`，直接向后续节点提供非空定值。
 
 ---
 
@@ -35,7 +35,7 @@ graph:
 
   nodes:
     # 模式 A（省略 default）：双分支条件拆包（.some / .none）
-    # 当 maybe_articles 非空时走 .some 并定值 valid_articles；为 null 时走 .none（valid_articles 在 .none 路径上被反定值置为未绑定）
+    # 当 maybe_articles 非空时走 .some 并定值 valid_articles；为 null 时走 .none（valid_articles 在 .none 路径上重置为未定值状态）
     unwrap_optional_articles:
       use: builtin:unwrap
       with:

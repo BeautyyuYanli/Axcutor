@@ -11,23 +11,9 @@
 
 ## 二、 核心原语组合要点
 
-1. **跨轮状态初值声明**：在 `graph.variables` 中声明 `attempts: { type: integer, default: 0 }` 与 `last_error: { type: string, default: "" }`，为首轮进入循环入口 `generate_sql` 提供初始定值。
-2. **成环回边与退环出口**：在 `graph.edges` 中通过 `validate_sql.retry -> generate_sql` 构成回边，通过 `validate_sql.valid -> end.success` 与 `validate_sql.exhausted -> end.failed` 构成两条退环出口。
-3. **分支关联输出子集（`branches.<choice>.output`）**：顶层 `success` 分支仅关联 `[sql, attempts]`，`failed` 分支仅关联 `[attempts, last_error]`，使 `sql` 保持非空 `string` 类型：
-
-```yaml
-output:
-  sql: { type: string }
-  attempts: { type: integer }
-  last_error: { type: string }
-branches:
-  success:
-    description: "SQL 生成并校验通过"
-    output: [sql, attempts]          # 到达 end.success 时仅校验 sql 与 attempts 已定值
-  failed:
-    description: "达到最大重试次数仍存在错误"
-    output: [attempts, last_error]   # 到达 end.failed 时仅校验 attempts 与 last_error 已定值
-```
+1. **跨轮状态初值声明与确定性计数**：在 `graph.variables` 中声明 `attempts: { type: integer, default: 0 }` 与 `last_error: { type: string, default: "" }`，为首轮进入循环提供初始定值；在循环体入口通过 [`builtin:math`](../../reference/builtins/math.md)（`increment_attempts`）确定性地将 `attempts` 自增 `1`，并通过 [`builtin:compare`](../../reference/builtins/compare.md)（`check_retry_budget`）判断 `attempts < 3`，避免依赖提示词手动维护循环计数与阈值判断。
+2. **成环回边与退环出口**：在 `graph.edges` 中通过 `check_retry_budget.true -> increment_attempts` 构成成环回边，通过 `validate_sql.valid -> end.success` 与 `check_retry_budget.false -> end.failed` 构成两条退环出口。
+3. **分支关联输出子集（`branches.<choice>.output`）**：在根节点输出全集中将 `sql`、`attempts`、`last_error` 均声明为非空类型，并在顶层 `branches` 中令 `success` 分支仅绑定 `output: [sql, attempts]`、`failed` 分支仅绑定 `output: [attempts, last_error]`。到达对应出口时，仅校验该分支声明的输出子集已定值，从而无需将 `sql` 或 `last_error` 妥协为可空类型。
 
 ---
 
@@ -68,7 +54,7 @@ graph:
   # 限制单图最大调度步数，防止环路不收敛
   max_steps: 20
 
-  # 4. 跨循环轮次演进的初始状态变量（首轮进入 generate_sql 时读取）
+  # 4. 跨循环轮次演进的初始状态变量（首轮进入循环时读取）
   variables:
     attempts:
       type: integer
@@ -78,24 +64,30 @@ graph:
       default: ""
 
   nodes:
-    # 步骤 1（循环体入口）：读取需求、表结构及上轮状态，生成或修正 SQL 并递增 attempts
+    # 步骤 1（循环体入口）：使用 builtin:math 确定性地将 attempts 自增 1
+    increment_attempts:
+      use: builtin:math
+      with:
+        input:
+          op: { value: "add" }
+          left: attempts
+          right: 1
+        output:
+          result: attempts
+
+    # 步骤 2：读取需求、表结构及上轮状态，生成或修正 SQL
     generate_sql:
       input: [schema, question, last_error, attempts]
       output:
         sql:
           type: string
-        attempts:
-          type: integer
-      run:
-        - "根据表结构 variables.schema 和查询需求 variables.question 编写 SQL。"
-        - "若 variables.last_error 不为空，结合该错误信息修正上一轮 SQL。"
-        - "将结果写入 output.sql，并将 variables.attempts + 1 写入 output.attempts。"
+      run: "根据表结构 variables.schema 和查询需求 variables.question 编写 SQL（当前第 variables.attempts 次尝试）；若 variables.last_error 不为空，则结合该错误信息修正上一轮 SQL，并将结果写入 output.sql。"
 
-    # 步骤 2（循环条件判断）：在沙箱中验证 SQL
+    # 步骤 3：在沙箱中验证 SQL
     # - valid 分支声明 output: []，无需覆写 last_error
-    # - retry 与 exhausted 分支声明 output: [last_error]，记录本轮错误原因
+    # - invalid 分支声明 output: [last_error]，记录本轮错误原因
     validate_sql:
-      input: [sql, attempts]
+      input: [sql]
       output:
         last_error:
           type: string
@@ -103,24 +95,31 @@ graph:
         valid:
           description: "SQL 语法正确且执行无报错"
           output: []
-        retry:
-          description: "执行报错且未超过 3 次尝试上限，回边重写"
+        invalid:
+          description: "SQL 执行报错，记录错误原因并检查重试余量"
           output: [last_error]
-        exhausted:
-          description: "执行报错且 variables.attempts 已达到 3 次"
-          output: [last_error]
-      run:
-        - "在数据库沙箱中试运行 variables.sql。"
-        - "若成功，选择 valid 分支。"
-        - "若失败，将具体报错信息写入 output.last_error；若 variables.attempts < 3 则选择 retry 分支，否则选择 exhausted 分支。"
+      run: "在数据库沙箱中试运行 variables.sql；若成功则选择 valid 分支，若失败则将具体报错信息写入 output.last_error 并选择 invalid 分支。"
+
+    # 步骤 4：使用 builtin:compare 确定性地判断是否仍有重试余量（attempts < 3）
+    check_retry_budget:
+      use: builtin:compare
+      with:
+        input:
+          op: { value: "lt" }
+          left: attempts
+          right: 3
 
   # 5. 控制流连边：包含成环回边与两个分支出口
   edges:
-    - start -> generate_sql
+    - start -> increment_attempts
+    - increment_attempts -> generate_sql
     - generate_sql -> validate_sql
-    # 成环回边：携带更新后的 last_error 与 attempts 跳回 generate_sql
-    - validate_sql.retry -> generate_sql
-    # 退环出口：分别走向 end.success 与 end.failed
+    # 校验通过：直接退环走向 end.success
     - validate_sql.valid -> end.success
-    - validate_sql.exhausted -> end.failed
+    # 校验失败：检查尝试次数是否未达上限（attempts < 3）
+    - validate_sql.invalid -> check_retry_budget
+    # 成环回边：未达上限，携带更新后的 last_error 跳回 increment_attempts 进入下一轮
+    - check_retry_budget.true -> increment_attempts
+    # 退环出口：已达 3 次上限，走向 end.failed
+    - check_retry_budget.false -> end.failed
 ```
