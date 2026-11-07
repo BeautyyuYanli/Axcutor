@@ -1,6 +1,7 @@
 //! Exercise every builtin through compilation, with valid and invalid contracts.
 mod support;
 use axcutor_core::*;
+use axcutor_core::{ast::*, kernel::*};
 use serde_json::{Value, json};
 use support::*;
 
@@ -113,6 +114,51 @@ const OPS: [&str; 16] = [
     "map_delete",
     "object_merge",
 ];
+
+#[test]
+fn all_sixteen_operators_execute_compiler_output_without_mutating_inputs() {
+    let env = json!({"optional":null,"array":[1,2],"nested":[[1],[],[2,3]],"map":{"2":2,"id":3,"0":0},"record":{"id":1,"text":"old"},"flag":true,"number":1,"text":"a😀e\u{301}"});
+    let expected = [
+        (None, json!({"value":1})),
+        (Some("none"), json!({})),
+        (Some("true"), json!({})),
+        (Some("true"), json!({})),
+        (Some("false"), json!({})),
+        (None, json!({"value":2})),
+        (None, json!({"value":2})),
+        (Some("some"), json!({"value":2})),
+        (Some("some"), json!({"value":1,"rest":[2]})),
+        (None, json!({"list":[1,2,2.0]})),
+        (None, json!({"list":[1,2]})),
+        (None, json!({"list":[1,2,3]})),
+        (Some("some"), json!({"value":3})),
+        (None, json!({"mapping":{"2":2,"id":1.5,"0":0}})),
+        (None, json!({"mapping":{"2":2,"0":0}})),
+        (None, json!({"record_out":{"id":1,"text":"new"}})),
+    ];
+    for (op, (branch, output)) in OPS.into_iter().zip(expected) {
+        let compiled = compile(fixture(op));
+        ok(&compiled);
+        let RootBody::Graph { graph } = &compiled.bundle.as_ref().unwrap().workflows["main"].body
+        else {
+            panic!()
+        };
+        let NodeBody::Builtin { op, bindings } = &graph.nodes["step"].body else {
+            panic!()
+        };
+        let before = env.clone();
+        let result = eval_builtin(
+            op,
+            bindings,
+            env.as_object().unwrap(),
+            &compiled.analysis[0].symbols,
+        )
+        .unwrap();
+        assert_eq!(result.branch.as_deref(), branch);
+        assert_eq!(Value::Object(result.output), output);
+        assert_eq!(env, before);
+    }
+}
 
 #[test]
 fn all_sixteen_operators_check_valid_and_invalid_inputs_and_outputs() {

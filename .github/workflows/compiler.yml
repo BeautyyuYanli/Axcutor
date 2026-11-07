@@ -2,15 +2,35 @@ name: Compiler
 
 on:
   push:
-    paths: ['Cargo.toml', 'Cargo.lock', 'crates/**', 'tests/bindings/**', 'manual/spec/**', 'manual/docs/**', '.github/workflows/compiler.yml']
+    paths: ['Cargo.toml', 'Cargo.lock', 'crates/**', 'python/**', 'pyproject.toml', 'uv.lock', 'tests/**', 'docs/**', 'manual/spec/**', 'manual/docs/**', '.github/workflows/compiler.yml']
   pull_request:
-    paths: ['Cargo.toml', 'Cargo.lock', 'crates/**', 'tests/bindings/**', 'manual/spec/**', 'manual/docs/**', '.github/workflows/compiler.yml']
+    paths: ['Cargo.toml', 'Cargo.lock', 'crates/**', 'python/**', 'pyproject.toml', 'uv.lock', 'tests/**', 'docs/**', 'manual/spec/**', 'manual/docs/**', '.github/workflows/compiler.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.12.23'
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - name: Runtime static checks
+        run: |
+          uv run --locked ruff check python tests/runtime
+          uv run --locked ruff format --check python tests/runtime
+          uv run --locked mypy
+      - name: Native extension, sandbox, time-skipping Server and History replay
+        run: uv run --locked pytest tests/runtime
+
   minimum-rust:
     runs-on: ubuntu-latest
     steps:

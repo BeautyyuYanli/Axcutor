@@ -86,6 +86,12 @@ pub(crate) fn load_json(text: &str, max_depth: usize) -> Result<Value, LoadError
     json_node(text, raw, 0, max_depth)
 }
 
+/// Preserve ordinary object keys even when serde_json reserves their spelling.
+pub(crate) fn deserialize_value<'de, D: Deserializer<'de>>(d: D) -> Result<Value, D::Error> {
+    let raw = Box::<RawValue>::deserialize(d)?;
+    load_json(raw.get(), MAX_MODEL_DEPTH).map_err(|(message, _)| de::Error::custom(message))
+}
+
 // RawValue borrows a parser-proved span of the original source. Translate the
 // parser's fragment coordinates without searching for potentially repeated text.
 fn json_location(

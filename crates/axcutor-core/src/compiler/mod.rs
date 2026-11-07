@@ -1,6 +1,7 @@
 //! Five-pass compiler and stateless canvas queries. Failures never yield a bundle.
 mod builtins;
 mod check;
+pub(crate) use check::arg_type;
 mod flow;
 use crate::source as parse;
 pub use crate::source::{SourceDocument, SourceFormat, SourceLocation};

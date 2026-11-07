@@ -39,7 +39,7 @@ pub(super) fn type_of(symbols: &Symbols, path: &FieldPath) -> Result<TypeSpec, S
     Ok(t)
 }
 
-pub(super) fn arg_type(arg: &ArgValue, symbols: &Symbols) -> Option<TypeSpec> {
+pub(crate) fn arg_type(arg: &ArgValue, symbols: &Symbols) -> Option<TypeSpec> {
     match arg {
         ArgValue::Path { path } => type_of(symbols, path).ok(),
         ArgValue::Const { value } => {

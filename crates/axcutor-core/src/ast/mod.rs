@@ -53,7 +53,35 @@ pub enum ArgValue {
     Const { value: Value },
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+impl<'de> Deserialize<'de> for ArgValue {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        // Internally tagged enum buffering loses RawValue's JSON token kinds.
+        // Read this small discriminator from the same bounded, exact decoder.
+        let value = crate::source::deserialize_value(d)?;
+        match value.get("kind").and_then(Value::as_str) {
+            Some("path") => {
+                let path = serde_json::from_value(
+                    value
+                        .get("path")
+                        .cloned()
+                        .ok_or_else(|| D::Error::custom("missing path"))?,
+                )
+                .map_err(D::Error::custom)?;
+                Ok(Self::Path { path })
+            }
+            Some("const") => Ok(Self::Const {
+                value: value
+                    .get("value")
+                    .cloned()
+                    .ok_or_else(|| D::Error::custom("missing constant"))?,
+            }),
+            _ => Err(D::Error::custom("invalid ArgValue kind")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Bindings {
     pub input: Ordered<ArgValue>,
     pub output: Ordered<String>,

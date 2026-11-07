@@ -104,4 +104,4 @@ JSON 查询参数复用有界的 JSON 值解码，再读取类型化模型，保
 
 映射插入顺序与 worker 顺序是文本契约；类型等价独立忽略 description、属性顺序以及 required/enum 的排列。JSON 数值保持数值形状和精度，不转换成字符串；YAML 数字会规范化为合法 JSON 数字。保存原始工件文本，避免通过 JS Number 或默认浮点解析器反复编码。
 
-源值树最多嵌套 128 层，超出返回 `parse.source`；这是一项解析资源边界，不是运行期调用深度护栏。JSON 使用标准字符串解码（包括 Unicode 代理对），拒绝解码后重名的键。YAML 支持 JSON 数据模型内的标准标签 `!!str`、`!!int`、`!!float`、`!!bool`、`!!null`、`!!seq`、`!!map`（含完整标准 URI 写法），并校验标签与值的形态。`str` 保留标量文本；`int` 接受整数写法（含十六/八进制），`float` 接受有限十进制数并保持浮点分类；`bool` 接受 true/false 的大小写变体，`null` 接受空标量、`~` 和 null 的大小写变体；`seq`/`map` 仅用于对应容器。拒绝锚点、别名、自定义标签、非 JSON 标签（如 timestamp、binary、set）及标签与值的类型不匹配。该前端没有 builtin 求值、执行帧调度、Temporal、文件解析器或网络 resolver。
+源值树最多嵌套 128 层，超出返回 `parse.source`；这是一项解析资源边界，不是运行期调用深度护栏。JSON 使用标准字符串解码（包括 Unicode 代理对），拒绝解码后重名的键。YAML 支持 JSON 数据模型内的标准标签 `!!str`、`!!int`、`!!float`、`!!bool`、`!!null`、`!!seq`、`!!map`（含完整标准 URI 写法），并校验标签与值的形态。`str` 保留标量文本；`int` 接受整数写法（含十六/八进制），`float` 接受有限十进制数并保持浮点分类；`bool` 接受 true/false 的大小写变体，`null` 接受空标量、`~` 和 null 的大小写变体；`seq`/`map` 仅用于对应容器。拒绝锚点、别名、自定义标签、非 JSON 标签（如 timestamp、binary、set）及标签与值的类型不匹配。编译入口不求值 builtin、不调度执行帧、不访问 Temporal、文件系统或网络 resolver；独立运行内核和解释器见[运行时接口](runtime-api.md)。

@@ -326,24 +326,50 @@ fn scalar_matches(v: &Value, base: Scalar) -> bool {
     }
 }
 
+/// Canonical sign, significant digits and base-ten exponent, without rounding.
+fn decimal(s: &str) -> (bool, String, BigInt) {
+    let negative = s.starts_with('-');
+    let s = s.trim_start_matches('-');
+    let (mantissa, exponent) = s.split_once(['e', 'E']).unwrap_or((s, "0"));
+    let fraction = mantissa.split_once('.').map_or(0, |(_, f)| f.len());
+    let mut digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let trailing = digits.len() - digits.trim_end_matches('0').len();
+    digits = digits.trim_start_matches('0').trim_end_matches('0').into();
+    if digits.is_empty() {
+        return (false, String::new(), BigInt::from(0));
+    }
+    let exponent = exponent.parse::<BigInt>().expect("validated JSON exponent")
+        + BigInt::from(trailing)
+        - BigInt::from(fraction);
+    (negative, digits, exponent)
+}
+
+/// Exact real ordering of JSON numbers, including exponents too large for f64.
+pub fn number_cmp(a: &serde_json::Number, b: &serde_json::Number) -> std::cmp::Ordering {
+    let (na, da, ea) = decimal(a.as_str());
+    let (nb, db, eb) = decimal(b.as_str());
+    if na != nb {
+        return nb.cmp(&na);
+    }
+    let magnitude = match (da.is_empty(), db.is_empty()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => (ea + BigInt::from(da.len()))
+            .cmp(&(eb + BigInt::from(db.len())))
+            .then_with(|| {
+                let len = da.len().max(db.len());
+                da.bytes()
+                    .chain(std::iter::repeat(b'0'))
+                    .take(len)
+                    .cmp(db.bytes().chain(std::iter::repeat(b'0')).take(len))
+            }),
+    };
+    if na { magnitude.reverse() } else { magnitude }
+}
+
 /// Exact decimal equality, including integer/float spelling, without f64 conversion.
 pub fn literal_eq(a: &Value, b: &Value) -> bool {
-    fn decimal(s: &str) -> (bool, String, BigInt) {
-        let negative = s.starts_with('-');
-        let s = s.trim_start_matches('-');
-        let (mantissa, exponent) = s.split_once(['e', 'E']).unwrap_or((s, "0"));
-        let fraction = mantissa.split_once('.').map_or(0, |(_, f)| f.len());
-        let mut digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-        let trailing = digits.len() - digits.trim_end_matches('0').len();
-        digits = digits.trim_start_matches('0').trim_end_matches('0').into();
-        if digits.is_empty() {
-            return (false, String::new(), BigInt::from(0));
-        }
-        let exponent = exponent.parse::<BigInt>().expect("validated JSON exponent")
-            + BigInt::from(trailing)
-            - BigInt::from(fraction);
-        (negative, digits, exponent)
-    }
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => decimal(a.as_str()) == decimal(b.as_str()),
         (Value::Array(a), Value::Array(b)) => {

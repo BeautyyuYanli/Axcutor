@@ -1,8 +1,10 @@
-# Axcutor 编译器前端
+# Axcutor 编译器与 Temporal 运行时
 
 Rust workspace 实现 [RFC 11](rfc/0011-compiler-and-temporal-runtime-architecture.md) 的编译器前端：严格 YAML/JSON 解析、显式符号与类型检查、16 个 builtin 静态契约、拓扑与并发写入检查、分支敏感必达定值，以及画布端口查询和变量补全。语言依据为 [manual/spec/01–03](manual/spec/index.md)，实施范围见[定稿提案](.context/proposals/261107-rfc11-compiler-frontend.md)。
 
-`axcutor-core` 无文件或网络 I/O。调用方一次性提供入口和源文档快照；编译器仅检查入口的递归依赖闭包。成功返回拥有独立存储的归一化 AST bundle；任何错误都会使 `bundle` 为 `null`。尚未实现 builtin 运行期求值、run 执行器或 Temporal。
+`axcutor-core` 无文件或网络 I/O。调用方一次性提供入口和源文档快照；编译器仅检查入口的递归依赖闭包。成功返回拥有独立存储的归一化 AST bundle；任何错误都会使 `bundle` 为 `null`。
+
+运行时由 Rust 纯函数内核、PyO3 文本绑定和 Python Temporal 解释器组成，支持 16 个 builtin、隔离帧、分支、重试与捕获、结构化并发、调用护栏和状态 Query。业务执行器注册为异步 Python 函数，通过标准 `execute_run` Activity 接入。请求、选项和 bundle 随 Temporal History 保存；解释器无需独立数据库。公开接口、Worker 示例与生命周期约束见 [运行时说明](docs/runtime-api.md)。
 
 ## 调用
 
@@ -34,6 +36,16 @@ derive_node_ports(analysis_json, node_id) -> ports_json
 ## 检查与构建
 
 需要 Rust/Cargo（声明的最低版本为 1.85）、Python 3.10+、Node，以及匹配 crate 版本的 wasm-bindgen CLI；浏览器检查另需 Chrome/Chromium。所有命令从仓库根目录执行。
+
+Temporal 运行时最低 Python 3.11。uv workspace 会构建真实的本地扩展；测试使用真实 Temporal sandbox 和 time-skipping Server，首次执行需要下载测试服务：
+
+```sh
+uv sync --locked --python 3.12
+uv run --locked ruff check python tests/runtime
+uv run --locked ruff format --check python tests/runtime
+uv run --locked mypy
+uv run --locked pytest tests/runtime
+```
 
 ```sh
 cargo fmt --all -- --check

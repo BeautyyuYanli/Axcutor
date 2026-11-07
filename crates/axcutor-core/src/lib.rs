@@ -1,5 +1,6 @@
-//! Pure, snapshot-based Axcutor compiler. No source loading or runtime execution.
+//! Pure, snapshot-based compiler and deterministic execution kernel. No I/O.
 pub mod ast;
 pub mod compiler;
+pub mod kernel;
 mod source;
 pub use compiler::*;
