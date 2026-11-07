@@ -32,8 +32,7 @@ graph: ...
 在节点定义中，`run` 表示执行具体计算或 I/O 的最小原子执行体。
 
 > [!IMPORTANT]
-> **`run` 代表任意满足节点签名约束的业务代码，不局限于提示词或大模型调用。**
-> 任何能够接收节点 `input` 只读参数、并在完成后返回所选 `branch` 及符合 `output` `TypeSpec` 数据的执行单元，均可作为 `run` 的实现载体，包括本地/远程函数、Python/JS 脚本沙箱、微服务 HTTP/RPC 接口、数据库查询、规则引擎或结构化模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
+> **`run` 代表任意满足节点签名约束的业务代码，不局限于提示词或大模型调用。**\n> 任何能够接收节点 `input` 只读参数、并在完成后返回所选 `branch` 及符合 `output` `TypeSpec` 数据的执行单元，均可作为 `run` 的实现载体，包括本地/远程函数、Python/JS 脚本沙箱、微服务 HTTP/RPC 接口、数据库查询、规则引擎或结构化模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
 
 运行时对 `run` 节点执行两项隔离与校验保障：
 
@@ -80,6 +79,7 @@ run: "计算 variables.raw_price * variables.discount_rate 并保留两位小数
 当需要编排多个步骤时，在顶层声明 `graph`。`graph` 由三个核心字段构成：
 
 * **`variables`（可选）**：图级共享局部变量声明表（每个条目均为显式 `TypeSpec` 映射，可选配 `default` 初始值）。进入顶层 `graph` 时，顶层 `input` 中的所有参数自动作为已定值变量注入图级上下文；同时可在 `graph.variables` 中声明图内部使用的带初值状态变量（包含 `default` 键）或未初始化的局部变量类型（省略 `default` 键，等价于 `let v: T;`）。
+  * **同帧声明等价与流转子类型兼容**：同一栈帧内对同一变量名的多处显式 `TypeSpec` 声明必须保持双向等价（$T_1 \equiv T_2$）；而在通过 `builtin:assign`、`use` 等向目标变量写入值时，支持单向静态子类型兼容（$T_{\text{actual}} <: T_{\text{expected}}$，如将非空 `T` 赋给可空 `[T, "null"]`、将 `integer` 赋给 `number`，或将带 `enum` 的字符串赋给普通 `string`）。
 * **`nodes`（必填）**：定义图内的子节点字典。
 * **`edges`（必填）**：定义控制令牌（Control Token）从起点 `start` 到终点 `end` 的流转路径。
 
@@ -98,10 +98,11 @@ graph:
       default: "v1"
     # 2. 未初始化的局部变量声明（仅声明 TypeSpec，省略 default，由后续节点写入定值）
     normalized_id:
-      type: string
+      type: [string, "null"]
 
   # 必填：声明图内子节点
   nodes:
+    # 子类型兼容：将非空 string 类型的 request_id 直接赋给可空 [string, "null"] 类型的 normalized_id
     normalize_id:
       use: builtin:assign
       with:

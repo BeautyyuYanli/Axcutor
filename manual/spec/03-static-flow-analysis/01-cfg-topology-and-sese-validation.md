@@ -30,7 +30,7 @@
      $$W_i \neq \text{NodeOf}(\text{src}) \;\land\; W_i \neq \text{join\_target}$$
      *(例如禁止书写 `w1 -> [w1, w2] -> next_node` 或 `prev_node -> [w1, w2] -> w1`。)*
    * **跨边完全独占**：在当前图其余所有边 $e' \in G.\text{edges} \setminus \{e\}$ 中，$W_i$ 禁止作为 `SourceEndpoint`、`TargetEndpoint`、`JoinTarget` 或再次出现在其他 `ConcurrentGroup` 中。
-2. **单出口无分支限制**：若 $W_i$ 未挂载 `for_each`，则 $W_i$ **禁止对外暴露任何正常 `branches` 或 `catch`**（包括禁止直接使用带分支的 `builtin:switch`、未传 `default` 的 `builtin:unwrap`、未传 `default` 的 `builtin:map_get` 及 `builtin:array_shift`）。
+2. **单出口无分支限制**：若 $W_i$ 未挂载 `for_each`，则 $W_i$ **禁止对外暴露任何正常 `branches` 或 `catch`**（包括禁止直接使用带分支的 `builtin:switch`、未声明 `with.output` 的 `builtin:compare` / `builtin:logic`、未传 `default` 的 `builtin:unwrap`、未传 `default` 的 `builtin:map_get`、未传 `default` 的 `builtin:array_get`、未传 `default` 的 `builtin:math`（`div` / `mod`）及 `builtin:array_shift`）。
 
 ---
 

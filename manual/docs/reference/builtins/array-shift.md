@@ -8,9 +8,9 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型列表 `{ type: array, items: T }`（支持顶层变量或结构体字段路径）。 |
-| **`with.output`** | `item` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{item}}$，要求 $\Sigma(v_{\text{item}}) \equiv T$，且不可与 `rest` 同名。 |
-| **`with.output`** | `rest` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{rest}}$，要求 $\Sigma(v_{\text{rest}}) \equiv \{ \texttt{type}: \texttt{array}, \texttt{items}: T \}$。可与 `source` 绑定同一个顶层列表变量名，以推进队列切片。 |
+| **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型列表 $T_{\text{src}} = \{ \texttt{type}: \texttt{array}, \texttt{items}: T \}$（支持顶层变量或结构体字段路径）。 |
+| **`with.output`** | `item` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{item}}$，要求满足子类型兼容 $T <: \Sigma(v_{\text{item}})$，且不可与 `rest` 同名。 |
+| **`with.output`** | `rest` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{rest}}$，要求满足子类型兼容 $T_{\text{src}} <: \Sigma(v_{\text{rest}})$。可与 `source` 绑定同一个顶层列表变量名，以推进队列切片。 |
 
 ### 控制流分支行为、不可变切片与反定值（Kill）语义
 

@@ -46,7 +46,7 @@ nodes:
 与 `RootNode` 和 `ActionNode`（`run`）完全一致，内联 `graph` 节点通过 `output: { <var>: <TypeSpec> }` 显式声明向父图导出的变量及其 `TypeSpec`：
 
 * **父子图模块化边界解耦**：父图在单遍构建符号表时直接读取内联 `graph` 节点的 `output` 映射，无需递归进入子图内部推导；
-* **子图出口契约校验**：子图在独立校验自身时，将其外层 `output` 映射作为子图的宿主输出契约 `host.output` 并入子图符号表，并在子图 `end`（或 `end.<branch>`）处校验类型等价性与全路径必达定值。
+* **子图出口契约校验**：子图在独立校验自身时，将其外层 `output` 映射作为子图的宿主输出契约 `host.output` 并入子图符号表（子图内同名显式 `output` 声明保持类型等价 $\equiv$，通过 `builtin:*` 或 `use` 等向输出变量赋值时支持子类型兼容 $<:$；挂载 `for_each` 时单次输出经一阶集合提升后满足 $\text{Lift}(T_{\text{src}}, U) <: \Sigma_{\text{outer}}(v)$），并在子图 `end`（或 `end.<branch>`）处校验全路径必达定值。
 
 ```yaml
 nodes:

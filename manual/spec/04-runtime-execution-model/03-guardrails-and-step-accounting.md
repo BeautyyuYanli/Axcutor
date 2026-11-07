@@ -52,7 +52,7 @@
 所有 `use: builtin:<op>` 节点均为常数时间（或与浅拷贝集合/结构体长度成正比）、无副作用、不抛出可恢复运行时异常的确定性内建转换。每次激活同样遵循第一节的计步规则（$\text{steps}(F_G) \leftarrow \text{steps}(F_G) + 1$），并按以下规则更新当前栈帧变量绑定表 $\rho$：
 
 1. **纯函数式不可变值语义（Copy-on-Write Immutability）**：
-   * `builtin:array_shift`、`builtin:array_append`、`builtin:array_flatten`、`builtin:map_set`、`builtin:map_delete` 与 `builtin:object_merge` 均采用纯函数式不可变更新：始终返回新构造的集合或结构体副本（或基于结构共享的持久化不可变数据结构），绝不原地修改当前栈帧快照或历史快照引用中的旧集合或结构体对象。
+   * `builtin:array_shift`、`builtin:array_append`、`builtin:array_flatten`、`builtin:array_concat`、`builtin:map_set`、`builtin:map_delete` 与 `builtin:object_merge` 均采用纯函数式不可变更新：始终返回新构造的集合或结构体副本（或基于结构共享的持久化不可变数据结构），绝不原地修改当前栈帧快照或历史快照引用中的旧集合或结构体对象。
 2. **各算子运行期求值与反定值（Unbind）状态转移**：
    * **`builtin:unwrap`**：
      * 读取源值 $x = \text{Eval}(\rho, \text{with.input.source})$；
@@ -97,4 +97,42 @@
    * **`builtin:array_flatten`（二维列表单层保序展平）**：
      * 读取源二维列表 $A = \text{Eval}(\rho, \text{with.input.source}) = [L_0, L_1, \dots, L_{m-1}]$（其中每个 $L_i$ 为子列表 $[w_{i,0}, \dots, w_{i,k_i-1}]$）；
      * 按 $i = 0, \dots, m-1$ 的外层顺序与子列表内部顺序依次首尾拼接（Concatenate）构造新的一维列表副本 $R = L_0 \mathbin{\Vert} L_1 \mathbin{\Vert} \dots \mathbin{\Vert} L_{m-1}$（当 $m = 0$ 或所有子列表均为空时返回 `[]`）；
+     * 绑定 $\rho(v_{\text{res}}) \leftarrow R$，控制令牌沿唯一无分支出边前进。
+   * **`builtin:compare`（二元比较与条件路由）**：
+     * 读取算子字符串 $op = \text{Eval}(\rho, \text{with.input.op}) \in \{\texttt{"eq"}, \texttt{"ne"}, \texttt{"lt"}, \texttt{"lte"}, \texttt{"gt"}, \texttt{"gte"}\}$ 以及左右操作数 $x = \text{Eval}(\rho, \text{with.input.left})$、$y = \text{Eval}(\rho, \text{with.input.right})$；
+     * **比较谓词求值 $b \in \{\texttt{true}, \texttt{false}\}$**：
+       * 当 $op \in \{\texttt{"eq"}, \texttt{"ne"}\}$ 时：按 JSON 深度结构化值相等判定（数值 $1$ 与 $1.0$ 相等；列表按元素顺序递归相等；`TypedDict` 与 `OrderedMap` 按键值对集合递归相等；`null` 仅与 `null` 相等）；
+       * 当 $op \in \{\texttt{"lt"}, \texttt{"lte"}, \texttt{"gt"}, \texttt{"gte"}\}$ 时：若为数值则按实数大小比较；若为字符串则按 UTF-8 / Unicode 码点（Code Points）字典序比较；
+     * **控制流与输出更新**：
+       * 若未声明 `with.output`：不修改 $\rho$，当 $b = \texttt{true}$ 时控制令牌转入 `.true` 出边，当 $b = \texttt{false}$ 时转入 `.false` 出边；
+       * 若声明了 `with.output.result`（绑定 $v_{\text{res}}$）：绑定 $\rho(v_{\text{res}}) \leftarrow b$，控制令牌沿唯一无分支出边前进。
+   * **`builtin:logic`（布尔逻辑组合与取反）**：
+     * 读取算子字符串 $op = \text{Eval}(\rho, \text{with.input.op}) \in \{\texttt{"and"}, \texttt{"or"}, \texttt{"not"}\}$；
+     * 当 $op = \texttt{"and"}$ 时，求值 $b = \text{Eval}(\rho, \text{with.input.left}) \land \text{Eval}(\rho, \text{with.input.right})$；当 $op = \texttt{"or"}$ 时，求值 $b = \text{Eval}(\rho, \text{with.input.left}) \lor \text{Eval}(\rho, \text{with.input.right})$；当 $op = \texttt{"not"}$ 时，求值 $b = \lnot \text{Eval}(\rho, \text{with.input.source})$；
+     * **控制流与输出更新**：
+       * 若未声明 `with.output`：不修改 $\rho$，当 $b = \texttt{true}$ 时转入 `.true` 出边，当 $b = \texttt{false}$ 时转入 `.false` 出边；
+       * 若声明了 `with.output.result`（绑定 $v_{\text{res}}$）：绑定 $\rho(v_{\text{res}}) \leftarrow b$，控制令牌沿唯一无分支出边前进。
+   * **`builtin:math`（除零安全二元算术运算）**：
+     * 读取算子字符串 $op = \text{Eval}(\rho, \text{with.input.op}) \in \{\texttt{"add"}, \texttt{"sub"}, \texttt{"mul"}, \texttt{"div"}, \texttt{"mod"}\}$ 以及左右数值操作数 $x = \text{Eval}(\rho, \text{with.input.left})$、$y = \text{Eval}(\rho, \text{with.input.right})$；
+     * **当 $op \in \{\texttt{"add"}, \texttt{"sub"}, \texttt{"mul"}\}$ 时**：计算 $z = x + y$、$x - y$ 或 $x \times y$（当两侧均为 `integer` 时结果为精确整数，否则为双精度浮点数），绑定 $\rho(v_{\text{res}}) \leftarrow z$，控制令牌沿唯一无分支出边前进；
+     * **当 $op \in \{\texttt{"div"}, \texttt{"mod"}\}$ 时**：
+       * 若 $y \neq 0$（且结果为有限实数/整数）：当 $op = \texttt{"div"}$ 时计算浮点真除法 $z = x / y$，当 $op = \texttt{"mod"}$ 时计算整数取模 $z = x \bmod y$；绑定 $\rho(v_{\text{res}}) \leftarrow z$，若未声明 `default` 则转入 `.some` 出边，若声明了 `default` 则沿唯一无分支出边前进；
+       * 若 $y = 0$（除数为零）：
+         * **未声明 `default` 时**：将当前栈帧中的目标变量显式置为未绑定（$\rho(v_{\text{res}}) \leftarrow \text{Unbound}$，消除任何前置旧值），控制令牌转入 `.none` 出边；
+         * **声明了 `default` 时**：求值 $d = \text{Eval}(\rho, \text{with.input.default})$ 并绑定 $\rho(v_{\text{res}}) \leftarrow d$，控制令牌沿唯一无分支出边前进。
+   * **`builtin:length`（集合与字符串长度测量）**：
+     * 读取源值 $S = \text{Eval}(\rho, \text{with.input.source})$；
+     * 若 $S$ 为列表 `Array<T>`，令 $n = |S|$（元素个数）；若 $S$ 为有序映射 `OrderedMap<string, V>`，令 $n = |\text{dom}(S)|$（键值对个数）；若 $S$ 为字符串 `string`，令 $n$ 为 $S$ 的 Unicode 码点（Code Points）字符个数；
+     * 绑定 $\rho(v_{\text{res}}) \leftarrow n$（非负整数 $n \ge 0$），控制令牌沿唯一无分支出边前进。
+   * **`builtin:array_get`（列表按索引安全随机读取）**：
+     * 读取源列表 $A = \text{Eval}(\rho, \text{with.input.source}) = [a_0, \dots, a_{m-1}]$（长度 $m = |A|$）与整数索引 $idx = \text{Eval}(\rho, \text{with.input.index}) \in \mathbb{Z}$；
+     * 计算归一化下标 $j = idx \text{ (若 } idx \ge 0 \text{)}$ 或 $j = m + idx \text{ (若 } idx < 0 \text{)}$；
+     * **未声明 `default` 时**：
+       * 若 $0 \le j < m$（下标未越界）：绑定 $\rho(v_{\text{out}}) \leftarrow a_j$，控制令牌转入 `.some` 出边；
+       * 若 $j < 0$ 或 $j \ge m$（下标越界，含空列表 $m = 0$）：将当前栈帧中的目标变量显式置为未绑定（$\rho(v_{\text{out}}) \leftarrow \text{Unbound}$，消除任何前置旧值），控制令牌转入 `.none` 出边。
+     * **声明了 `default` 时**：
+       * 若 $0 \le j < m$ 则令 $y = a_j$，否则令 $y = \text{Eval}(\rho, \text{with.input.default})$；绑定 $\rho(v_{\text{out}}) \leftarrow y$，控制令牌沿唯一无分支出边前进。
+   * **`builtin:array_concat`（同构列表不可变拼接）**：
+     * 读取左右源列表 $A_L = \text{Eval}(\rho, \text{with.input.left}) = [a_0, \dots, a_{m-1}]$ 与 $A_R = \text{Eval}(\rho, \text{with.input.right}) = [b_0, \dots, b_{n-1}]$；
+     * 构造包含 $A_L$ 全部元素后接 $A_R$ 全部元素的新列表副本 $R = [a_0, \dots, a_{m-1}, b_0, \dots, b_{n-1}]$；
      * 绑定 $\rho(v_{\text{res}}) \leftarrow R$，控制令牌沿唯一无分支出边前进。

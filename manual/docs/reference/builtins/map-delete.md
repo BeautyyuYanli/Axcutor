@@ -10,9 +10,9 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型有序映射 `{ type: object, additionalProperties: TV }`。 |
-| **`with.input`** | `key` | **必填** | 绑定已定值的非空 `type: string` 变量、结构体静态字段路径或 `{ value: "<str>" }` 常量字面量。 |
-| **`with.output`** | `result` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{res}}$，要求 $\Sigma(v_{\text{res}}) \equiv \{ \texttt{type}: \texttt{object}, \texttt{additionalProperties}: TV \}$。可与 `source` 绑定同一个顶层映射变量名以更新变量绑定。 |
+| **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型有序映射 $T_{\text{src}} = \{ \texttt{type}: \texttt{object}, \texttt{additionalProperties}: T_V \}$。 |
+| **`with.input`** | `key` | **必填** | 绑定已定值且满足 $\text{TypeOf}(\Sigma, \text{key}) <: \{ \texttt{type}: \texttt{string} \}$ 的非空字符串变量、结构体静态字段路径或 `{ value: "<str>" }` 常量字面量。 |
+| **`with.output`** | `result` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{res}}$，要求满足子类型兼容 $T_{\text{src}} <: \Sigma(v_{\text{res}})$。可与 `source` 绑定同一个顶层映射变量名以更新变量绑定。 |
 
 ### 控制流、纯函数式不可变删除与键序保持
 

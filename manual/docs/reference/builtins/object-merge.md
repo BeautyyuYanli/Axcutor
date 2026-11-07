@@ -8,8 +8,8 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `base` | 可选 | 若声明，必须绑定已定值的非空强类型结构体（`TypedDict`），且其类型必须与目标输出变量 `result` 的声明类型 $T_{\text{target}} = \Sigma(v_{\text{res}})$ 静态等价。 |
-| **`with.input`** | `<field_1>` ... `<field_m>` | **至少 1 个** | 除保留键 `base` 外的其余每个键代表目标结构体 $T_{\text{target}}$ 的顶层属性名，支持绑定变量、静态字段路径或常量字面量：<br>• **声明了 `base` 时**：每个 `<field_i>` 必须属于 $T_{\text{target}}.\text{properties}$ 已声明的属性集，且绑定值类型与对应属性类型兼容；<br>• **未声明 `base` 时**：提供的字段集合必须覆盖 $T_{\text{target}}$ 的全部必填属性且不超出声明属性集（$\text{set}(T_{\text{target}}.\text{required}) \subseteq \{f_1, \dots, f_m\} \subseteq \text{dom}(T_{\text{target}}.\text{properties})$），且各字段类型与对应属性类型兼容。 |
+| **`with.input`** | `base` | 可选 | 若声明，必须绑定已定值的非空强类型结构体（`TypedDict`，记为 $T_{\text{base}}$），满足 $\text{dom}(T_{\text{base}}.\text{properties}) \subseteq \text{dom}(T_{\text{target}}.\text{properties})$、与覆盖字段合并后覆盖 $T_{\text{target}}$ 全部必填项（$\text{set}(T_{\text{target}}.\text{required}) \subseteq \text{set}(T_{\text{base}}.\text{required}) \cup \{f_1, \dots, f_m\}$），且所有未被覆盖的保留字段满足子类型兼容 $T_{\text{base}}.\text{properties}[f] <: T_{\text{target}}.\text{properties}[f]$。 |
+| **`with.input`** | `<field_1>` ... `<field_m>` | **至少 1 个** | 除保留键 `base` 外的其余每个键代表目标结构体 $T_{\text{target}} = \Sigma(v_{\text{res}})$ 的顶层属性名（须满足 $\{f_1, \dots, f_m\} \subseteq \text{dom}(T_{\text{target}}.\text{properties})$），支持绑定变量、静态字段路径或常量字面量：<br>• **绑定引用表达式 $E_i$ 时**：统一校验子类型兼容 $\text{TypeOf}(\Sigma, E_i) <: T_{\text{target}}.\text{properties}[f_i]$（非空表达式天然兼容可空目标属性）；<br>• **绑定常量字面量 $L_i$ 时**：校验实例兼容 $L_i \models T_{\text{target}}.\text{properties}[f_i]$；<br>• **未声明 `base` 时**：提供的字段集合必须覆盖 $T_{\text{target}}$ 的全部必填属性（$\text{set}(T_{\text{target}}.\text{required}) \subseteq \{f_1, \dots, f_m\}$）。 |
 | **`with.output`** | `result` | **必填** | 写入目标顶层结构体变量 $v_{\text{res}}$。要求 $v_{\text{res}}$ 必须已在当前图符号表 $\Sigma$ 中显式声明为非空强类型结构体（`TypedDict`：`type: object` + 非空 `properties`）。当声明了 `base` 时，允许 `result` 与 `base` 绑定同一个顶层变量名以完成不可变更新。 |
 
 ### 控制流与纯函数式不可变行为
@@ -50,7 +50,7 @@ graph:
       with:
         input:
           doc_id: current_doc.id
-          score: final_score
+          score: final_score                 # final_score 为 integer 或 number 均可子类型兼容写入 number 属性
           passed: true
         output:
           result: summary_record

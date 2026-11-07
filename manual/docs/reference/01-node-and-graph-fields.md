@@ -84,7 +84,7 @@ graph:
 | 字段 | 格式 | 说明 |
 | :--- | :--- | :--- |
 | `with.input.<param>` | `var_name` \| `root_var.field` \| `123` \| `true` \| `null` \| `{ value: <literal> }` | 将当前作用域变量、非空结构体字段路径（未列入 `required` 的可选最末级字段投影时自动提升为 `[<BaseType>, "null"]`）或常量字面量绑定至目标 `input` 参数。无论 `use: workflow:<path>` 还是 `use: builtin:<op>`，所有必填目标参数均必须显式声明（不支持隐式同名省略；若与外层变量同名则显式写 `<param>: <param>`）。 |
-| `with.output.<out_field>` | `<target_var_name>` | 将目标产出的 `output` 字段映射写回当前图符号表中已声明的顶层变量 `<target_var_name>`（禁止将值设为 `null`）。对 `use: workflow:<path>`，未在 `with.output` 中列出的目标输出字段默认自动忽略（不要求在调用方符号表中存在、不写回调用方栈帧）；当节点挂载 `for_each` 时，`with.output` 映射的外层目标变量类型对应为一阶同构提升后的集合类型（`Array<U>` 或 `OrderedMap<string, U>`）。 |
+| `with.output.<out_field>` | `<target_var_name>` | 将目标产出的 `output` 字段映射写回当前图符号表中已声明的顶层变量 `<target_var_name>`（禁止将值设为 `null`）。对 `use: workflow:<path>`，未在 `with.output` 中列出的目标输出字段默认自动忽略（不要求在调用方符号表中存在、不写回调用方栈帧）；对 `use: builtin:<op>`，`builtin:switch` 禁止声明 `with.output`，`builtin:compare` 与 `builtin:logic` 的 `with.output` 可选（省略时直接暴露 `.true` / `.false` 分支，显式声明 `result` 时为无分支单出边），其余内建算子必填；当节点挂载 `for_each` 时，`with.output` 映射的外层目标变量类型对应为一阶同构提升后的集合类型（`Array<U>` 或 `OrderedMap<string, U>`）。 |
 
 ### 2. `for_each`（用于集合遍历）
 

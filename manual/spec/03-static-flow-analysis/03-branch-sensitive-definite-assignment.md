@@ -30,16 +30,16 @@
    * 当 $N$ 为 `CallNode` 时：$OutVars(N) = \text{values}(N.\text{with.output})$（直接取当前节点 AST 中的目标变量集合，无需跨文件查询被调用工作流签名）。
 3. **未挂载 `for_each` 的节点 $N$ 的正常业务分支出边 $e_b = (N.b \to \text{target})$**：
    定义分支 $b$ 的**反定值杀死集（Kill Set）** $KillVars(N, b)$：
-   * 当 $N$ 为未声明 `default` 的 `builtin:unwrap` 或未声明 `default` 的 `builtin:map_get`（输出绑定为 $v_{\text{out}}$）且 $b = \texttt{none}$ 时：$KillVars(N, \texttt{none}) = \{v_{\text{out}}\}$；
+   * 当 $N$ 为未声明 `default` 的 `builtin:unwrap`、未声明 `default` 的 `builtin:map_get`、未声明 `default` 的 `builtin:array_get`（输出绑定为 $v_{\text{out}}$）或未声明 `default` 的 `builtin:math`（`op` $\in \{\texttt{"div"}, \texttt{"mod"}\}$，输出绑定为 $v_{\text{res}}$，下同记作 $v_{\text{out}}$）且 $b = \texttt{none}$ 时：$KillVars(N, \texttt{none}) = \{v_{\text{out}}\}$；
    * 当 $N$ 为 `builtin:array_shift`（元素输出绑定为 $v_{\text{item}}$）且 $b = \texttt{empty}$ 时：$KillVars(N, \texttt{empty}) = \{v_{\text{item}}\}$；
    * 其余所有节点与分支：$KillVars(N, b) = \emptyset$。
 
    通用分支边定值传递方程为先移除 $KillVars(N, b)$，再并入分支 $b$ 契约承诺产出的输出变量子集 $OutVars(N, b)$：
    $$Def_{\text{out}}(e_b) = (Def_{\text{in}}(N) \setminus KillVars(N, b)) \cup OutVars(N, b)$$
    即特化为：
-   * 在 `builtin:unwrap`（无 `default`）或 `builtin:map_get`（无 `default`）的 `.none` 分支上（$OutVars(N, \texttt{none}) = \emptyset$）：
+   * 在 `builtin:unwrap`（无 `default`）、`builtin:map_get`（无 `default`）、`builtin:array_get`（无 `default`）或 `builtin:math`（`div`/`mod` 且无 `default`）的 `.none` 分支上（$OutVars(N, \texttt{none}) = \emptyset$）：
      $$Def_{\text{out}}(N.\texttt{none}) = Def_{\text{in}}(N) \setminus \{v_{\text{out}}\}$$
-     *(注：运行期进入 `.none` 分支时，同步将当前栈帧中的 $\rho(v_{\text{out}})$ 置为未绑定 Unbound；既防止 $v_{\text{out}} \in \text{HostIn}(G)$ 或前序节点定值在 `.none` 分支上泄露旧值，也允许同一张图中多个独立的 `unwrap` 或 `map_get` 节点合法复用同一个变量名 $v_{\text{out}}$。)*
+     *(注：运行期进入 `.none` 分支时，同步将当前栈帧中的 $\rho(v_{\text{out}})$ 置为未绑定 Unbound；既防止 $v_{\text{out}} \in \text{HostIn}(G)$ 或前序节点定值在 `.none` 分支上泄露旧值，也允许同一张图中多个独立的 `unwrap`、`map_get`、`array_get` 或 `math` 节点合法复用同一个输出变量名 $v_{\text{out}}$。)*
    * 在 `builtin:array_shift` 的 `.empty` 分支上（$OutVars(N, \texttt{empty}) = \emptyset$）：
      $$Def_{\text{out}}(N.\texttt{empty}) = Def_{\text{in}}(N) \setminus \{v_{\text{item}}\}$$
      *(注：运行期进入 `.empty` 分支时，同步将当前栈帧中的 $\rho(v_{\text{item}})$ 置为未绑定 Unbound；允许同一张图中前后多个独立的 `array_shift` 循环合法复用同一个迭代变量名 $v_{\text{item}}$。)*

@@ -39,12 +39,18 @@
 
 在 `CallNode`（`use: workflow:<path>` 或 `use: builtin:<op>`）中，`with` 包含可选的 `input` 映射与 `output` 映射。
 
-### 1. `with.input` 必填参数显式声明约束
+### 1. `with.input` 与 `with.output` 必填参数显式声明约束
 
 无论 `CallNode` 是调用外部子工作流（`use: workflow:<path>`）还是调用内建算子（`use: builtin:<op>`），**均不支持 `with.input` 的隐式同名省略**：
 
 * **对 `use: workflow:<path>`**：必须满足 $\text{dom}(N.\text{with.input}) = \text{dom}(\text{target.input})$（当 $\text{target.input}$ 非空时，每个目标参数 $p \in \text{dom}(\text{target.input})$ 均须在 `with.input` 中显式写出；若与外层变量同名，写作 `p: p`；当 $\text{dom}(\text{target.input}) = \emptyset$ 时，允许省略 `with.input`）；缺失任何目标参数或包含不属于 $\text{dom}(\text{target.input})$ 的键名，编译期报错。
-* **对 `use: builtin:<op>`**：算子签名要求的全部必填 `with.input` 参数（如 `source`、`item`、`key`、`value`；对 `builtin:object_merge` 为可选保留键 `base` 及至少 1 个目标结构体字段名 $f_i$）与必填 `with.output` 参数（如 `value`、`result`、`item`、`rest`）必须在 `with` 中显式写出，缺失任何必填项或包含未知参数名均在编译期报错（具体算子参数契约见 [`05-builtin-generic-inference.md`](../02-type-system-and-symbols/05-builtin-generic-inference.md)）。
+* **对 `use: builtin:<op>`**（其中 `<op>` 必须属于 16 个标准内建算子集合：$\{\texttt{unwrap}, \texttt{switch}, \texttt{assign}, \texttt{array\_shift}, \texttt{array\_append}, \texttt{map\_set}, \texttt{map\_get}, \texttt{map\_delete}, \texttt{object\_merge}, \texttt{array\_flatten}, \texttt{compare}, \texttt{logic}, \texttt{math}, \texttt{length}, \texttt{array\_get}, \texttt{array\_concat}\}$）：
+  * **`with.input` 约束**：算子签名要求的全部必填 `with.input` 参数（如 `source`、`item`、`key`、`value`、`op`、`left`、`right`、`index`；对 `builtin:object_merge` 为可选保留键 `base` 及至少 1 个目标结构体字段名 $f_i$）必须在 `with.input` 中显式写出，缺失任何必填项或包含未知参数名均在编译期报错。
+  * **`with.output` 可选性约束**：
+    * `builtin:switch` **禁止声明** `with.output`；
+    * `builtin:compare` 与 `builtin:logic` 的 `with.output` **可选**（省略 `with.output` 时直接暴露 `.true` / `.false` 控制分支；显式声明 `with.output: { result: <var> }` 时为无分支单出边）；
+    * 其余 13 个内建算子的 `with.output` **必填**，且必须显式写出算子签名要求的全部输出键（`value`、`result` 或 `item` + `rest`）。
+  * 具体各算子的入参、出参及控制分支契约见 [`05-builtin-generic-inference.md`](../02-type-system-and-symbols/05-builtin-generic-inference.md)。
 
 ### 2. `with.input.<param>` 的四态语法解析规则
 

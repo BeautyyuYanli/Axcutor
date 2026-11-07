@@ -91,9 +91,9 @@ graph:
 
 ---
 
-## 三、 确定性路由、拆包、查找与定值内建算子
+## 三、 确定性路由、比较、逻辑、拆包与查找内建算子
 
-当图中变量已经是明确的 `boolean`、带 `enum` 约束的 `string`、显式可空类型 `Optional<T>`（`type: [<BaseType>, "null"]`，含 `TypedDict` 中未列入 `required` 的可选叶子字段）或有序映射 `OrderedMap<string, V>` 时，可直接调用运行时内建算子执行零开销路由、拆包、按键查找或分支常量定值（注意：所有内建算子的输出目标变量均须已在当前图符号表中显式声明类型，完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）。
+当图中条件判断与数据读取不涉及外部 I/O 或复杂业务推理时，可直接调用运行时内建算子执行**零外部执行器开销**的确定性路由、比较、布尔逻辑组合、可空拆包、按键/按索引安全查找或分支常量定值（注意：所有内建算子的输出目标变量均须已在当前图符号表中显式声明类型，完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）。
 
 ### 1. [`builtin:switch`](../../reference/builtins/switch.md)：布尔与枚举确定性路由
 
@@ -125,7 +125,46 @@ edges:
   - route_priority.low -> batch_handler
 ```
 
-### 2. [`builtin:unwrap`](../../reference/builtins/unwrap.md)：可空类型拆包与默认值合并
+### 2. [`builtin:compare`](../../reference/builtins/compare.md) 与 [`builtin:logic`](../../reference/builtins/logic.md)：二元比较与布尔逻辑组合
+
+* **[`builtin:compare`](../../reference/builtins/compare.md)**：支持相等性比较（`eq`、`ne`，按 JSON 深度值比较且允许可空变量与 `null` 判等）与非空标量序比较（`lt`、`lte`、`gt`、`gte`，支持 `integer`/`number` 数值大小比较与 `string` 字典序比较）。省略 `with.output` 时直接暴露 **`.true`** / **`.false`** 分支；声明 `with.output.result` 时将布尔结果写入变量（无分支单出边）。
+* **[`builtin:logic`](../../reference/builtins/logic.md)**：对非空 `boolean` 执行逻辑与（`and`）、逻辑或（`or`）或逻辑非（`not`）。同样支持省略 `with.output` 直接暴露 **`.true`** / **`.false`** 分支，或声明 `with.output.result` 输出布尔变量。
+
+```yaml
+graph:
+  variables:
+    is_high_confidence:
+      type: boolean
+
+  nodes:
+    # 1. 将数值阈值判断 (review_score >= 0.85) 的布尔结果存入变量 is_high_confidence
+    eval_confidence:
+      use: builtin:compare
+      with:
+        input:
+          op: { value: "gte" }
+          left: review_score
+          right: 0.85
+        output:
+          result: is_high_confidence
+
+    # 2. 组合两个布尔条件 (is_high_confidence and is_verified)，省略 with.output 直接作为分支路由
+    check_auto_approve:
+      use: builtin:logic
+      with:
+        input:
+          op: { value: "and" }
+          left: is_high_confidence
+          right: is_verified
+
+  edges:
+    - start -> eval_confidence
+    - eval_confidence -> check_auto_approve
+    - check_auto_approve.true -> auto_publish
+    - check_auto_approve.false -> manual_review
+```
+
+### 3. [`builtin:unwrap`](../../reference/builtins/unwrap.md)：可空类型拆包与默认值合并
 
 `builtin:unwrap` 将可空类型 `[T, "null"]`（包括显式声明为 `[T, "null"]` 的变量/字段，以及在 `TypedDict.properties` 中声明但未列入 `required`、投影时自动提升为 `[T, "null"]` 的可选叶子字段）收窄为非空类型 `T`，支持两种模式：
 
@@ -166,19 +205,21 @@ graph:
     - check_assigned_reviewer.none -> assign_from_pool
 ```
 
-### 3. [`builtin:map_get`](../../reference/builtins/map-get.md) 与 [`builtin:assign`](../../reference/builtins/assign.md)：字典条件查找与分支常量定值
+### 4. [`builtin:map_get`](../../reference/builtins/map-get.md)、[`builtin:array_get`](../../reference/builtins/array-get.md) 与 [`builtin:assign`](../../reference/builtins/assign.md)：容器安全查找与分支常量定值
 
-* **[`builtin:map_get`](../../reference/builtins/map-get.md)**：按动态键 `key` 查询有序映射 `OrderedMap<string, V>`。省略 `default` 时暴露 **`.some`**（键存在，定值 `value`）与 **`.none`**（键不存在，反定值移除 `value`）两个分支；传入 `default` 时收敛为无分支单出边。
+* **[`builtin:map_get`](../../reference/builtins/map-get.md)**：按动态字符串键 `key` 查询有序映射 `OrderedMap<string, V>`。省略 `default` 时暴露 **`.some`**（键存在，定值 `value`）与 **`.none`**（键不存在，反定值移除 `value`）两个分支；传入 `default` 时收敛为无分支单出边。
+* **[`builtin:array_get`](../../reference/builtins/array-get.md)**：按整数下标 `index`（支持负数倒数索引，如 `-1` 表示末尾元素）非破坏性地读取列表 `Array<T>` 元素。省略 `default` 时暴露 **`.some`**（下标未越界，定值 `value`）与 **`.none`**（越界，反定值移除 `value`）两个分支；传入 `default` 时收敛为无分支单出边。
 * **[`builtin:assign`](../../reference/builtins/assign.md)**：将变量、结构体字段路径或常量字面量直接绑定写入目标顶层变量 `value`，常用于在分支合流前无需调用 `run` 即可完成变量的默认定值或字段提取。
 
 ```yaml
 graph:
   variables:
     final_answer: { type: string }
+    top_candidate: { type: string }
     audit_tag: { type: string }
 
   nodes:
-    # 按动态键 query_id 查找缓存字典 answer_cache：存在走 .some，不存在走 .none
+    # 1. 按动态键 query_id 查找缓存字典 answer_cache：存在走 .some，不存在走 .none
     lookup_cached_answer:
       use: builtin:map_get
       with:
@@ -188,7 +229,17 @@ graph:
         output:
           value: final_answer
 
-    # 在无需计算的分支上，使用 builtin:assign 直接将常量赋给汇合变量 audit_tag
+    # 2. 按下标 0 安全读取候选列表首元素：非空走 .some，空列表越界走 .none
+    read_first_candidate:
+      use: builtin:array_get
+      with:
+        input:
+          source: ranked_candidates
+          index: 0
+        output:
+          value: top_candidate
+
+    # 3. 在无需计算的分支上，使用 builtin:assign 直接将常量赋给汇合变量 audit_tag
     set_cache_hit_tag:
       use: builtin:assign
       with:

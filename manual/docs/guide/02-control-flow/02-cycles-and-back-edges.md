@@ -56,15 +56,21 @@ graph:
 
 ---
 
-## 二、 循环与流水线中的确定性数据与集合操作算子
+## 二、 循环与流水线中的确定性标量、算术与集合操作算子
 
-在成环回边循环或串行流水线中，若需初始化工作队列、从队列头部逐个弹出元素执行短路遍历或**跨元素有状态串行折叠（Stateful Sequential Fold）**、向列表追加记录、展平二维列表、读写/删除有序映射键值对，或不可变地组装/更新强类型结构体（`TypedDict`），可调用以下运行时内建算子（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）：
+在成环回边循环或串行流水线中，若需执行计数器自增与算术累加、数值阈值判断、测量集合长度、按索引随机读取或拼接列表、从队列头部逐个弹出元素执行短路遍历或**跨元素有状态串行折叠（Stateful Sequential Fold）**、读写/删除有序映射键值对，或不可变地组装/更新强类型结构体（`TypedDict`），可直接调用以下运行时内建算子（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）：
 
 | 内建算子 | 核心用途 | 控制分支与输出契约 |
 | :--- | :--- | :--- |
 | **[`builtin:assign`](../../reference/builtins/assign.md)** | 将变量、结构体字段路径（如 `request.items`）或常量字面量绑定写入顶层变量 `value` | 无分支单出边，输出目标变量 `value` |
+| **[`builtin:compare`](../../reference/builtins/compare.md)** | 对两个操作数执行相等性（`eq`, `ne`）或序关系（`lt`, `lte`, `gt`, `gte`）比较 | • **省略 `with.output`**：暴露 **`.true`** / **`.false`**<br>• **声明 `result`**：无分支单出边，输出 `result: boolean` |
+| **[`builtin:logic`](../../reference/builtins/logic.md)** | 对非空布尔值执行逻辑与（`and`）、逻辑或（`or`）或逻辑非（`not`）运算 | • **省略 `with.output`**：暴露 **`.true`** / **`.false`**<br>• **声明 `result`**：无分支单出边，输出 `result: boolean` |
+| **[`builtin:math`](../../reference/builtins/math.md)** | 对非空数值执行二元算术运算（`add`, `sub`, `mul`, `div`, `mod`） | • **`add`/`sub`/`mul` 或带 `default`**：无分支单出边，输出 `result`<br>• **`div`/`mod` 且无 `default`**：暴露 **`.some`**（定值 `result`）与 **`.none`** |
+| **[`builtin:length`](../../reference/builtins/length.md)** | 非破坏性地获取非空 `Array`、`OrderedMap` 或 `string` 的长度 | 无分支单出边，输出 `result: integer`（$\ge 0$） |
+| **[`builtin:array_get`](../../reference/builtins/array-get.md)** | 按整数下标 `index`（支持负数倒数索引）非破坏性读取列表元素 | • **省略 `default`**：暴露 **`.some`**（定值 `value`）与 **`.none`**<br>• **传入 `default`**：无分支单出边，输出 `value` |
 | **[`builtin:array_shift`](../../reference/builtins/array-shift.md)** | 从列表头部弹出首元素 `item` 与剩余切片 `rest` | • **`.some`**：队列非空，`item` 与 `rest` 获得定值<br>• **`.empty`**：队列已空，不写入 `item` 与 `rest` |
 | **[`builtin:array_append`](../../reference/builtins/array-append.md)** | 将单步产出的元素 `item` 追加至列表 `source` 末尾 | 无分支单出边，输出更新后的列表 `result` |
+| **[`builtin:array_concat`](../../reference/builtins/array-concat.md)** | 将两个同构列表 `left` 与 `right` 按顺序首尾拼接为新列表 | 无分支单出边，输出拼接后的列表 `result` |
 | **[`builtin:array_flatten`](../../reference/builtins/array-flatten.md)** | 将非空二维列表 `Array<Array<W>>` 按序首尾拼接展平为一维列表 `Array<W>` | 无分支单出边，输出展平后的列表 `result` |
 | **[`builtin:map_set`](../../reference/builtins/map-set.md)** | 将键值对 `key -> value` 插入或更新至有序映射 `source` | 无分支单出边，输出更新后的有序映射 `result` |
 | **[`builtin:map_get`](../../reference/builtins/map-get.md)** | 按动态键 `key` 从有序映射 `source` 中查找对应值（可选配 `default`） | • **省略 `default`**：暴露 **`.some`**（定值 `value`）与 **`.none`**<br>• **传入 `default`**：无分支单出边，输出 `value` |
@@ -147,7 +153,87 @@ graph:
     - pop_url.empty -> end.exhausted     # 队列已空：跳出循环
 ```
 
-### 2. 有序映射读写与结构体不可变更新片段（`map_get` / `map_set` + `object_merge`）
+### 2. 非破坏性下标计数循环片段（`length` + `compare` + `array_get` + `math`）
+
+当需要在不拆解原列表的前提下按索引遍历或抽样访问列表（如 `while (idx < n)`），可组合使用 [`builtin:length`](../../reference/builtins/length.md)、[`builtin:compare`](../../reference/builtins/compare.md)、[`builtin:array_get`](../../reference/builtins/array-get.md) 与 [`builtin:math`](../../reference/builtins/math.md)，无需调用任何外部 `run` 执行器即可在图内零开销维护下标与数值累加：
+
+```yaml
+graph:
+  variables:
+    idx:
+      type: integer
+      default: 0
+    total_len:
+      type: integer
+    current_score:
+      type: number
+    accumulated_score:
+      type: number
+      default: 0.0
+
+  nodes:
+    # 1. 入环前非破坏性地测量 scores 列表长度
+    get_total_len:
+      use: builtin:length
+      with:
+        input:
+          source: scores
+        output:
+          result: total_len
+
+    # 2. 循环头条件判断：idx < total_len（暴露 check_bound.true 与 check_bound.false）
+    check_bound:
+      use: builtin:compare
+      with:
+        input:
+          op: { value: "lt" }
+          left: idx
+          right: total_len
+
+    # 3. 按当前下标 idx 非破坏性读取列表元素（传入 default: 0.0 收敛为无分支单出边）
+    read_score_at_idx:
+      use: builtin:array_get
+      with:
+        input:
+          source: scores
+          index: idx
+          default: 0.0
+        output:
+          value: current_score
+
+    # 4. 累加总分：accumulated_score = accumulated_score + current_score
+    add_to_total:
+      use: builtin:math
+      with:
+        input:
+          op: { value: "add" }
+          left: accumulated_score
+          right: current_score
+        output:
+          result: accumulated_score
+
+    # 5. 下标自增：idx = idx + 1
+    increment_idx:
+      use: builtin:math
+      with:
+        input:
+          op: { value: "add" }
+          left: idx
+          right: 1
+        output:
+          result: idx
+
+  edges:
+    - start -> get_total_len
+    - get_total_len -> check_bound
+    - check_bound.true -> read_score_at_idx
+    - read_score_at_idx -> add_to_total
+    - add_to_total -> increment_idx
+    - increment_idx -> check_bound       # 成环回边：回到循环头检查下一轮下标
+    - check_bound.false -> end           # 遍历完毕：跳出循环
+```
+
+### 3. 有序映射读写与结构体不可变更新片段（`map_get` / `map_set` + `object_merge`）
 
 当需要在循环中按动态键查询或更新有序映射（`type: object` + `additionalProperties`），或不可变地更新结构体（`TypedDict`）的某个字段时，组合使用 `builtin:map_get`、`builtin:map_set` 与 `builtin:object_merge`：
 
@@ -201,7 +287,7 @@ graph:
 
 ## 三、 完整示例：生成-校验-修正循环
 
-以下完整工作流通过 `graph.variables` 初始化跨轮状态，并在校验未通过时经由成环回边跳回生成节点，直至校验通过后退出：
+以下完整工作流通过 `graph.variables` 初始化跨轮状态，结合 `builtin:math` 递增尝试次数，并在校验未通过时经由成环回边跳回生成节点，直至校验通过后退出：
 
 ```yaml
 # 1. 根节点输入与输出契约
@@ -221,7 +307,7 @@ graph:
   # 2. 设置单图最大步数上限，防止动态循环不收敛
   max_steps: 20
 
-  # 3. 初始化跨轮次状态变量：首轮进入 generate_candidate 时读取此初值
+  # 3. 初始化跨轮次状态变量：首轮进入循环时读取此初值
   variables:
     attempts:
       type: integer
@@ -231,15 +317,25 @@ graph:
       default: ""
 
   nodes:
-    # 循环体步骤 1：读取需求、上轮错误信息与当前计数，产出候选结果并递增 attempts
+    # 循环体步骤 1：使用 builtin:math 确定性地将 attempts 自增 1
+    increment_attempts:
+      use: builtin:math
+      with:
+        input:
+          op: { value: "add" }
+          left: attempts
+          right: 1
+        output:
+          result: attempts
+
+    # 循环体步骤 2：读取需求、上轮错误信息与当前计数，产出候选结果
     generate_candidate:
       input: [task_spec, last_error, attempts]
       output:
         candidate: { type: string }
-        attempts: { type: integer }
-      run: "根据需求 variables.task_spec 与上次报错 variables.last_error 生成代码写入 output.candidate，并将 variables.attempts + 1 写入 output.attempts。"
+      run: "根据需求 variables.task_spec 与上次报错 variables.last_error（第 variables.attempts 次尝试）生成代码写入 output.candidate。"
 
-    # 循环体步骤 2：校验候选代码
+    # 循环体步骤 3：校验候选代码
     # - pass 分支声明 output: []，保持原有状态直接退出
     # - retry 分支声明 output: [last_error]，更新错误反馈供下一轮读取
     verify_candidate:
@@ -257,10 +353,11 @@ graph:
 
   # 4. 控制流连边：包含回边与退环出口
   edges:
-    - start -> generate_candidate
+    - start -> increment_attempts
+    - increment_attempts -> generate_candidate
     - generate_candidate -> verify_candidate
-    # 成环回边：将更新后的 last_error 与 attempts 带回 generate_candidate 进入下一轮
-    - verify_candidate.retry -> generate_candidate
+    # 成环回边：将更新后的 last_error 带回 increment_attempts 进入下一轮
+    - verify_candidate.retry -> increment_attempts
     # 退环出口：candidate 与 attempts 均已定值，正常结束工作流
     - verify_candidate.pass -> end
 ```

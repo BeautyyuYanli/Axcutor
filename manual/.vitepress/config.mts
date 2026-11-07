@@ -129,8 +129,14 @@ export default withMermaid(
               { text: 'builtin:assign (变量赋值/字段提取)', link: '/docs/reference/builtins/assign' },
               { text: 'builtin:unwrap (可空拆包/默认值)', link: '/docs/reference/builtins/unwrap' },
               { text: 'builtin:switch (布尔/枚举路由)', link: '/docs/reference/builtins/switch' },
+              { text: 'builtin:compare (二元比较/条件路由)', link: '/docs/reference/builtins/compare' },
+              { text: 'builtin:logic (布尔逻辑与/或/非)', link: '/docs/reference/builtins/logic' },
+              { text: 'builtin:math (安全算术运算)', link: '/docs/reference/builtins/math' },
+              { text: 'builtin:length (集合/字符串长度)', link: '/docs/reference/builtins/length' },
+              { text: 'builtin:array_get (列表按索引读取)', link: '/docs/reference/builtins/array-get' },
               { text: 'builtin:array_shift (首元素弹出)', link: '/docs/reference/builtins/array-shift' },
               { text: 'builtin:array_append (末尾追加)', link: '/docs/reference/builtins/array-append' },
+              { text: 'builtin:array_concat (列表首尾拼接)', link: '/docs/reference/builtins/array-concat' },
               { text: 'builtin:array_flatten (二维列表展平)', link: '/docs/reference/builtins/array-flatten' },
               { text: 'builtin:map_set (有序映射写入)', link: '/docs/reference/builtins/map-set' },
               { text: 'builtin:map_get (有序映射读取)', link: '/docs/reference/builtins/map-get' },
@@ -161,7 +167,7 @@ export default withMermaid(
             collapsed: false,
             items: [
               { text: '01. TypeSpec 良构性公理', link: '/spec/02-type-system-and-symbols/01-typespec-well-formedness' },
-              { text: '02. 类型等价判定与实例兼容性', link: '/spec/02-type-system-and-symbols/02-type-equivalence-and-compatibility' },
+              { text: '02. 类型等价、子类型与实例兼容性', link: '/spec/02-type-system-and-symbols/02-type-equivalence-and-compatibility' },
               { text: '03. 单遍显式符号表与模块化类型检查', link: '/spec/02-type-system-and-symbols/03-two-phase-symbol-resolution' },
               { text: '04. 静态字段路径投影类型推导', link: '/spec/02-type-system-and-symbols/04-static-field-projection-typing' },
               { text: '05. 内建算子编译期泛型检查规则', link: '/spec/02-type-system-and-symbols/05-builtin-generic-inference' }

@@ -10,20 +10,20 @@
 
 调用节点通过 `with.input` 将当前图的数据显式绑定至目标工作流的输入参数，并通过 `with.output` 将需要的目标工作流输出字段显式映射回当前图的 `variables`（接收返回值的目标变量需已在当前图符号表中声明类型）。
 
-### 1. 显式入参绑定与按需输出接收（未列出输出自动忽略）
+### 1. 显式入参绑定、按需输出接收与子类型兼容（`<:`）
 
-对于 `use: workflow:<path>` 节点，参数绑定遵循显式边界原则：
+对于 `use: workflow:<path>` 节点，参数绑定遵循显式边界与单向子类型兼容原则：
 
-* **`with.input` 必填参数显式绑定**：被调用子工作流顶层声明的每一个 `input` 参数，均必须在 `with.input` 中显式写出（若调用方变量与参数同名，显式写作 `<param>: <param>`；仅当被调用工作流 `input: {}` 为空时可省略 `with.input`）。单文件静态分析无需跨文件查看被调用方定义即可直接读取 `with.input` 确定该节点的变量读取集。
-* **`with.output` 按需映射与未绑定字段默认忽略**：在 `with.output` 中仅需列出调用方需要接收的输出字段 `<target_field>: <local_var>`（其中 `<local_var>` 为合法顶层标识符，禁止设为 `null`）。未在 `with.output` 中列出的其余子工作流输出字段默认自动忽略，既不注入调用方符号表，也不会在被调用工作流升级新增输出字段时污染或冲突调用方命名空间。
+* **`with.input` 必填参数显式绑定与入参子类型兼容（$T_{\text{arg}} <: \text{target.input}[p]$）**：被调用子工作流顶层声明的每一个 `input` 参数，均必须在 `with.input` 中显式写出（若调用方变量与参数同名，显式写作 `<param>: <param>`；仅当被调用工作流 `input: {}` 为空时可省略 `with.input`）。传入的变量或字段路径类型只需是目标参数类型的**子类型**——例如可将非空 `string` 传给子工作流的可选参数 `[string, "null"]`、将 `integer` 传给 `number` 参数、将带 `enum` 的分类字符串传给普通 `string` 参数，或将 `Array<integer>` 协变传给 `Array<number>`（详见 [TypeSpec 速查表：静态子类型与容器协变](../../reference/03-typespec-cheatsheet.md)）。
+* **`with.output` 按需映射与出参子类型兼容（$\text{target.output}[f] <: \Sigma_G(\text{local\_var})$）**：在 `with.output` 中仅需列出调用方需要接收的输出字段 `<target_field>: <local_var>`（其中 `<local_var>` 为合法顶层标识符，禁止设为 `null`），且允许父图使用更宽泛的变量类型（如可空类型、父枚举或 `number`）接收子工作流产出的精确类型。未在 `with.output` 中列出的其余子工作流输出字段默认自动忽略，既不注入调用方符号表，也不会在被调用工作流升级新增输出字段时污染或冲突调用方命名空间。
 
 ```yaml
 graph:
   # 仅由 use 节点写入的局部中间变量在 variables 中显式声明 TypeSpec
   variables:
     clean_text: { type: string }
-    word_count: { type: integer }
-    final_body: { type: string }
+    word_count: { type: number }          # 允许用更宽泛的 number 接收子工作流产出的 integer
+    final_body: { type: [string, "null"] } # 允许用可空 [string, "null"] 接收子工作流产出的非空 string
 
   nodes:
     # 1. 显式传入全部目标 input 参数，并接收 clean_text 与 word_count 两个输出字段：
@@ -99,7 +99,7 @@ nodes:
 
 ### 4. 在 `use` 节点上挂载 `for_each` 时的输出映射
 
-当 `use: workflow:<path>` 节点挂载 `for_each` 进行集合遍历时，与普通 `use` 节点完全一致，继续通过 **`with.output`** 显式映射需要收集的子工作流输出字段：被调用子工作流单次产出的字段类型 $U$，在映射至外层目标变量时自动对应为一阶同构提升后的集合类型（`Array<U>` 或 `OrderedMap<string, U>`；未在 `with.output` 中列出的子工作流输出字段自动忽略）：
+当 `use: workflow:<path>` 节点挂载 `for_each` 进行集合遍历时，与普通 `use` 节点完全一致，继续通过 **`with.output`** 显式映射需要收集的子工作流输出字段：被调用子工作流单次产出的字段类型 $U$，经一阶同构提升后（`Array<U>` 或 `OrderedMap<string, U>`）只需是外层目标集合变量类型的子类型（$\text{Lift}(T_{\text{src}}, U) <: \Sigma_G(\text{outer\_var})$；未在 `with.output` 中列出的子工作流输出字段自动忽略）：
 
 ```yaml
 graph:

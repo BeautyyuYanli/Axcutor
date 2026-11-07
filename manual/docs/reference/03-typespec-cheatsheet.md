@@ -99,3 +99,62 @@ graph:
     current_label:
       type: string
 ```
+
+---
+
+## 三、 静态子类型赋值兼容性与不可变容器协变（$T_{\text{actual}} <: T_{\text{expected}}$）
+
+Axcutor 严格区分**同帧同名变量声明（双向等价 $T_1 \equiv T_2$）**与**跨变量值流转及传参（单向子类型兼容 $T_{\text{actual}} <: T_{\text{expected}}$）**：
+
+* **同帧同名显式声明（$T_1 \equiv T_2$）**：同一张图内若多处显式声明同一个变量名的 `TypeSpec`（如同时在宿主 `output` 与 `ActionNode.output` 中声明），两处声明必须完全等价。
+* **值流转与契约消费（$T_{\text{actual}} <: T_{\text{expected}}$）**：在 `use: workflow:<path>` 传参与输出接收、`builtin:*` 算子赋值/更新以及 `for_each` 一阶集合提升写入位置，均支持以下五条静态子类型兼容规则（基于纯函数式写时复制不可变内存模型，容器协变在编译期 100% 类型安全）：
+
+| 子类型规则 | 兼容方向（$T_{\text{sub}} <: T_{\text{sup}}$） | 典型应用场景 |
+| :--- | :--- | :--- |
+| **1. 可空性单调提升** | 非空 `T` $<:$ 显式可空 `[T, "null"]`<br>*(反向禁止：可空不可直接赋给非空，须先 `builtin:unwrap`)* | 将已确认非空的 `string` 变量传入子工作流的可选参数 `[string, "null"]`，或赋给初始为 `null` 的可空状态变量。 |
+| **2. 数值与枚举拓宽** | • `integer` $<:$ `number`<br>• 子枚举 `enum: [a, b]` $<:$ 父枚举 `enum: [a, b, c]` $<:$ 无 `enum` 基础标量 | 将 `integer` 计数传给期望 `number` 的计算节点；将带 `enum` 的分类状态传给通用 `string` 日志参数。 |
+| **3. 列表协变（`Array`）** | 若 $T_1 <: T_2$，则 `Array<T1>` $<:$ `Array<T2>` | 将 `Array<integer>` 赋给 `Array<number>`，或将 `Array<string(enum)>` 传给期望 `Array<string>` 的子工作流。 |
+| **4. 有序映射协变（`OrderedMap`）** | 若 $V_1 <: V_2$，则 `OrderedMap<string, V1>` $<:$ `OrderedMap<string, V2>` | 将非空值映射 `OrderedMap<string, string>` 赋给允许空值的 `OrderedMap<string, [string, "null"]>`。 |
+| **5. 结构体深度协变与必填强化（`TypedDict`）** | $\text{set}(T_2.\text{required}) \subseteq \text{set}(T_1.\text{required})$，$\text{dom}(T_1.\text{properties}) \subseteq \text{dom}(T_2.\text{properties})$，且共有属性满足 $T_1.\text{properties}[f] <: T_2.\text{properties}[f]$ | 将全部字段必填且非空的精确结构体，赋给部分字段可选（非 `required`）或字段类型为可空/父类型的同构目标结构体。 |
+
+```yaml
+graph:
+  variables:
+    # 目标变量声明为更宽泛的父类型
+    nullable_winner:
+      type: [string, "null"]
+      default: null
+    general_status:
+      type: string
+    metric_values:
+      type: array
+      items: { type: number }
+
+  nodes:
+    # 1. 非空提升：将非空 string 变量 verified_user 直接赋给 [string, "null"] 变量 nullable_winner
+    promote_to_nullable:
+      use: builtin:assign
+      with:
+        input:
+          source: verified_user
+        output:
+          value: nullable_winner
+
+    # 2. 枚举拓宽：将 { type: string, enum: [open, closed] } 的 ticket_status 赋给普通 string 变量
+    widen_enum_to_string:
+      use: builtin:assign
+      with:
+        input:
+          source: ticket_status
+        output:
+          value: general_status
+
+    # 3. 不可变列表协变：将 Array<integer> 类型的 raw_counts 赋给 Array<number> 类型的 metric_values
+    covariant_array_assign:
+      use: builtin:assign
+      with:
+        input:
+          source: raw_counts
+        output:
+          value: metric_values
+```
