@@ -1,6 +1,6 @@
 # 01. CFG 拓扑穷尽、SESE 并发限制与可达性公理
 
-本规范定义控制流图（CFG）在编译期必须通过的拓扑良构性检查（Topological Validation）。
+本规范定义控制流图（CFG）在编译期必须通过的拓扑良构性检查（Topological Validation）以及跨文件调用图（Workflow Call Graph）的模块化校验准则。
 
 ---
 
@@ -23,10 +23,14 @@
 
 ## 二、 并发组 `[worker_1, ..., worker_k]` 的 SESE 限制公理
 
-对于出现在任意三元并发边 `src -> [W_1, ..., W_k] -> join_target` 中的每个成员节点 $W_i$：
+对于出现在任意三元并发边 $e = (\text{src} \to [W_1, \dots, W_k] \to \text{join\_target})$ 中的每个成员节点 $W_i \in \{W_1, \dots, W_k\}$：
 
-1. **独占拓扑**：$W_i$ 禁止在其他任何边中作为 `SourceEndpoint`、`TargetEndpoint`、`JoinTarget` 或再次出现在其他 `ConcurrentGroup` 中。
-2. **单出口无分支限制**：若 $W_i$ 未挂载 `for_each`，则 $W_i$ **禁止对外暴露任何正常 `branches` 或 `catch`**（包括禁止直接使用带分支的 `builtin:switch`、未传 `default` 的 `builtin:unwrap` 及 `builtin:array_shift`）。
+1. **独占拓扑（含本条并发边自身端点互斥）**：
+   * **本边首尾互斥**：$W_i$ 禁止作为本条并发边 $e$ 自身的源节点或汇合目标节点：
+     $$W_i \neq \text{NodeOf}(\text{src}) \;\land\; W_i \neq \text{join\_target}$$
+     *(例如禁止书写 `w1 -> [w1, w2] -> next_node` 或 `prev_node -> [w1, w2] -> w1`。)*
+   * **跨边完全独占**：在当前图其余所有边 $e' \in G.\text{edges} \setminus \{e\}$ 中，$W_i$ 禁止作为 `SourceEndpoint`、`TargetEndpoint`、`JoinTarget` 或再次出现在其他 `ConcurrentGroup` 中。
+2. **单出口无分支限制**：若 $W_i$ 未挂载 `for_each`，则 $W_i$ **禁止对外暴露任何正常 `branches` 或 `catch`**（包括禁止直接使用带分支的 `builtin:switch`、未传 `default` 的 `builtin:unwrap`、未传 `default` 的 `builtin:map_get` 及 `builtin:array_shift`）。
 
 ---
 
@@ -40,3 +44,16 @@
 3. **后向正常出口可达性（No Inescapable Cycles / Must Have Normal Exit）**：
    * 整张图必须至少存在一条从 `start` 到达 `end`（或某个 `end.<branch>`）的路径（不允许全图仅有 `fail` 而无 `end`）。
    * 图内每一个节点 $N \in \text{dom}(G.\text{nodes})$（包含处于环路中的节点），在图拓扑上必须至少存在一条从 $N$ 出发到达 `end`（或某个 `end.<branch>`）或 `fail` 的有向路径；且对于每个强连通分量（SCC / 环路），必须至少存在一条跳出该环路通向终态的出边。
+
+---
+
+## 四、 跨文件工作流调用图（Workflow Call Graph）与受护栏保护的递归
+
+当图内 `CallNode` 通过 `use: workflow:<path>` 调用外部工作流文件时：
+
+1. **基于顶层签名的模块化独立校验**：
+   * 每个工作流文件在文件顶层显式声明了完备的静态函数签名 $(I_{\text{target}}, O_{\text{target}}, B_{\text{target}}) = (\text{target.input}, \text{target.output}, \text{target.branches})$；
+   * 静态检查器在校验调用节点 $N$ 时，仅依赖被调用工作流的顶层静态签名验证 `with.input`、`with.output`（或 `for_each` 通道）及外层分支出边的合法性，无需在编译期展开被调用方的内部图体。
+2. **允许直接或间接递归调用**：
+   * 跨文件工作流调用图允许存在直接递归（如工作流 $A$ 内部某条分支通过 `use: workflow:A` 调用自身）或相互递归环路（$A \to B \to A$）；
+   * 运行期由 [`03-guardrails-and-step-accounting.md`](../04-runtime-execution-model/03-guardrails-and-step-accounting.md) 定义的调用栈深度护栏 $\text{MAX\_CALL\_DEPTH}$（默认 $64$）强制保证有界终止，超限时抛出不可捕获的 `StackOverflowError`。

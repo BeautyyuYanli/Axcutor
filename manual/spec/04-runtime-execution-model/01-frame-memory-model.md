@@ -13,7 +13,7 @@
     $$\rho_0 = \rho_{\text{caller\_in}} \uplus \rho_{\text{graph\_defaults}}$$
   * 与父调用栈帧的内存表物理隔离（无词法作用域穿透）。
 * **正常提交（`end` / `end.<branch>`）**：
-  * 提取所选出口分支承诺产出的 `output` 子集字段，经 `TypeSpec` 运行期校验（及 `with.output` 键名重映射）后，原子合并至父栈帧；随后销毁当前 `FunctionFrame`。
+  * 提取所选出口分支承诺产出的 `output` 子集字段，经 `TypeSpec` 运行期校验（及 `with.output` 键名重映射，忽略映射为 `null` 的显式丢弃字段；若挂载了 `for_each`，则直接提交给 `for_each` 槽位缓冲）后，原子合并至父栈帧；随后销毁当前 `FunctionFrame`。
 * **异常回滚（`fail` 或未捕获异常）**：
   * 立即销毁当前 `FunctionFrame`，丢弃 $\rho$ 中的全部状态，向父节点边界抛出对应异常。
 

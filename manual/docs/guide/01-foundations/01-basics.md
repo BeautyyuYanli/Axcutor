@@ -57,7 +57,7 @@ compute_discount:
 
 ### 1. 形态 A：顶层为 `run`（单步原子工作流）
 
-当整个工作流仅由单步计算或单次调用组成时，直接在顶层声明 `run`：
+当整个工作流仅由单步计算或单次调用组成时，直接在顶层声明 `run`（内部通过 `variables.<input_var>` 引用顶层 `input` 中声明的参数）：
 
 ```yaml
 input:
@@ -72,7 +72,7 @@ output:
     type: number
     description: "折后四舍五入价格"
 
-run: "计算 input.raw_price * input.discount_rate 并保留两位小数，写入 output.final_price。"
+run: "计算 variables.raw_price * variables.discount_rate 并保留两位小数，写入 output.final_price。"
 ```
 
 ### 2. 形态 B：顶层为 `graph`（多步控制流图工作流）

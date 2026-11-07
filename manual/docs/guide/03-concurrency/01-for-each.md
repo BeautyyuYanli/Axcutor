@@ -10,6 +10,12 @@
 
 `for_each` 支持遍历列表与有序映射两类集合，并通过 `concurrency` 控制最大并发度（正整数，默认 `1`；未声明 `state` 时可设为 `> 1` 开启并发遍历）。
 
+> [!NOTE]
+> **三类节点在挂载 `for_each` 时的 `input` 声明规则**：
+> * **`run`（`ActionNode`）**：节点 `input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index`、`state` 及外层变量（未列入 `input` 的变量不会进入传给业务执行器的 `input_snapshot`）；
+> * **`use`（`CallNode`）**：在 `with.input` 中直接引用 `item` / `key` / `index`（或其结构体字段路径）及外层变量；
+> * **内联 `graph`（`InlineGraphNode`）**：由于 `item` / `key` / `index` 与 `state` 已自动注入子图的初始 `Block Frame`，内联 `graph` 节点的 `input: [...]` 仅用于捕获外层普通变量，**禁止**重复列出 `item` / `key` / `index` 或 `state`。
+
 ### 1. 遍历强类型列表（`type: array`）
 
 * **`source`（必填）**：绑定已定值的非空列表变量或结构体字段路径（如 `batch.items`）。
@@ -119,7 +125,7 @@ analyze_articles:
 
 ### 3. `state`：跨元素有状态串行折叠（`Sequential Fold`）
 
-当第 $i$ 次迭代需要读取并更新第 $i-1$ 次迭代累积的状态变量时，声明 `state: [<state_var>, ...]`。声明 `state` 时，`concurrency` 必须为 `1`，且 `<state_var>` 在进入该节点前必须已在所属图中定值：
+当第 $i$ 次迭代需要读取并更新第 $i-1$ 次迭代累积的状态变量时，声明 `state: [<state_var>, ...]`。声明 `state` 时，`concurrency` 必须为 `1`，且 `<state_var>` 在进入该节点前必须已在所属图中定值。
 
 ```yaml
 read_chapters_sequentially:
@@ -136,6 +142,38 @@ read_chapters_sequentially:
     rolling_summary: { type: string }
     single_note: { type: string }
   run: "阅读第 variables.chapter_idx 章 variables.current_chapter，结合上一章累积摘要 variables.rolling_summary 更新写入 output.rolling_summary，并撰写本章札记写入 output.single_note。"
+```
+
+当 `for_each.state` 与多分支（`branches`）或元素级异常捕获（`catch`）结合使用时，遵循以下静态与运行期规则：
+
+* **正常分支的 `state` 完备性约束**：若节点同时声明了 `branches`，则**每一个正常业务分支**的 `output` 列表都必须包含全部 `state` 变量（若某正常分支无需改变某个 `state` 变量，在 `run` 中将原值写回 `output`，在内联 `graph` 中由于 `state` 已在入口定值，直接走向 `end.<branch>` 即可自动提交原值）。
+* **`catch` 异常分支下的状态回滚与保持**：若第 $i$ 次迭代触发异常并被节点的 `catch` 捕获（当次尝试脏修改回滚、产出为空），累积状态 `state` 不会丢失，而是自动保留第 $i-1$ 次迭代完成时的有效快照值并传入第 $i+1$ 次迭代：
+
+```yaml
+fold_with_branch_and_catch:
+  for_each:
+    source: book_data.chapters
+    item: current_chapter
+    concurrency: 1
+    state: [rolling_summary]
+    filter:
+      bad_chapter: failed_chapters  # 收集触发异常的章节
+    collect:
+      single_note: chapter_notes    # 仅收集 updated 分支产出的札记
+  catch:
+    bad_chapter: [execution, timeout]  # 异常迭代回滚，rolling_summary 自动保留上一章的值继续传给下一章
+  input: [current_chapter, rolling_summary]
+  output:
+    rolling_summary: { type: string }
+    single_note: { type: string }
+  branches:
+    updated:
+      description: "正常提炼本章内容并产出札记"
+      output: [rolling_summary, single_note]
+    skipped:
+      description: "跳过无关章节，不产出 single_note，但必须包含 state 变量 rolling_summary"
+      output: [rolling_summary]
+  run: "若章节有效则更新 variables.rolling_summary 并写 output.single_note 选 updated；若跳过则将原 variables.rolling_summary 原样写入 output.rolling_summary 选 skipped。"
 ```
 
 ---

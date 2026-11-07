@@ -8,7 +8,7 @@
 
 ### 1. 跨轮次状态变量必须在入环前完成初始化
 
-循环体入口节点在第 1 轮从 `start` 进入时，循环体下游的更新节点尚未执行。因此，任何在循环入口被读取、并由循环体内部更新的跨轮状态变量（如重试计数 `attempts`、上轮错误反馈 `last_error`），必须在进入循环前已定值（通常在 `graph.variables` 中声明初值）：
+循环体入口节点在第 1 轮从 `start` 进入时，循环体下游的更新节点尚未执行。因此，任何在循环入口被读取、并由循环体内部更新的跨轮状态变量（如重试计数 `attempts`、上轮错误反馈 `last_error`），必须在进入循环前已定值（静态常量初值可在 `graph.variables` 中声明；若需从输入结构体字段如 `request.items` 初始化动态工作队列，可在入环前通过 [`builtin:assign`](../../reference/builtins/assign.md) 绑定至顶层变量）：
 
 ```yaml
 graph:
@@ -52,19 +52,23 @@ graph:
 
 ---
 
-## 二、 循环内的确定性集合操作算子
+## 二、 循环与流水线中的确定性数据与集合操作算子
 
-在成环回边循环中，若需从队列头部逐个弹出元素执行短路遍历，或在每轮迭代中向列表追加记录、向有序映射写入键值对，可调用以下三个运行时内建算子（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）：
+在成环回边循环或串行流水线中，若需初始化工作队列、从队列头部逐个弹出元素执行短路遍历、向列表追加记录、读写/删除有序映射键值对，或不可变地组装/更新强类型结构体（`TypedDict`），可调用以下运行时内建算子（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）：
 
 | 内建算子 | 核心用途 | 控制分支与输出契约 |
 | :--- | :--- | :--- |
+| **[`builtin:assign`](../../reference/builtins/assign.md)** | 将变量、结构体字段路径（如 `request.items`）或常量字面量绑定写入顶层变量 `value` | 无分支单出边，输出目标变量 `value` |
 | **[`builtin:array_shift`](../../reference/builtins/array-shift.md)** | 从列表头部弹出首元素 `item` 与剩余切片 `rest` | • **`.some`**：队列非空，`item` 与 `rest` 获得定值<br>• **`.empty`**：队列已空，不写入 `item` 与 `rest` |
 | **[`builtin:array_append`](../../reference/builtins/array-append.md)** | 将单步产出的元素 `item` 追加至列表 `source` 末尾 | 无分支单出边，输出更新后的列表 `result` |
 | **[`builtin:map_set`](../../reference/builtins/map-set.md)** | 将键值对 `key -> value` 插入或更新至有序映射 `source` | 无分支单出边，输出更新后的有序映射 `result` |
+| **[`builtin:map_get`](../../reference/builtins/map-get.md)** | 按动态键 `key` 从有序映射 `source` 中查找对应值（可选配 `default`） | • **省略 `default`**：暴露 **`.some`**（定值 `value`）与 **`.none`**<br>• **传入 `default`**：无分支单出边，输出 `value` |
+| **[`builtin:map_delete`](../../reference/builtins/map-delete.md)** | 按动态键 `key` 从有序映射 `source` 中移除条目并返回新副本 | 无分支单出边，输出更新后的有序映射 `result` |
+| **[`builtin:object_merge`](../../reference/builtins/object-merge.md)** | 构造新的 `TypedDict` 或基于已有结构体 `base` 不可变覆盖更新指定字段 | 无分支单出边，输出结构体变量 `result` |
 
-### 1. 队列弹出与列表追加片段（`array_shift` + `array_append`）
+### 1. 队列初始化、弹出与列表追加片段（`assign` + `array_shift` + `array_append`）
 
-将 `builtin:array_shift` 的 `with.output.rest` 与 `with.input.source` 绑定为同一个列表变量名（如 `pending_urls`），即可在每轮回边中原地推进剩余队列切片；结合 `builtin:array_append` 可在每轮失败时将错误日志追加至历史列表：
+当待消费的列表位于输入结构体内部（如 `batch_request.urls`）时，先通过 `builtin:assign` 将其提取至顶层变量 `pending_urls`，再将 `builtin:array_shift` 的 `with.output.rest` 与 `with.input.source` 绑定为同一个顶层变量 `pending_urls`，即可在每轮回边中原地推进剩余队列切片；结合 `builtin:array_append` 可在每轮失败时将错误日志追加至历史列表：
 
 ```yaml
 graph:
@@ -76,6 +80,15 @@ graph:
       default: []
 
   nodes:
+    # 0. 入环前将结构体字段 batch_request.urls 赋值给顶层队列变量 pending_urls
+    init_url_queue:
+      use: builtin:assign
+      with:
+        input:
+          source: batch_request.urls
+        output:
+          value: pending_urls
+
     # 1. 从队列头部弹出首元素 current_url，并将剩余切片写回 pending_urls
     pop_url:
       use: builtin:array_shift
@@ -112,7 +125,8 @@ graph:
           result: error_logs
 
   edges:
-    - start -> pop_url
+    - start -> init_url_queue
+    - init_url_queue -> pop_url
     - pop_url.some -> try_fetch
     - try_fetch.ok -> end.success        # 命中即停：无需遍历剩余元素，直接退出
     - try_fetch.failed -> append_error
@@ -120,9 +134,9 @@ graph:
     - pop_url.empty -> end.exhausted     # 队列已空：跳出循环
 ```
 
-### 2. 循环内更新有序映射片段（`map_set`）
+### 2. 有序映射读写与结构体不可变更新片段（`map_get` / `map_set` + `object_merge`）
 
-当需要在循环中按动态键名写入结果字典时，使用 `builtin:map_set` 原地更新有序映射（`type: object` + `additionalProperties`）：
+当需要在循环中按动态键查询或更新有序映射（`type: object` + `additionalProperties`），或不可变地更新结构体（`TypedDict`）的某个字段时，组合使用 `builtin:map_get`、`builtin:map_set` 与 `builtin:object_merge`：
 
 ```yaml
 graph:
@@ -134,6 +148,18 @@ graph:
       default: {}
 
   nodes:
+    # 1. 按动态键名 current_host 查找缓存字典，未命中时回退为 "unknown"
+    read_previous_status:
+      use: builtin:map_get
+      with:
+        input:
+          source: probe_results
+          key: current_host
+          default: { value: "unknown" }
+        output:
+          value: prev_status
+
+    # 2. 将最新探测结果写入有序映射 probe_results
     record_probe_status:
       use: builtin:map_set
       with:
@@ -142,7 +168,17 @@ graph:
           key: current_host       # 动态键名（type: string）
           value: current_status   # 对应键值
         output:
-          result: probe_results   # 原地写回更新后的有序映射
+          result: probe_results   # 原地写回更新后的有序映射副本
+
+    # 3. 基于已有结构体 host_summary 不可变更新 last_status 字段并写回 host_summary
+    update_host_summary:
+      use: builtin:object_merge
+      with:
+        input:
+          base: host_summary
+          last_status: current_status
+        output:
+          result: host_summary
 ```
 
 ---

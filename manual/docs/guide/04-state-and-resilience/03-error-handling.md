@@ -13,7 +13,7 @@ Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通
 | **`execution`** | 1. `run` 节点的业务执行器返回执行错误（如函数抛出异常、RPC/API 调用失败、脚本非零退出）；<br>2. 内联 `graph` 或 `use` 子工作流内部走向了 `-> fail` 异常终点。 |
 | **`timeout`** | 节点单次尝试耗时超过其配置的 `timeout_ms`。 |
 | **`contract`** | 节点执行器返回的数据结构未通过 `output` 的 `TypeSpec` 校验，或返回了未声明的分支名。 |
-| **`max_steps`** | 内联 `graph` 或 `use` 子工作流的累计调度步数超过其 `graph.max_steps` 上限。 |
+| **`max_steps`** | 内联 `graph` 或 `use` 子工作流的累计调度步数超过其 `graph.max_steps` 上限（注：原子 `run` 节点与顶层 `RootRunNode` 不存在图步数计数器，禁止在其 `retry.on` 或 `catch` 显式列表中声明 `max_steps`）。 |
 
 ---
 

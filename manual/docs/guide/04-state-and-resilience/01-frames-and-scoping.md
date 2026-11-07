@@ -1,19 +1,24 @@
 # 01. 图栈帧与命名空间（Stack Frames & Scoping）
 
-在组合使用跨文件子工作流（`use`）、内联子图（`graph`）与集合遍历（`for_each`）时，Axcutor 通过严格的栈帧隔离边界、初值互斥规则与全路径必达定值分析，在编译期排除变量命名冲突与未初始化读取。
+在组合使用跨文件子工作流（`use`）、内联子图（`graph`）与集合遍历（`for_each`）时，Axcutor 通过严格的栈帧隔离边界、三步工作队列符号表决议、初值互斥规则与全路径必达定值分析，在编译期排除变量命名冲突与未初始化读取。
 
 ---
 
-## 一、 两类图栈帧与作用域隔离边界
+## 一、 三类栈帧与作用域隔离边界
 
-运行时通过两类图栈帧管理变量的生命周期与可见性：
+运行时通过三类栈帧管理变量的生命周期与可见性：
 
 1. **函数调用栈帧（`Function Frame` —— 根工作流与 `use` 调用）**：
    * 每次通过 `use` 调用外部工作流（或 `builtin:*`）时，创建与调用方完全隔离的命名空间。
    * 被调用方不可读取父图的任何变量，仅接收通过 `with.input` 传入的值，并在退出时通过 `with.output` 写回父图。
 2. **块级作用域栈帧（`Block Frame` —— 内联 `graph` 节点）**：
-   * 内联 `graph` 节点采用**显式按名捕获（Explicit Capture）**：仅列入内联 `graph` 节点 `input: [<var>, ...]` 的外层变量（以及 `for_each` 注入的 `item` / `key` / `index` 与 `state`）会进入子图的 `variables` 表。
+   * 内联 `graph` 节点采用**显式按名捕获（Explicit Capture）**：仅列入内联 `graph` 节点 `input: [<var>, ...]` 的外层变量（以及挂载 `for_each` 时自动注入的 `item` / `key` / `index` 与 `state`）会进入子图的初始 `variables` 表。
    * **未捕获变量隔离与同名无冲突**：未列入 `input: [...]` 的外层变量对子图不可见。子图内部可声明与外层未捕获变量同名的私有变量（如 `temp_buffer`、`retry_count`），两者位于不同栈帧，互不覆盖。
+3. **单次迭代局部隔离帧（`Iteration Frame` —— 挂载 `for_each` 的 `run` 与 `use` 节点）**：
+   * 当 `run`（`ActionNode`）或 `use`（`CallNode`）挂载 `for_each` 时，针对每个元素构造单次迭代局部符号表 $\Sigma_{\text{iter}} = \Sigma_{\text{outer}} \uplus \Sigma_{\text{injected}}$（`item` / `key` / `index` 不可与外层图变量同名）。
+   * **挂载 `for_each` 时的 `input` 声明差异**：
+     * 在 **`run` 节点**上，`input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index`、`state` 及外层变量（未列入 `input` 的变量不会进入传给执行器的 `input_snapshot`）；
+     * 在 **内联 `graph` 节点**上，由于 `item` / `key` / `index` 与 `state` 已自动注入子图的 `Block Frame`，内联 `graph` 的 `input: [...]` 仅用于捕获外层普通变量，**禁止**重复列出 `item` / `key` / `index` 或 `state`。
 
 ```yaml
 graph:
@@ -45,18 +50,25 @@ graph:
 
 ---
 
-## 二、 `graph.variables` 初值声明的两种形式
+## 二、 `graph.variables` 初值声明的两种形式与三步符号表决议
+
+编译器采用**三步工作队列不动点决议算法（Worklist Symbol Resolution）**构建图级符号表 $\Sigma_G$：先收集所有显式 `TypeSpec` 并预注册 `graph.variables` 中的孤立标量字面量，再通过工作队列迭代推导 `builtin:*`、`for_each` 与内联子图的 `output: [...]` 列表简写，最后对被节点写入的 `graph.variables` 简写初值执行类型兼容性校验。
 
 在 `graph.variables` 中声明图内初始状态变量时，支持以下两种语法形式：
 
 ### 1. 标量字面量简写（`<var_name>: <literal>`）
 
-当初始值为非空基础标量（`string`、`integer`、`number`、`boolean`），或该变量已在当前图内某节点的 `output` 中显式声明了 `TypeSpec` 时，可直接书写字面量初值：
+当初始值为非空基础标量（`string`、`integer`、`number`、`boolean`），或该变量已在当前图内某节点的 `output` 中声明了 `TypeSpec` 时，可直接书写字面量初值。
+
+* **孤立标量预注册**：若某标量简写变量未被图内任何节点写入（只读配置常量），编译器在阶段 1 即将其预注册至符号表，可直接传给 `builtin:switch`、`for_each` 或被内联 `graph` 的 `input` 捕获；
+* **同帧类型对齐校验**：若该变量同时也是图内节点的输出目标，编译器在阶段 3 校验该字面量与节点输出 `TypeSpec` 的兼容性。
 
 ```yaml
 graph:
   variables:
-    retry_count: 0              # 自动推导为 integer（或与图内节点 output 声明的数值类型对齐）
+    max_retry_limit: 3          # 孤立标量简写：阶段 1 直接预注册为 integer，可被子图 input 或 builtin 算子直接读取
+    is_dry_run: false           # 孤立标量简写：阶段 1 直接预注册为 boolean，可直接用于 builtin:switch
+    retry_count: 0              # 若被图内节点写入，则与节点 output 声明的数值类型执行兼容性对齐
     review_feedback: "首次生成"  # 自动推导为 string
 ```
 
@@ -146,7 +158,7 @@ nodes:
 编译器在运行前对控制流图执行分支敏感的全路径必达定值分析：
 
 * 若某节点在 `input`（或 `with.input`）中声明读取变量 `X`，则**从 `start` 到达该节点的每一条可行控制流路径上，`X` 都必须已完成定值**。
-* 若多条分支路径在下游汇合，而其中某条分支遗漏了对 `X` 的赋值，编译期静态检查将直接报错。
+* 若多条分支路径在下游汇合，而其中某条分支遗漏了对 `X` 的赋值，编译期静态检查将直接报错。当某条分支仅需为汇合变量赋予常量值、拷贝已有变量或提取结构体字段时，可使用 [`builtin:assign`](../../reference/builtins/assign.md) 完成零开销定值（若需构造或不可变更新 `TypedDict` 结构体，则可使用 [`builtin:object_merge`](../../reference/builtins/object-merge.md)）。
 
 ```yaml
 nodes:
@@ -159,14 +171,17 @@ nodes:
   calc_vip_discount:
     input: [order_total]
     output:
-      discount_amount: { type: number }  # 在 .true 路径上为 discount_amount 赋值
+      discount_amount: { type: number }  # 在 .true 路径上通过业务节点计算 discount_amount
     run: "计算 VIP 折扣写入 output.discount_amount。"
 
-  calc_regular_discount:
-    input: [order_total]
-    output:
-      discount_amount: { type: number }  # 在 .false 路径上同样为 discount_amount 赋值
-    run: "计算普通折扣写入 output.discount_amount。"
+  # 在 .false 路径上使用 builtin:assign 零开销将 discount_amount 定值为常量 0.0
+  assign_zero_discount:
+    use: builtin:assign
+    with:
+      input:
+        source: 0.0
+      output:
+        value: discount_amount
 
   # 汇合节点：由于 .true 与 .false 两条路径均已为 discount_amount 赋值，此处读取合法
   apply_payment:
@@ -178,9 +193,9 @@ nodes:
 edges:
   - start -> route_tier
   - route_tier.true -> calc_vip_discount
-  - route_tier.false -> calc_regular_discount
+  - route_tier.false -> assign_zero_discount
   - calc_vip_discount -> apply_payment
-  - calc_regular_discount -> apply_payment
+  - assign_zero_discount -> apply_payment
   - apply_payment -> end
 ```
 

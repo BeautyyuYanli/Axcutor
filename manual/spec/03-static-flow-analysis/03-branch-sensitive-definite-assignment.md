@@ -26,8 +26,20 @@
    * 若 $N$ 未挂载 `for_each`：$OutVars(N)$ 为 $N$ 的全部输出目标变量集合；
    * 若 $N$ 挂载了 `for_each`：$OutVars(N)$ 为 $N.\text{for\_each}$ 中 `filter`、`collect` 与 `state` 声明的全部外层目标变量集合。
 3. **未挂载 `for_each` 的节点 $N$ 的正常业务分支出边 $e_b = (N.b \to \text{target})$**：
-   仅并入分支 $b$ 契约承诺产出的输出变量子集 $OutVars(N, b)$：
-   $$Def_{\text{out}}(e_b) = Def_{\text{in}}(N) \cup OutVars(N, b)$$
+   定义分支 $b$ 的**反定值杀死集（Kill Set）** $KillVars(N, b)$：
+   * 当 $N$ 为未声明 `default` 的 `builtin:unwrap` 或未声明 `default` 的 `builtin:map_get`（输出绑定为 $v_{\text{out}}$）且 $b = \texttt{none}$ 时：$KillVars(N, \texttt{none}) = \{v_{\text{out}}\}$；
+   * 当 $N$ 为 `builtin:array_shift`（元素输出绑定为 $v_{\text{item}}$）且 $b = \texttt{empty}$ 时：$KillVars(N, \texttt{empty}) = \{v_{\text{item}}\}$；
+   * 其余所有节点与分支：$KillVars(N, b) = \emptyset$。
+
+   通用分支边定值传递方程为先移除 $KillVars(N, b)$，再并入分支 $b$ 契约承诺产出的输出变量子集 $OutVars(N, b)$：
+   $$Def_{\text{out}}(e_b) = (Def_{\text{in}}(N) \setminus KillVars(N, b)) \cup OutVars(N, b)$$
+   即特化为：
+   * 在 `builtin:unwrap`（无 `default`）或 `builtin:map_get`（无 `default`）的 `.none` 分支上（$OutVars(N, \texttt{none}) = \emptyset$）：
+     $$Def_{\text{out}}(N.\text{none}) = Def_{\text{in}}(N) \setminus \{v_{\text{out}}\}$$
+     *(注：运行期进入 `.none` 分支时，同步将当前栈帧中的 $\rho(v_{\text{out}})$ 置为未绑定 Unbound；既防止 $v_{\text{out}} \in \text{HostIn}(G)$ 或前序节点定值在 `.none` 分支上泄露旧值，也允许同一张图中多个独立的 `unwrap` 或 `map_get` 节点合法复用同一个变量名 $v_{\text{out}}$。)*
+   * 在 `builtin:array_shift` 的 `.empty` 分支上（$OutVars(N, \texttt{empty}) = \emptyset$）：
+     $$Def_{\text{out}}(N.\text{empty}) = Def_{\text{in}}(N) \setminus \{v_{\text{item}}\}$$
+     *(注：运行期进入 `.empty` 分支时，同步将当前栈帧中的 $\rho(v_{\text{item}})$ 置为未绑定 Unbound；允许同一张图中前后多个独立的 `array_shift` 循环合法复用同一个迭代变量名 $v_{\text{item}}$。)*
 4. **未挂载 `for_each` 的节点 $N$ 的异常捕获出边 $e_c = (N.c \to \text{target})$**（$c \in \text{dom}(N.\text{catch})$）：
    异常分支回滚局部产出（$OutVars(N, c) = \emptyset$）：
    $$Def_{\text{out}}(e_c) = Def_{\text{in}}(N)$$
@@ -51,9 +63,9 @@ $$Def_{\text{in}}(X) = \bigcap_{e \in \text{InEdges}(X)} Def_{\text{out}}(e)$$
 
 ---
 
-## 四、 节点读取与图出口的编译期定值断言
+## 四、 节点读取、图出口与 `for_each.state` 分支完备性的编译期定值断言
 
-在求得不动点 $Def_{\text{in}}^*(X)$ 后，执行以下两项断言：
+在求得不动点 $Def_{\text{in}}^*(X)$ 后，执行以下三项断言：
 
 ### 1. 节点入口读取集断言（Entry Use Assertion）
 对每个节点 $N \in \text{dom}(G.\text{nodes})$，定义其外层图视角的顶层读取变量集 $Use(N)$：
@@ -73,3 +85,11 @@ $$Def_{\text{in}}(X) = \bigcap_{e \in \text{InEdges}(X)} Def_{\text{out}}(e)$$
 * **无分支终点 `end`**：必须满足 $\text{dom}(\text{host.output}) \subseteq Def_{\text{in}}^*(\text{end})$。
 * **分支终点 `end.<branch>`**：必须满足 $\text{set}(\text{host.branches}[\text{branch}].\text{output}) \subseteq Def_{\text{in}}^*(\text{end.}\text{branch})$。
 * **异常回滚终点 `fail`**：无定值要求（豁免检查）。
+
+### 3. `for_each.state` 编译期分支完备性断言（State Branch Completeness Assertion）
+对于任意挂载了 `for_each` 且声明了非空 `for_each.state` 的节点 $M$，为保证每一次正常完成的串行迭代均能向下一轮迭代提供完整的累积状态变量：
+* 若 $M$ 未声明 `branches`（对 `CallNode` 指被调用工作流顶层未声明 `target.branches`）：必须满足 $\text{set}(M.\text{for\_each.state}) \subseteq \text{dom}(\text{SingleOut}(M))$；
+* 若 $M$ 声明了非空 `branches`：对 $M$ 的**每一个正常业务分支** $b \in \text{dom}(M.\text{branches})$，其承诺产出的字段子集必须包含全部 `state` 变量：
+  $$\forall b \in \text{dom}(M.\text{branches}), \quad \text{set}(M.\text{for\_each.state}) \subseteq \text{set}(M.\text{branches}[b].\text{output})$$
+  若存在任何正常业务分支遗漏了某个 `state` 变量，静态检查器在编译期报错。
+  *(注：若某正常分支无需改变某个状态变量 $s$，在内联 `graph` 中由于 $s \in \text{HostIn}(M)$ 已在子图入口定值，子图直接走向 `end.<branch>` 即可自动将原值 $s$ 作为输出提交；在 `run` 节点中则包含在 `output` 中原样返回。)*
