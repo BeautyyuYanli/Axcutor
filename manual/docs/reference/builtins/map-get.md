@@ -13,7 +13,7 @@
 | **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型有序映射 `{ type: object, additionalProperties: TV }`（支持顶层变量或非空 `TypedDict` 的静态字段路径）。 |
 | **`with.input`** | `key` | **必填** | 绑定已定值的非空 `type: string` 变量、结构体静态字段路径或 `{ value: "<str>" }` 常量字面量。 |
 | **`with.input`** | `default` | 可选 | 绑定已定值且类型与 `TV` 静态等价的变量/字段路径，或兼容 `TV` 的常量字面量。 |
-| **`with.output`** | `value` | **必填** | 自动推导为映射值类型 `TV`。不可与 `source` 的根变量同名。 |
+| **`with.output`** | `value` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{out}}$，要求 $\Sigma(v_{\text{out}}) \equiv TV$ 且不可与 `source` 的根变量同名。 |
 
 ### 控制流分支行为与反定值（Kill）语义
 
@@ -27,36 +27,41 @@
 ## 二、 YAML 用法示例
 
 ```yaml
-nodes:
-  # 模式 A（省略 default）：双分支条件查找（.some / .none）
-  # 若 result_cache 中存在键 current_query_id 则走 .some 并定值 cached_answer；不存在则走 .none 回源计算
-  lookup_cache:
-    use: builtin:map_get
-    with:
-      input:
-        source: result_cache           # OrderedMap<string, string>
-        key: current_query_id          # 动态查找键（type: string）
-      output:
-        value: cached_answer           # 仅在 .some 分支下获得定值
+graph:
+  variables:
+    module_score:
+      type: number
 
-  # 模式 B（传入 default）：无分支默认值回退
-  # 若 score_map 中不存在键 module_name，自动回退为默认值 0.0 并写入 module_score
-  lookup_score_with_fallback:
-    use: builtin:map_get
-    with:
-      input:
-        source: score_map              # OrderedMap<string, number>
-        key: module_name
-        default: 0.0
-      output:
-        value: module_score            # 单出边必达定值（type: number）
+  nodes:
+    # 模式 A（省略 default）：双分支条件查找（.some / .none）
+    # 若 result_cache 中存在键 current_query_id 则走 .some 并定值 cached_answer；不存在则走 .none 回源计算
+    lookup_cache:
+      use: builtin:map_get
+      with:
+        input:
+          source: result_cache           # OrderedMap<string, string>
+          key: current_query_id          # 动态查找键（type: string）
+        output:
+          value: cached_answer           # 仅在 .some 分支下获得定值（在 compute_fresh_answer.output 或宿主 output 中已声明类型）
 
-edges:
-  - start -> lookup_score_with_fallback
-  - lookup_score_with_fallback -> lookup_cache
-  # 命中缓存：直接使用 cached_answer
-  - lookup_cache.some -> end
-  # 未命中缓存：执行回源节点计算 cached_answer 后汇合至 end
-  - lookup_cache.none -> compute_fresh_answer
-  - compute_fresh_answer -> end
+    # 模式 B（传入 default）：无分支默认值回退
+    # 若 score_map 中不存在键 module_name，自动回退为默认值 0.0 并写入 module_score
+    lookup_score_with_fallback:
+      use: builtin:map_get
+      with:
+        input:
+          source: score_map              # OrderedMap<string, number>
+          key: module_name
+          default: 0.0
+        output:
+          value: module_score            # 单出边必达定值（type: number）
+
+  edges:
+    - start -> lookup_score_with_fallback
+    - lookup_score_with_fallback -> lookup_cache
+    # 命中缓存：直接使用 cached_answer
+    - lookup_cache.some -> end
+    # 未命中缓存：执行回源节点计算 cached_answer 后汇合至 end
+    - lookup_cache.none -> compute_fresh_answer
+    - compute_fresh_answer -> end
 ```

@@ -10,7 +10,7 @@
 | :--- | :--- | :--- | :--- |
 | **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型列表 `{ type: array, items: T }`。 |
 | **`with.input`** | `item` | **必填** | 绑定类型与 `T` 静态等价的变量/结构体字段路径，或兼容 `T` 的常量字面量。 |
-| **`with.output`** | `result` | **必填** | 自动推导为 `{ type: array, items: T }`。可与 `source` 绑定同一个顶层列表变量名以更新变量绑定。 |
+| **`with.output`** | `result` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{res}}$，要求 $\Sigma(v_{\text{res}}) \equiv \{ \texttt{type}: \texttt{array}, \texttt{items}: T \}$。可与 `source` 绑定同一个顶层列表变量名以更新变量绑定。 |
 
 ### 控制流与纯函数式不可变行为
 

@@ -28,7 +28,8 @@ nodes:
   # 内联子图设置独立的 max_steps: 10；若内部循环超过 10 步，外层通过 catch 捕获 max_steps 异常
   bounded_loop_subflow:
     input: [initial_prompt]
-    output: [refined_text]
+    output:
+      refined_text: { type: string }
     catch:
       step_limit_reached: [max_steps]
     graph:
@@ -90,8 +91,6 @@ nodes:
       source: user_ids
       item: current_uid
       concurrency: 5
-      collect:
-        profile: enriched_profiles
     # 每个 current_uid 的单次尝试超时为 3000ms；某元素超时仅重跑该元素（最多 3 次）
     timeout_ms: 3000
     retry:
@@ -99,9 +98,10 @@ nodes:
       backoff_ms: 500
       on: [execution, timeout]
     input: [current_uid]
+    # 单次迭代产出 string，在外层图中对应为已声明的 Array<string>
     output:
-      profile: { type: string }
-    run: "查询用户 variables.current_uid 的画像数据写入 output.profile。"
+      enriched_profiles: { type: string }
+    run: "查询用户 variables.current_uid 的画像数据写入 output.enriched_profiles。"
 ```
 
 ---
@@ -127,12 +127,15 @@ graph:
       catch:
         degraded: [max_steps, timeout]
       input: [query_topic]
-      output: [final_summary]
+      output:
+        final_summary: { type: string }
       graph:
         # 限制子图内部环路最多执行 12 步
         max_steps: 12
         variables:
-          draft_notes: ""
+          draft_notes:
+            type: string
+            default: ""
         nodes:
           # 子图步骤 1.1：调用外部检索服务，配置单次请求 4 秒超时与最多 3 次原地重试
           fetch_next_evidence:

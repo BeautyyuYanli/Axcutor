@@ -72,7 +72,8 @@ nodes:
   # 将包含条件分支与异常恢复的并发分支封装为 SESE 内联子图
   branch_with_internal_routing:
     input: [raw_draft]
-    output: [entity_summary]
+    output:
+      entity_summary: { type: string }
     graph:
       nodes:
         try_fast_extract:
@@ -135,7 +136,8 @@ graph:
     # 并发分支 3（内联 graph 节点）：在单个并发分支内封装两步串联逻辑，仅对外导出 entity_summary
     extract_entities_pipeline:
       input: [raw_draft]
-      output: [entity_summary]
+      output:
+        entity_summary: { type: string }
       graph:
         nodes:
           # 子图步骤 3.1：产出子图私有中间变量 raw_entities（不暴露至主图）

@@ -8,14 +8,18 @@
 
 ### 1. 跨轮次状态变量必须在入环前完成初始化
 
-循环体入口节点在第 1 轮从 `start` 进入时，循环体下游的更新节点尚未执行。因此，任何在循环入口被读取、并由循环体内部更新的跨轮状态变量（如重试计数 `attempts`、上轮错误反馈 `last_error`），必须在进入循环前已定值（静态常量初值可在 `graph.variables` 中声明；若需从输入结构体字段如 `request.items` 初始化动态工作队列，可在入环前通过 [`builtin:assign`](../../reference/builtins/assign.md) 绑定至顶层变量）：
+循环体入口节点在第 1 轮从 `start` 进入时，循环体下游的更新节点尚未执行。因此，任何在循环入口被读取、并由循环体内部更新的跨轮状态变量（如重试计数 `attempts`、上轮错误反馈 `last_error`），必须在进入循环前已定值（静态常量初值可在 `graph.variables` 中通过 `TypeSpec` + `default` 声明；若需从输入结构体字段如 `request.items` 初始化动态工作队列，可在 `graph.variables` 中声明其 `TypeSpec`，并在入环前通过 [`builtin:assign`](../../reference/builtins/assign.md) 绑定至顶层变量）：
 
 ```yaml
 graph:
-  # 为跨轮次读取与更新的状态变量提供首轮初始定值
+  # 为跨轮次读取与更新的状态变量声明显式 TypeSpec 与首轮初始定值 default
   variables:
-    attempts: 0
-    last_error: ""
+    attempts:
+      type: integer
+      default: 0
+    last_error:
+      type: string
+      default: ""
   nodes:
     generate_candidate:
       # 第 1 轮读取 variables 初值；后续轮次读取回边传回的最新值
@@ -54,13 +58,14 @@ graph:
 
 ## 二、 循环与流水线中的确定性数据与集合操作算子
 
-在成环回边循环或串行流水线中，若需初始化工作队列、从队列头部逐个弹出元素执行短路遍历、向列表追加记录、读写/删除有序映射键值对，或不可变地组装/更新强类型结构体（`TypedDict`），可调用以下运行时内建算子（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）：
+在成环回边循环或串行流水线中，若需初始化工作队列、从队列头部逐个弹出元素执行短路遍历或**跨元素有状态串行折叠（Stateful Sequential Fold）**、向列表追加记录、展平二维列表、读写/删除有序映射键值对，或不可变地组装/更新强类型结构体（`TypedDict`），可调用以下运行时内建算子（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）：
 
 | 内建算子 | 核心用途 | 控制分支与输出契约 |
 | :--- | :--- | :--- |
 | **[`builtin:assign`](../../reference/builtins/assign.md)** | 将变量、结构体字段路径（如 `request.items`）或常量字面量绑定写入顶层变量 `value` | 无分支单出边，输出目标变量 `value` |
 | **[`builtin:array_shift`](../../reference/builtins/array-shift.md)** | 从列表头部弹出首元素 `item` 与剩余切片 `rest` | • **`.some`**：队列非空，`item` 与 `rest` 获得定值<br>• **`.empty`**：队列已空，不写入 `item` 与 `rest` |
 | **[`builtin:array_append`](../../reference/builtins/array-append.md)** | 将单步产出的元素 `item` 追加至列表 `source` 末尾 | 无分支单出边，输出更新后的列表 `result` |
+| **[`builtin:array_flatten`](../../reference/builtins/array-flatten.md)** | 将非空二维列表 `Array<Array<W>>` 按序首尾拼接展平为一维列表 `Array<W>` | 无分支单出边，输出展平后的列表 `result` |
 | **[`builtin:map_set`](../../reference/builtins/map-set.md)** | 将键值对 `key -> value` 插入或更新至有序映射 `source` | 无分支单出边，输出更新后的有序映射 `result` |
 | **[`builtin:map_get`](../../reference/builtins/map-get.md)** | 按动态键 `key` 从有序映射 `source` 中查找对应值（可选配 `default`） | • **省略 `default`**：暴露 **`.some`**（定值 `value`）与 **`.none`**<br>• **传入 `default`**：无分支单出边，输出 `value` |
 | **[`builtin:map_delete`](../../reference/builtins/map-delete.md)** | 按动态键 `key` 从有序映射 `source` 中移除条目并返回新副本 | 无分支单出边，输出更新后的有序映射 `result` |
@@ -68,16 +73,24 @@ graph:
 
 ### 1. 队列初始化、弹出与列表追加片段（`assign` + `array_shift` + `array_append`）
 
-当待消费的列表位于输入结构体内部（如 `batch_request.urls`）时，先通过 `builtin:assign` 将其提取至顶层变量 `pending_urls`，再将 `builtin:array_shift` 的 `with.output.rest` 与 `with.input.source` 绑定为同一个顶层变量 `pending_urls`，即可在每轮回边中原地推进剩余队列切片；结合 `builtin:array_append` 可在每轮失败时将错误日志追加至历史列表：
+`builtin:assign` + `builtin:array_shift` + `builtin:array_append` 配合 CFG 成环回边不仅支持**短路搜索（Short-Circuit）**，同时也是表达**跨元素有状态串行折叠（Stateful Sequential Fold）**的标准方式（支持分支按需更新状态变量或跳过无需更新的分支，详见 [配方 01：有状态串行折叠](../../cookbook/02-collection-and-concurrency/01-stateful-sequential-fold.md)）。
+
+当待消费的列表位于输入结构体内部（如 `batch_request.urls`）时，先在 `graph.variables` 中声明顶层队列变量 `pending_urls` 与元素变量 `current_url` 的 `TypeSpec`，在入环前通过 `builtin:assign` 将 `batch_request.urls` 提取至 `pending_urls`，再将 `builtin:array_shift` 的 `with.output.rest` 与 `with.input.source` 绑定为同一个顶层变量 `pending_urls`，即可在每轮回边中原地推进剩余队列切片；结合 `builtin:array_append` 可在每轮失败时将错误日志追加至历史列表：
 
 ```yaml
 graph:
   variables:
-    # 初始化用于累积失败记录的空列表（需显式声明 TypeSpec 与 default: []）
+    # 1. 初始化用于累积失败记录的空列表（TypeSpec + default: []）
     error_logs:
       type: array
       items: { type: string }
       default: []
+    # 2. 显式声明仅由 builtin:assign / builtin:array_shift 写入的队列与当前元素变量类型
+    pending_urls:
+      type: array
+      items: { type: string }
+    current_url:
+      type: string
 
   nodes:
     # 0. 入环前将结构体字段 batch_request.urls 赋值给顶层队列变量 pending_urls
@@ -146,6 +159,9 @@ graph:
       type: object
       additionalProperties: { type: string }
       default: {}
+    # 声明由 builtin:map_get 写入的局部变量类型
+    prev_status:
+      type: string
 
   nodes:
     # 1. 按动态键名 current_host 查找缓存字典，未命中时回退为 "unknown"
@@ -207,8 +223,12 @@ graph:
 
   # 3. 初始化跨轮次状态变量：首轮进入 generate_candidate 时读取此初值
   variables:
-    attempts: 0
-    last_error: ""
+    attempts:
+      type: integer
+      default: 0
+    last_error:
+      type: string
+      default: ""
 
   nodes:
     # 循环体步骤 1：读取需求、上轮错误信息与当前计数，产出候选结果并递增 attempts

@@ -93,7 +93,7 @@ graph:
 
 ## 三、 确定性路由、拆包、查找与定值内建算子
 
-当图中变量已经是明确的 `boolean`、带 `enum` 约束的 `string`、显式可空类型 `Optional<T>`（`type: [<BaseType>, "null"]`，含 `TypedDict` 中未列入 `required` 的可选叶子字段）或有序映射 `OrderedMap<string, V>` 时，可直接调用运行时内建算子执行零开销路由、拆包、按键查找或分支常量定值（完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）。
+当图中变量已经是明确的 `boolean`、带 `enum` 约束的 `string`、显式可空类型 `Optional<T>`（`type: [<BaseType>, "null"]`，含 `TypedDict` 中未列入 `required` 的可选叶子字段）或有序映射 `OrderedMap<string, V>` 时，可直接调用运行时内建算子执行零开销路由、拆包、按键查找或分支常量定值（注意：所有内建算子的输出目标变量均须已在当前图符号表中显式声明类型，完整参数规范见 [内建节点字典](../../reference/builtins/index.md)）。
 
 ### 1. [`builtin:switch`](../../reference/builtins/switch.md)：布尔与枚举确定性路由
 
@@ -133,31 +133,37 @@ edges:
 * **模式 B（传入 `default`）**：无分支单出边（`node -> target`）；当 `source` 为 `null`（或可选字段缺失）时自动回退为非空 `default` 值，直接产出非空类型 `T` 的 `value`。
 
 ```yaml
-nodes:
-  # 模式 A（省略 default）：条件拆包，暴露 .some（产出 reviewer_id）与 .none（不产出）
-  check_assigned_reviewer:
-    use: builtin:unwrap
-    with:
-      input:
-        source: ticket.optional_reviewer
-      output:
-        value: reviewer_id
+graph:
+  # 显式声明仅由 builtin:unwrap 写入的局部目标变量类型
+  variables:
+    reviewer_id: { type: string }
+    operator_name: { type: string }
 
-  # 模式 B（传入 default）：默认值合并，无分支单出边，直接产出非空 string 变量 operator_name
-  resolve_operator_with_default:
-    use: builtin:unwrap
-    with:
-      input:
-        source: ticket.operator_override
-        default: { value: "auto_bot" }
-      output:
-        value: operator_name
+  nodes:
+    # 模式 A（省略 default）：条件拆包，暴露 .some（产出 reviewer_id）与 .none（不产出）
+    check_assigned_reviewer:
+      use: builtin:unwrap
+      with:
+        input:
+          source: ticket.optional_reviewer
+        output:
+          value: reviewer_id
 
-edges:
-  - start -> resolve_operator_with_default
-  - resolve_operator_with_default -> check_assigned_reviewer
-  - check_assigned_reviewer.some -> notify_specific_reviewer
-  - check_assigned_reviewer.none -> assign_from_pool
+    # 模式 B（传入 default）：默认值合并，无分支单出边，直接产出非空 string 变量 operator_name
+    resolve_operator_with_default:
+      use: builtin:unwrap
+      with:
+        input:
+          source: ticket.operator_override
+          default: { value: "auto_bot" }
+        output:
+          value: operator_name
+
+  edges:
+    - start -> resolve_operator_with_default
+    - resolve_operator_with_default -> check_assigned_reviewer
+    - check_assigned_reviewer.some -> notify_specific_reviewer
+    - check_assigned_reviewer.none -> assign_from_pool
 ```
 
 ### 3. [`builtin:map_get`](../../reference/builtins/map-get.md) 与 [`builtin:assign`](../../reference/builtins/assign.md)：字典条件查找与分支常量定值
@@ -166,25 +172,30 @@ edges:
 * **[`builtin:assign`](../../reference/builtins/assign.md)**：将变量、结构体字段路径或常量字面量直接绑定写入目标顶层变量 `value`，常用于在分支合流前无需调用 `run` 即可完成变量的默认定值或字段提取。
 
 ```yaml
-nodes:
-  # 按动态键 query_id 查找缓存字典 answer_cache：存在走 .some，不存在走 .none
-  lookup_cached_answer:
-    use: builtin:map_get
-    with:
-      input:
-        source: answer_cache
-        key: query_id
-      output:
-        value: final_answer
+graph:
+  variables:
+    final_answer: { type: string }
+    audit_tag: { type: string }
 
-  # 在无需计算的分支上，使用 builtin:assign 直接将常量赋给汇合变量 audit_tag
-  set_cache_hit_tag:
-    use: builtin:assign
-    with:
-      input:
-        source: { value: "cache_hit" }
-      output:
-        value: audit_tag
+  nodes:
+    # 按动态键 query_id 查找缓存字典 answer_cache：存在走 .some，不存在走 .none
+    lookup_cached_answer:
+      use: builtin:map_get
+      with:
+        input:
+          source: answer_cache
+          key: query_id
+        output:
+          value: final_answer
+
+    # 在无需计算的分支上，使用 builtin:assign 直接将常量赋给汇合变量 audit_tag
+    set_cache_hit_tag:
+      use: builtin:assign
+      with:
+        input:
+          source: { value: "cache_hit" }
+        output:
+          value: audit_tag
 ```
 
 ---
@@ -207,7 +218,7 @@ input:
         type: [string, "null"]
     required: [id, priority, operator_override]
 
-# 2. 根节点输出全集：各字段均为非空 string
+# 2. 根节点输出全集：各字段均为非空 string（已并入图级符号表）
 output:
   resolution_report: { type: string }
   escalation_id: { type: string }

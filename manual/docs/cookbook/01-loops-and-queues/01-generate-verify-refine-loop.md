@@ -11,7 +11,7 @@
 
 ## 二、 核心原语组合要点
 
-1. **跨轮状态初值声明**：在 `graph.variables` 中声明 `attempts: 0` 与 `last_error: ""`，为首轮进入循环入口 `generate_sql` 提供初始定值。
+1. **跨轮状态初值声明**：在 `graph.variables` 中声明 `attempts: { type: integer, default: 0 }` 与 `last_error: { type: string, default: "" }`，为首轮进入循环入口 `generate_sql` 提供初始定值。
 2. **成环回边与退环出口**：在 `graph.edges` 中通过 `validate_sql.retry -> generate_sql` 构成回边，通过 `validate_sql.valid -> end.success` 与 `validate_sql.exhausted -> end.failed` 构成两条退环出口。
 3. **分支关联输出子集（`branches.<choice>.output`）**：顶层 `success` 分支仅关联 `[sql, attempts]`，`failed` 分支仅关联 `[attempts, last_error]`，使 `sql` 保持非空 `string` 类型：
 
@@ -70,8 +70,12 @@ graph:
 
   # 4. 跨循环轮次演进的初始状态变量（首轮进入 generate_sql 时读取）
   variables:
-    attempts: 0
-    last_error: ""
+    attempts:
+      type: integer
+      default: 0
+    last_error:
+      type: string
+      default: ""
 
   nodes:
     # 步骤 1（循环体入口）：读取需求、表结构及上轮状态，生成或修正 SQL 并递增 attempts

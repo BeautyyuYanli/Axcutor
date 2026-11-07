@@ -131,6 +131,7 @@ export default withMermaid(
               { text: 'builtin:switch (布尔/枚举路由)', link: '/docs/reference/builtins/switch' },
               { text: 'builtin:array_shift (首元素弹出)', link: '/docs/reference/builtins/array-shift' },
               { text: 'builtin:array_append (末尾追加)', link: '/docs/reference/builtins/array-append' },
+              { text: 'builtin:array_flatten (二维列表展平)', link: '/docs/reference/builtins/array-flatten' },
               { text: 'builtin:map_set (有序映射写入)', link: '/docs/reference/builtins/map-set' },
               { text: 'builtin:map_get (有序映射读取)', link: '/docs/reference/builtins/map-get' },
               { text: 'builtin:map_delete (有序映射删除)', link: '/docs/reference/builtins/map-delete' },
@@ -161,9 +162,9 @@ export default withMermaid(
             items: [
               { text: '01. TypeSpec 良构性公理', link: '/spec/02-type-system-and-symbols/01-typespec-well-formedness' },
               { text: '02. 类型等价判定与实例兼容性', link: '/spec/02-type-system-and-symbols/02-type-equivalence-and-compatibility' },
-              { text: '03. 符号表三步工作队列不动点决议', link: '/spec/02-type-system-and-symbols/03-two-phase-symbol-resolution' },
+              { text: '03. 单遍显式符号表与模块化类型检查', link: '/spec/02-type-system-and-symbols/03-two-phase-symbol-resolution' },
               { text: '04. 静态字段路径投影类型推导', link: '/spec/02-type-system-and-symbols/04-static-field-projection-typing' },
-              { text: '05. 内建算子编译期泛型推导规则', link: '/spec/02-type-system-and-symbols/05-builtin-generic-inference' }
+              { text: '05. 内建算子编译期泛型检查规则', link: '/spec/02-type-system-and-symbols/05-builtin-generic-inference' }
             ]
           },
           {
@@ -171,7 +172,7 @@ export default withMermaid(
             collapsed: false,
             items: [
               { text: '01. CFG 拓扑穷尽、SESE 与可达性', link: '/spec/03-static-flow-analysis/01-cfg-topology-and-sese-validation' },
-              { text: '02. 宿主初值互斥与局部帧无冲突', link: '/spec/03-static-flow-analysis/02-scoping-and-collision-rules' },
+              { text: '02. 宿主输入互斥与局部帧无冲突', link: '/spec/03-static-flow-analysis/02-scoping-and-collision-rules' },
               { text: '03. 全路径分支敏感必达定值分析', link: '/spec/03-static-flow-analysis/03-branch-sensitive-definite-assignment' },
               { text: '04. 并发写集合两两互斥分析', link: '/spec/03-static-flow-analysis/04-concurrent-disjoint-write-analysis' }
             ]

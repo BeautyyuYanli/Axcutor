@@ -15,8 +15,8 @@
 | 节点形态 | 鉴别字段 | 栈帧与作用域模型 | 输入与输出声明方式 |
 | :--- | :--- | :--- | :--- |
 | **动作节点** | `run` | 在当前图栈帧内直接执行 | `input: [<var>, ...]`<br>`output: { <var>: <TypeSpec> }` |
-| **跨文件调用** | `use` | **函数调用栈帧（`Function Frame`）**：跨文件命名空间完全隔离，通过 `with` 映射 | 契约由目标工作流或 `builtin:*` 定义，可选配 `with` |
-| **内联子图** | `graph` | **块级作用域栈帧（`Block Frame`）**：单入口单出口（SESE）容器，按名显式捕获外层变量 | `input: [<var>, ...]`<br>`output: [<var>, ...]`（列表简写）或 `{ <var>: <TypeSpec> }` |
+| **跨文件调用** | `use` | **函数调用栈帧（`Function Frame`）**：跨文件命名空间完全隔离，通过 `with` 显式映射 | 契约由目标工作流或 `builtin:*` 定义，通过 `with.input` / `with.output` 显式绑定 |
+| **内联子图** | `graph` | **块级作用域栈帧（`Block Frame`）**：单入口单出口（SESE）容器，按名显式捕获外层变量 | `input: [<var>, ...]`<br>`output: { <var>: <TypeSpec> }` |
 
 ---
 
@@ -34,22 +34,27 @@ nodes:
   pricing_subflow:
     # 仅从外层图捕获 cart_items 与 coupon_code；外层其他变量对子图不可见
     input: [cart_items, coupon_code]
-    output: [final_amount]
+    output:
+      final_amount: { type: number }
     graph:
       nodes: ...
       edges: ...
 ```
 
-### 2. 输出列表简写（`output: [<var>, ...]`）
+### 2. 显式输出契约（`output: { <var>: <TypeSpec> }`）
 
-由于子图内部节点（或子图 `graph.variables`）已声明了变量的完整 `TypeSpec`，内联 `graph` 节点的 `output` 支持直接书写变量名列表 `output: [<var_1>, <var_2>]`，由编译器自动从子图符号表中推导输出类型，免去内外重复声明：
+与 `RootNode` 和 `ActionNode`（`run`）完全一致，内联 `graph` 节点通过 `output: { <var>: <TypeSpec> }` 显式声明向父图导出的变量及其 `TypeSpec`：
+
+* **父子图模块化边界解耦**：父图在单遍构建符号表时直接读取内联 `graph` 节点的 `output` 映射，无需递归进入子图内部推导；
+* **子图出口契约校验**：子图在独立校验自身时，将其外层 `output` 映射作为子图的宿主输出契约 `host.output` 并入子图符号表，并在子图 `end`（或 `end.<branch>`）处校验类型等价性与全路径必达定值。
 
 ```yaml
 nodes:
   pricing_subflow:
     input: [cart_items]
-    # 列表简写：自动复用子图内部 finalize_price 节点为 final_amount 声明的 { type: number }
-    output: [final_amount]
+    # 与 run 节点一致，显式声明导出至父图的变量名与 TypeSpec
+    output:
+      final_amount: { type: number }
     graph:
       nodes:
         finalize_price:
@@ -71,7 +76,8 @@ nodes:
   pricing_subflow:
     input: [cart_items, coupon_code]
     # 仅导出 final_amount；内部中间变量 base_subtotal 与 promo_deduction 不会进入外层图
-    output: [final_amount]
+    output:
+      final_amount: { type: number }
     graph:
       nodes:
         calc_discounts:
@@ -135,10 +141,12 @@ graph:
 
     # 阶段 2：内联块级子图（Block Frame）
     # - input 显式捕获外层 cart_items 与 coupon_code（customer_id 与 risk_score 对子图不可见）
-    # - output 采用列表简写导出 final_amount 与 pricing_breakdown
+    # - output 显式声明导出至主图的 final_amount 与 pricing_breakdown
     pricing_pipeline:
       input: [cart_items, coupon_code]
-      output: [final_amount, pricing_breakdown]
+      output:
+        final_amount: { type: number }
+        pricing_breakdown: { type: string }
       graph:
         nodes:
           # 子图步骤 2.1：计算原价小计与优惠抵扣额（这两个中间变量仅保留在子图栈帧内）
@@ -157,7 +165,7 @@ graph:
               pricing_breakdown: { type: string }
             run: "用 variables.base_subtotal 减去 variables.promo_deduction 写入 output.final_amount，生成账单说明写入 output.pricing_breakdown。"
 
-        # 子图内部控制流：到达子图 end 时，仅将 [final_amount, pricing_breakdown] 提交回主图
+        # 子图内部控制流：到达子图 end 时，仅将 final_amount 与 pricing_breakdown 提交回主图
         edges:
           - start -> calc_discounts
           - calc_discounts -> finalize_price

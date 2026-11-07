@@ -1,18 +1,20 @@
-# 配方 02：并发多路分流、条件收集与扁平化汇总（`filter` + `collect` + `flatten`）
+# 配方 02：并发多路分流、条件收集与扁平化汇总（`for_each` + `branches.output` + `array_flatten`）
 
 ## 一、 场景与需求
 
-批量并发处理用户反馈列表 `batch.feedbacks` 时，需在单次遍历中同时完成三项数据汇总：
+批量并发处理用户反馈列表 `batch.feedbacks` 时，需在遍历中同时完成三项数据汇总：
 
-1. **原元素零拷贝过滤（`filter`）**：若某条反馈涉及严重线上故障（走 `urgent` 分支），将该原始反馈结构体零拷贝保留至 `urgent_feedbacks` 列表，并额外生成紧急工单 `urgent_ticket`；若属无效垃圾信息（走 `spam` 分支），直接跳过且不产出任何字段。
-2. **分支条件收集（`collect`）**：所有有效反馈（`urgent` 与 `normal` 分支）均产出结构化情感分析结果 `single_analysis`，汇聚为 `analyzed_items` 列表；`urgent_ticket` 则仅从 `urgent` 分支收集为 `urgent_tickets` 列表。
-3. **子列表单层扁平化（`flatten: true`）**：每条有效反馈产出的标签列表 `extracted_tags`（`Array<string>`）按原序展开拼接为一维总表 `all_feature_tags`（`Array<string>`）。
+1. **原元素零拷贝保留**：若某条反馈涉及严重线上故障（走 `urgent` 分支），通过 [`builtin:assign`](../../reference/builtins/assign.md) 将该原始反馈结构体零拷贝保留至 `urgent_feedbacks` 列表，并额外生成紧急工单 `urgent_tickets`；若属无效垃圾信息（走 `spam` 分支），直接跳过且不产出任何字段。
+2. **按分支条件收集（`branches.<branch>.output`）**：所有有效反馈（`urgent` 与 `normal` 分支）均产出结构化情感分析结果，经一阶同构集合提升汇聚为 `analyzed_items` 列表；紧急工单则仅从 `urgent` 分支收集为 `urgent_tickets` 列表。
+3. **二维列表单层展平（[`builtin:array_flatten`](../../reference/builtins/array-flatten.md)）**：每条有效反馈产出的标签列表（单次迭代类型为 `Array<string>`，经 `for_each` 一阶提升为二维列表 `nested_feature_tags: Array<Array<string>>`）通过 `builtin:array_flatten` 按原序展开拼接为一维总表 `all_feature_tags`（`Array<string>`）。
 
 ---
 
 ## 二、 核心原语组合要点
 
-在同一个 `for_each` 节点上正交组合 `filter` 与 `collect`（各目标变量名互不重叠）：
+1. **在 `for_each` 节点上直接复用 `output` 与 `branches.<branch>.output`**：在 `output` 中直接声明外层集合变量名及其单次迭代元素类型 $U$；通过 `branches.<branch>.output` 控制各分支产出的字段子集（走 `spam` 分支时不产出任何字段，在屏障汇聚时自动跳过）。
+2. **在内联 `graph` 中组合 `builtin:assign` 实现原元素零拷贝透传**：在 `triage_single.urgent` 分支下串联 `builtin:assign` 将原元素 `feedback` 直接赋值给 `urgent_feedbacks`，无需执行器在结构化输出中重复拷贝输入结构体。
+3. **串联 `builtin:array_flatten` 完成二维列表展平**：将 `for_each` 一阶提升得到的二维列表 `nested_feature_tags` 展平为一维列表 `all_feature_tags`：
 
 ```yaml
 analyze_each:
@@ -21,16 +23,38 @@ analyze_each:
     item: feedback
     index: idx
     concurrency: 4
-    # 1. filter：将走 urgent 分支的原始 feedback 结构体保留至 urgent_feedbacks
-    filter:
-      urgent: urgent_feedbacks
-    # 2. collect：按分支实际产出的非空字段执行收集与单层扁平化
-    collect:
-      single_analysis: analyzed_items   # 从 urgent 与 normal 分支收集
-      urgent_ticket: urgent_tickets     # 仅从 urgent 分支收集
-      extracted_tags:
-        into: all_feature_tags
-        flatten: true                   # 将 Array<string> 展开拼接为一维列表
+  output:
+    urgent_feedbacks:
+      type: object
+      properties:
+        user_id: { type: string }
+        content: { type: string }
+      required: [user_id, content]
+    analyzed_items:
+      type: object
+      properties:
+        index: { type: integer }
+        user_id: { type: string }
+        sentiment:
+          type: string
+          enum: [positive, neutral, negative]
+      required: [index, user_id, sentiment]
+    urgent_tickets:
+      type: string
+    nested_feature_tags:
+      type: array
+      items: { type: string }
+  branches:
+    urgent:
+      description: "严重线上故障，保留原反馈并额外产出紧急工单"
+      output: [urgent_feedbacks, analyzed_items, urgent_tickets, nested_feature_tags]
+    normal:
+      description: "普通有效反馈，仅产出情感分析与标签"
+      output: [analyzed_items, nested_feature_tags]
+    spam:
+      description: "无意义垃圾信息，不产出任何字段"
+      output: []
+  graph: ...
 ```
 
 ---
@@ -84,26 +108,32 @@ output:
     type: string
 
 graph:
+  # 3. 显式声明由阶段 1 for_each 一阶提升产出的二维标签中间列表变量 nested_feature_tags
+  # （urgent_feedbacks、analyzed_items、urgent_tickets、all_feature_tags 已在顶层 output 中声明）
+  variables:
+    nested_feature_tags:
+      type: array
+      items:
+        type: array
+        items: { type: string }
+
   nodes:
-    # 阶段 1（Map / Filter / FlatMap）：并发遍历 batch.feedbacks
-    # 内部消费 urgent / normal / spam 三个分支，通过 filter 与 collect 产出四个外层列表变量
+    # 阶段 1（并发分流与一阶集合提升）：并发遍历 batch.feedbacks
+    # 内部消费 urgent / normal / spam 三个分支，按分支子集汇聚四个外层列表变量
     analyze_each:
       for_each:
         source: batch.feedbacks
         item: feedback
         index: idx
         concurrency: 4
-        filter:
-          urgent: urgent_feedbacks
-        collect:
-          single_analysis: analyzed_items
-          urgent_ticket: urgent_tickets
-          extracted_tags:
-            into: all_feature_tags
-            flatten: true
-      input: [idx, feedback]
       output:
-        single_analysis:
+        urgent_feedbacks:
+          type: object
+          properties:
+            user_id: { type: string }
+            content: { type: string }
+          required: [user_id, content]
+        analyzed_items:
           type: object
           properties:
             index: { type: integer }
@@ -112,37 +142,93 @@ graph:
               type: string
               enum: [positive, neutral, negative]
           required: [index, user_id, sentiment]
-        urgent_ticket:
+        urgent_tickets:
           type: string
-        extracted_tags:
+        nested_feature_tags:
           type: array
           items: { type: string }
       branches:
         urgent:
           description: "严重线上故障，保留原反馈并额外产出紧急工单"
-          output: [single_analysis, urgent_ticket, extracted_tags]
+          output: [urgent_feedbacks, analyzed_items, urgent_tickets, nested_feature_tags]
         normal:
           description: "普通有效反馈，仅产出情感分析与标签"
-          output: [single_analysis, extracted_tags]
+          output: [analyzed_items, nested_feature_tags]
         spam:
           description: "无意义垃圾信息，不产出任何字段"
           output: []
-      run:
-        - "分析第 variables.idx 条反馈（用户 variables.feedback.user_id）：variables.feedback.content。"
-        - "若为垃圾信息，直接选择 spam 分支。"
-        - "构造结构化分析写入 output.single_analysis，提取诉求标签列表写入 output.extracted_tags。"
-        - "若属严重线上故障，生成工单描述写入 output.urgent_ticket 并选择 urgent；否则选择 normal。"
+      graph:
+        nodes:
+          # 子图步骤 1.1：评估单条反馈，产出分析字段与标签列表，并选择分支
+          triage_single:
+            input: [idx, feedback]
+            output:
+              analyzed_items:
+                type: object
+                properties:
+                  index: { type: integer }
+                  user_id: { type: string }
+                  sentiment:
+                    type: string
+                    enum: [positive, neutral, negative]
+                required: [index, user_id, sentiment]
+              urgent_tickets:
+                type: string
+              nested_feature_tags:
+                type: array
+                items: { type: string }
+            branches:
+              urgent:
+                description: "严重线上故障"
+                output: [analyzed_items, urgent_tickets, nested_feature_tags]
+              normal:
+                description: "普通有效反馈"
+                output: [analyzed_items, nested_feature_tags]
+              spam:
+                description: "无意义垃圾信息"
+                output: []
+            run:
+              - "分析第 variables.idx 条反馈（用户 variables.feedback.user_id）：variables.feedback.content。"
+              - "若为垃圾信息，直接选择 spam 分支。"
+              - "构造结构化分析写入 output.analyzed_items，提取诉求标签列表写入 output.nested_feature_tags。"
+              - "若属严重线上故障，生成工单描述写入 output.urgent_tickets 并选择 urgent；否则选择 normal。"
 
-    # 阶段 2（Reduce）：读取第一阶段汇聚的四个列表变量，生成总体报告
+          # 子图步骤 1.2：仅在 urgent 分支下，通过 builtin:assign 零拷贝透传原始 feedback 结构体
+          keep_urgent_feedback:
+            use: builtin:assign
+            with:
+              input:
+                source: feedback
+              output:
+                value: urgent_feedbacks
+
+        edges:
+          - start -> triage_single
+          - triage_single.urgent -> keep_urgent_feedback
+          - keep_urgent_feedback -> end.urgent
+          - triage_single.normal -> end.normal
+          - triage_single.spam -> end.spam
+
+    # 阶段 2（二维列表展平）：将二维标签列表 nested_feature_tags 展平为一维总表 all_feature_tags
+    flatten_tags:
+      use: builtin:array_flatten
+      with:
+        input:
+          source: nested_feature_tags
+        output:
+          result: all_feature_tags
+
+    # 阶段 3（汇总报告）：读取汇聚与展平后的四个列表变量，生成总体报告
     summarize_all:
       input: [analyzed_items, urgent_feedbacks, urgent_tickets, all_feature_tags]
       output:
         executive_summary: { type: string }
       run: "综合分析结果 variables.analyzed_items、高优原始反馈 variables.urgent_feedbacks、紧急工单 variables.urgent_tickets 与标签总表 variables.all_feature_tags，生成汇总报告写入 output.executive_summary。"
 
-  # 3. 外层控制流边：analyze_each 内部消化所有迭代分支，对外为单条无分支出边
+  # 4. 外层控制流边：analyze_each 内部消化所有迭代分支，对外为单条无分支出边
   edges:
     - start -> analyze_each
-    - analyze_each -> summarize_all
+    - analyze_each -> flatten_tags
+    - flatten_tags -> summarize_all
     - summarize_all -> end
 ```

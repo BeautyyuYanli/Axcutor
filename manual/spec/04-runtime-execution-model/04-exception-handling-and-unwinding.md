@@ -42,7 +42,7 @@ stateDiagram-v2
 ### `catch` 分支匹配规则
 
 * 节点的 `catch` 声明中，各分支的显式选择器集合两两互斥，且最多有一个分支声明通配符 `"*"`（代表差集 $\{ \texttt{execution}, \texttt{timeout}, \texttt{contract}, \texttt{max\_steps} \} \setminus \bigcup \text{ExplicitSelectors}$）。
-* 当可恢复异常 $E$ 从重试控制器逃逸时，若存在分支 $c \in \text{dom}(N.\text{catch})$ 使得 $E \in \text{Selectors}(c)$，则异常被消费，控制令牌以空输出（$\Delta = \emptyset$）转入异常出边 $N.c$（若节点 $N$ 挂载了 `for_each` 且声明了 `state`，当次迭代被 `N.catch` 捕获时保持上一轮累积状态 $\sigma_{i+1} = \sigma_i$ 不变，见 [`02-fork-join-and-for-each-scheduler.md`](./02-fork-join-and-for-each-scheduler.md)）。
+* 当可恢复异常 $E$ 从重试控制器逃逸时，若存在分支 $c \in \text{dom}(N.\text{catch})$ 使得 $E \in \text{Selectors}(c)$，则异常被消费，控制令牌以空输出（$\Delta = \emptyset$）转入异常出边 $N.c$。
 
 ---
 

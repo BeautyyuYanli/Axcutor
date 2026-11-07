@@ -14,7 +14,7 @@
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
 | **`with.input`** | `source` | **必填** | 支持绑定已定值的顶层变量、非空 `TypedDict` 的静态字段路径（`FieldPathExpr`），或常量字面量（数值、布尔、`null` 或 `{ value: <literal> }` 包装字面量）。 |
-| **`with.output`** | `value` | **必填** | 写入目标顶层变量 $v_{\text{out}}$。类型按以下规则推导与校验：<br>• 当 `source` 为变量或字段路径 $E$ 时：自动推导为 $T_{\text{src}} = \text{TypeOf}(\Sigma, E)$（若 $v_{\text{out}}$ 已在符号表中存在，须满足静态类型等价 $\Sigma(v_{\text{out}}) \equiv T_{\text{src}}$）；<br>• 当 `source` 为常量字面量 $L$ 且 $v_{\text{out}} \in \text{dom}(\Sigma)$ 时：校验实例兼容性 $L \models \Sigma(v_{\text{out}})$；<br>• 当 `source` 为常量字面量 $L$ 且 $v_{\text{out}} \notin \text{dom}(\Sigma)$ 时：$L$ 必须为非空基础标量字面量（`string` / `integer` / `number` / `boolean`），自动推导为对应基础标量类型。 |
+| **`with.output`** | `value` | **必填** | 写入目标顶层变量 $v_{\text{out}}$。要求 $v_{\text{out}}$ 必须已在当前图符号表 $\Sigma$ 中显式声明类型（记 $T_{\text{target}} = \Sigma(v_{\text{out}})$）：<br>• 当 `source` 为变量或静态字段路径引用 $E$ 时：校验静态类型等价 $\text{TypeOf}(\Sigma, E) \equiv T_{\text{target}}$；<br>• 当 `source` 为常量字面量 $L$ 时：直接校验实例兼容性 $L \models T_{\text{target}}$。 |
 
 ### 控制流与运行期求值行为
 
@@ -25,40 +25,47 @@
 ## 二、 YAML 用法示例
 
 ```yaml
-nodes:
-  # 场景 1：将输入结构体的嵌套字段 request.items 拷贝至顶层变量 working_queue，供后续循环消费
-  init_working_queue:
-    use: builtin:assign
-    with:
-      input:
-        source: request.items
-      output:
-        value: working_queue
+graph:
+  # 若目标变量未在宿主 output 或其他 run/graph 节点的 output 中声明，须在 variables 中显式声明 TypeSpec
+  variables:
+    working_queue:
+      type: array
+      items: { type: string }
 
-  # 场景 2：在跳过分支上将汇合变量 audit_report 直接定值为常量字符串 "Skipped"
-  assign_skipped_report:
-    use: builtin:assign
-    with:
-      input:
-        source: { value: "Skipped" }
-      output:
-        value: audit_report
+  nodes:
+    # 场景 1：将输入结构体的嵌套字段 request.items 拷贝至顶层变量 working_queue，供后续循环消费
+    init_working_queue:
+      use: builtin:assign
+      with:
+        input:
+          source: request.items
+        output:
+          value: working_queue
 
-  # 场景 3：提取结构体嵌套字段 user_profile.contact.email 写入图顶层输出变量 primary_email
-  extract_primary_email:
-    use: builtin:assign
-    with:
-      input:
-        source: user_profile.contact.email
-      output:
-        value: primary_email
+    # 场景 2：在跳过分支上将汇合变量 audit_report 直接定值为常量字符串 "Skipped"
+    assign_skipped_report:
+      use: builtin:assign
+      with:
+        input:
+          source: { value: "Skipped" }
+        output:
+          value: audit_report
 
-edges:
-  - start -> init_working_queue
-  - init_working_queue -> check_need_audit
-  - check_need_audit.true -> run_full_audit
-  - check_need_audit.false -> assign_skipped_report
-  - run_full_audit -> extract_primary_email
-  - assign_skipped_report -> extract_primary_email
-  - extract_primary_email -> end
+    # 场景 3：提取结构体嵌套字段 user_profile.contact.email 写入图顶层输出变量 primary_email
+    extract_primary_email:
+      use: builtin:assign
+      with:
+        input:
+          source: user_profile.contact.email
+        output:
+          value: primary_email
+
+  edges:
+    - start -> init_working_queue
+    - init_working_queue -> check_need_audit
+    - check_need_audit.true -> run_full_audit
+    - check_need_audit.false -> assign_skipped_report
+    - run_full_audit -> extract_primary_email
+    - assign_skipped_report -> extract_primary_email
+    - extract_primary_email -> end
 ```

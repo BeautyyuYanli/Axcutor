@@ -1,6 +1,6 @@
 # 用户速查字典（User Reference）
 
-本模块汇总 Axcutor YAML 工作流文档的语法结构、各层级配置字段、6 种控制边语法、`TypeSpec` 类型写法以及 9 个运行时内建算子（`builtin:*`）的参数规范。
+本模块汇总 Axcutor YAML 工作流文档的语法结构、各层级配置字段、6 种控制边语法、`TypeSpec` 类型写法以及 10 个运行时内建算子（`builtin:*`）的参数规范。
 
 *(注：若需查阅编译器符号表决议算法、全路径静态定值方程或运行时栈帧状态机等引擎实现规范，请参阅 [形式化规范（`spec/`）](../../spec/index.md)。)*
 
@@ -28,11 +28,12 @@ branches:                               # 可选：根级排他分支与按需�
 # ============================================================
 graph:
   max_steps: 1000                       # 可选：当前图栈帧最大允许步数（默认 1000）
-  variables:                            # 可选：图级初始状态变量（不可与宿主输入重名）
-    <state_var>: <literal>
-    <collection_var>:
+  variables:                            # 可选：图级局部变量表（显式 TypeSpec，可选配 default）
+    <init_var>:
       <TypeSpec>
-      default: []
+      default: <literal>                # 带初值的局部变量（在 start 处已定值）
+    <uninit_var>:
+      <TypeSpec>                        # 未初始化局部变量（在 start 处未定值，由后续节点写入）
 
   # ==========================================================
   # 3. 图内子节点层（Inner Nodes：run / use / graph 三选一）
@@ -54,13 +55,14 @@ graph:
     <call_node_id>:
       use: workflow:<path>              # 或 use: builtin:<op>
       with:
-        input: { <param>: <binding> }   # 变量名、结构体静态字段路径或常量字面量
-        output: { <field>: <var_name> } # 输出字段映射回当前图顶层变量
+        input: { <param>: <binding> }   # 显式传入变量名、结构体静态字段路径或常量字面量
+        output: { <field>: <var_name> } # 显式将需要的输出字段映射回当前图顶层变量（未列出的输出自动忽略）
 
     # 形态 C：内联块级子图节点（graph）
     <inline_graph_node_id>:
       input: [<captured_var>, ...]      # 显式按名捕获外层图变量
-      output: [<exported_var>, ...]     # 支持列表简写（自动复用子图符号表类型）
+      output:                           # 显式声明导出至外层图的顶层变量及 TypeSpec
+        <exported_var>: <TypeSpec>
       graph:
         nodes: { ... }
         edges: [ ... ]

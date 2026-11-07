@@ -52,7 +52,7 @@
 所有 `use: builtin:<op>` 节点均为常数时间（或与浅拷贝集合/结构体长度成正比）、无副作用、不抛出可恢复运行时异常的确定性内建转换。每次激活同样遵循第一节的计步规则（$\text{steps}(F_G) \leftarrow \text{steps}(F_G) + 1$），并按以下规则更新当前栈帧变量绑定表 $\rho$：
 
 1. **纯函数式不可变值语义（Copy-on-Write Immutability）**：
-   * `builtin:array_shift`、`builtin:array_append`、`builtin:map_set`、`builtin:map_delete` 与 `builtin:object_merge` 均采用纯函数式不可变更新：始终返回新构造的集合或结构体副本（或基于结构共享的持久化不可变数据结构），绝不原地修改当前栈帧快照或历史快照引用中的旧集合或结构体对象。
+   * `builtin:array_shift`、`builtin:array_append`、`builtin:array_flatten`、`builtin:map_set`、`builtin:map_delete` 与 `builtin:object_merge` 均采用纯函数式不可变更新：始终返回新构造的集合或结构体副本（或基于结构共享的持久化不可变数据结构），绝不原地修改当前栈帧快照或历史快照引用中的旧集合或结构体对象。
 2. **各算子运行期求值与反定值（Unbind）状态转移**：
    * **`builtin:unwrap`**：
      * 读取源值 $x = \text{Eval}(\rho, \text{with.input.source})$；
@@ -94,3 +94,7 @@
      * 若声明了 `with.input.base`，读取源结构体并构造浅拷贝副本 $O = \text{Clone}(\text{Eval}(\rho, \text{with.input.base}))$；若未声明 `base`，初始化空记录对象 $O = \{\}$；
      * 对 `with.input` 中除 `base` 外的每个字段名 $f_i \in \{f_1, \dots, f_m\}$，求值 $v_i = \text{Eval}(\rho, \text{with.input}[f_i])$ 并写入副本属性 $O[f_i] \leftarrow v_i$（不原地修改输入快照引用中的旧结构体）；
      * 绑定 $\rho(v_{\text{res}}) \leftarrow O$，控制令牌沿唯一无分支出边前进。
+   * **`builtin:array_flatten`（二维列表单层保序展平）**：
+     * 读取源二维列表 $A = \text{Eval}(\rho, \text{with.input.source}) = [L_0, L_1, \dots, L_{m-1}]$（其中每个 $L_i$ 为子列表 $[w_{i,0}, \dots, w_{i,k_i-1}]$）；
+     * 按 $i = 0, \dots, m-1$ 的外层顺序与子列表内部顺序依次首尾拼接（Concatenate）构造新的一维列表副本 $R = L_0 \mathbin{\Vert} L_1 \mathbin{\Vert} \dots \mathbin{\Vert} L_{m-1}$（当 $m = 0$ 或所有子列表均为空时返回 `[]`）；
+     * 绑定 $\rho(v_{\text{res}}) \leftarrow R$，控制令牌沿唯一无分支出边前进。

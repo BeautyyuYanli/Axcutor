@@ -8,35 +8,46 @@
 
 ## 一、 `use` 与 `with` 的参数绑定方式
 
-调用节点通过 `with.input` 将当前图的数据绑定至目标工作流的输入参数，并通过 `with.output` 将目标工作流的输出字段映射回当前图的 `variables`。
+调用节点通过 `with.input` 将当前图的数据显式绑定至目标工作流的输入参数，并通过 `with.output` 将需要的目标工作流输出字段显式映射回当前图的 `variables`（接收返回值的目标变量需已在当前图符号表中声明类型）。
 
-### 1. 默认同名匹配与显式丢弃未用输出（`null`）
+### 1. 显式入参绑定与按需输出接收（未列出输出自动忽略）
 
-对于 `use: workflow:<path>` 节点（注：内建算子 `use: builtin:<op>` 的必填参数必须显式声明，不支持省略）：
+对于 `use: workflow:<path>` 节点，参数绑定遵循显式边界原则：
 
-* **省略 `with.input.<param>`**：编译器在当前图作用域中查找与子工作流 `input` 参数同名的顶层变量传入，并在编译期校验其类型等价性与已定值状态。
-* **省略 `with.output.<field>`**：子工作流产出的 `output` 字段默认按原字段名写回当前图的 `variables`。
-* **显式丢弃未用输出（`with.output.<field>: null`）**：若调用方不需要子工作流的某个输出字段，可在 `with.output` 中将其映射为 `null`。被丢弃的字段不会注入调用方图的符号表，也不会在运行期写回或覆盖调用方的同名局部变量。
+* **`with.input` 必填参数显式绑定**：被调用子工作流顶层声明的每一个 `input` 参数，均必须在 `with.input` 中显式写出（若调用方变量与参数同名，显式写作 `<param>: <param>`；仅当被调用工作流 `input: {}` 为空时可省略 `with.input`）。单文件静态分析无需跨文件查看被调用方定义即可直接读取 `with.input` 确定该节点的变量读取集。
+* **`with.output` 按需映射与未绑定字段默认忽略**：在 `with.output` 中仅需列出调用方需要接收的输出字段 `<target_field>: <local_var>`（其中 `<local_var>` 为合法顶层标识符，禁止设为 `null`）。未在 `with.output` 中列出的其余子工作流输出字段默认自动忽略，既不注入调用方符号表，也不会在被调用工作流升级新增输出字段时污染或冲突调用方命名空间。
 
 ```yaml
-nodes:
-  # 1. 完全省略 with：
-  # - 自动将当前图的 raw_text、max_length 传入子工作流同名 input 参数
-  # - 自动将子工作流产出的 clean_text、word_count 按原名写回当前图 variables
-  normalize_default:
-    use: workflow:text/normalize_document
+graph:
+  # 仅由 use 节点写入的局部中间变量在 variables 中显式声明 TypeSpec
+  variables:
+    clean_text: { type: string }
+    word_count: { type: integer }
+    final_body: { type: string }
 
-  # 2. 部分省略 with.input 并显式丢弃不需要的 output 字段：
-  # - raw_text 显式绑定自 draft_body，其余未列出的 input 参数仍按同名顶层变量匹配
-  # - clean_text 映射至 final_body，而不需要的 word_count 设为 null 显式丢弃（不写回当前图）
-  normalize_discard_unused:
-    use: workflow:text/normalize_document
-    with:
-      input:
-        raw_text: draft_body
-      output:
-        clean_text: final_body
-        word_count: null
+  nodes:
+    # 1. 显式传入全部目标 input 参数，并接收 clean_text 与 word_count 两个输出字段：
+    normalize_full:
+      use: workflow:text/normalize_document
+      with:
+        input:
+          raw_text: raw_text
+          max_length: max_length
+        output:
+          clean_text: clean_text
+          word_count: word_count
+
+    # 2. 按需接收部分 output 字段：
+    # - 显式传入 raw_text 与 max_length
+    # - 仅绑定需要的 clean_text -> final_body；未列出的 word_count 自动忽略，无需额外编写丢弃语法
+    normalize_only_text:
+      use: workflow:text/normalize_document
+      with:
+        input:
+          raw_text: draft_body
+          max_length: 2000
+        output:
+          clean_text: final_body
 ```
 
 ### 2. 变量名与结构体静态字段路径绑定
@@ -47,16 +58,21 @@ nodes:
 * **结构体静态字段路径（`<root_var>.<f1>.<f2>`）**：对非空强类型结构体（`type: object` + `properties`）执行编译期静态字段投影，提取嵌套字段值传入（中间穿透步必须列入 `required` 且非空；最末级叶子字段若未列入 `required`，静态投影类型自动提升为 `[<BaseType>, "null"]`，运行期缺失键时求值为 `null`）。
 
 ```yaml
-nodes:
-  normalize_submission:
-    use: workflow:text/normalize_document
-    with:
-      input:
-        author_id: current_user_id          # 绑定当前图顶层变量 current_user_id
-        raw_text: user_submission.body      # 绑定强类型结构体 user_submission 的嵌套字段 body
-      output:
-        clean_text: normalized_body         # 将子工作流输出 clean_text 写回当前图变量 normalized_body
-        word_count: doc_word_count          # 将子工作流输出 word_count 写回当前图变量 doc_word_count
+graph:
+  variables:
+    normalized_body: { type: string }
+    doc_word_count: { type: integer }
+
+  nodes:
+    normalize_submission:
+      use: workflow:text/normalize_document
+      with:
+        input:
+          author_id: current_user_id          # 绑定当前图顶层变量 current_user_id
+          raw_text: user_submission.body      # 绑定强类型结构体 user_submission 的嵌套字段 body
+        output:
+          clean_text: normalized_body         # 将子工作流输出 clean_text 写回当前图变量 normalized_body
+          word_count: doc_word_count          # 将子工作流输出 word_count 写回当前图变量 doc_word_count
 ```
 
 ### 3. 常量字面量传递
@@ -77,28 +93,37 @@ nodes:
         strip_html: true                              # 直接传递 boolean 字面量
         format_style: { value: "strict" }             # 使用 { value: ... } 传递 string 字面量
         stop_words: { value: ["ad", "spam"] }         # 使用 { value: ... } 传递 array 字面量
+      output:
+        clean_text: normalized_body
 ```
 
-### 4. 在 `use` 节点上挂载 `for_each` 时的输出对接
+### 4. 在 `use` 节点上挂载 `for_each` 时的输出映射
 
-当 `use: workflow:<path>` 节点挂载 `for_each` 进行集合遍历时，**禁止声明 `with.output`**。每次迭代产出的子工作流 `output` 字段直接由 `for_each.collect` 或 `for_each.state` 按子工作流原始输出字段名对接并提升至外层图变量（未在 `collect` 或 `state` 中引用的子工作流输出字段自动忽略）：
+当 `use: workflow:<path>` 节点挂载 `for_each` 进行集合遍历时，与普通 `use` 节点完全一致，继续通过 **`with.output`** 显式映射需要收集的子工作流输出字段：被调用子工作流单次产出的字段类型 $U$，在映射至外层目标变量时自动对应为一阶同构提升后的集合类型（`Array<U>` 或 `OrderedMap<string, U>`；未在 `with.output` 中列出的子工作流输出字段自动忽略）：
 
 ```yaml
-nodes:
-  # 对 raw_docs 列表的每个元素调用子工作流 workflow:text/normalize_document
-  # 挂载 for_each 时不写 with.output，直接在 for_each.collect 中引用子工作流输出字段 clean_text
-  batch_normalize_docs:
-    for_each:
-      source: raw_docs
-      item: current_doc
-      concurrency: 4
-      collect:
-        clean_text: normalized_docs
-    use: workflow:text/normalize_document
-    with:
-      input:
-        raw_text: current_doc.body
-        max_length: 2000
+graph:
+  variables:
+    # 若 normalized_docs 未在顶层 output 中声明，则在 variables 中显式声明其提升后的集合类型 Array<string>
+    normalized_docs:
+      type: array
+      items: { type: string }
+
+  nodes:
+    # 对 raw_docs 列表的每个元素调用子工作流 workflow:text/normalize_document
+    # 通过 with.output 将子工作流单次输出字段 clean_text (string) 映射并提升至外层列表变量 normalized_docs
+    batch_normalize_docs:
+      for_each:
+        source: raw_docs
+        item: current_doc
+        concurrency: 4
+      use: workflow:text/normalize_document
+      with:
+        input:
+          raw_text: current_doc.body
+          max_length: 2000
+        output:
+          clean_text: normalized_docs
 ```
 
 ---
@@ -128,22 +153,27 @@ run: "..."
 
 ```yaml
 # 父工作流片段：直接对 audit_step.approved 与 audit_step.rejected 连边
-nodes:
-  audit_step:
-    use: workflow:security/audit_content
-    with:
-      input:
-        text: normalized_body
-      output:
-        certificate_id: audit_cert_id
-        violation_note: reject_reason
+graph:
+  variables:
+    audit_cert_id: { type: string }
+    reject_reason: { type: string }
 
-edges:
-  - start -> audit_step
-  # 仅在 approved 分支下 audit_cert_id 获得定值
-  - audit_step.approved -> publish_post
-  # 仅在 rejected 分支下 reject_reason 获得定值
-  - audit_step.rejected -> notify_author
+  nodes:
+    audit_step:
+      use: workflow:security/audit_content
+      with:
+        input:
+          text: normalized_body
+        output:
+          certificate_id: audit_cert_id
+          violation_note: reject_reason
+
+  edges:
+    - start -> audit_step
+    # 仅在 approved 分支下 audit_cert_id 获得定值
+    - audit_step.approved -> publish_post
+    # 仅在 rejected 分支下 reject_reason 获得定值
+    - audit_step.rejected -> notify_author
 ```
 
 ---
@@ -176,9 +206,14 @@ branches:
     output: [reject_reason]
 
 graph:
+  # 3. 显式声明仅由 use 子工作流写入的图内局部中间变量类型（reject_reason 已在顶层 output 中声明）
+  variables:
+    normalized_body: { type: string }
+    audit_cert_id: { type: string }
+
   nodes:
     # 步骤 1：调用外部文本标准化子工作流
-    # 混合使用结构体字段路径、顶层变量、数值字面量与 { value } 字符串字面量传参，并将未使用的 word_count 设为 null 丢弃
+    # 混合使用结构体字段路径、顶层变量、数值字面量与 { value } 字符串字面量传参；仅绑定 clean_text（未列出的 word_count 自动忽略）
     normalize_doc:
       use: workflow:text/normalize_document
       with:
@@ -189,7 +224,6 @@ graph:
           format_style: { value: "strict" }
         output:
           clean_text: normalized_body
-          word_count: null
 
     # 步骤 2：调用带 branches (approved / rejected) 的外部合规审计子工作流
     audit_doc:
@@ -208,7 +242,7 @@ graph:
         published_url: { type: string }
       run: "使用合规凭证 variables.audit_cert_id 发布标题为 variables.user_submission.title 的正文 variables.normalized_body，将链接写入 output.published_url。"
 
-  # 3. 控制流连边：audit_doc 透明继承子工作流的 approved 与 rejected 分支
+  # 4. 控制流连边：audit_doc 透明继承子工作流的 approved 与 rejected 分支
   edges:
     - start -> normalize_doc
     - normalize_doc -> audit_doc

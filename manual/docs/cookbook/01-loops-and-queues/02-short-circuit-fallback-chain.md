@@ -11,7 +11,7 @@
 
 ## 二、 核心原语组合要点
 
-1. **队列首元素弹出（[`builtin:array_shift`](../../reference/builtins/array-shift.md)）**：从 `candidate_endpoints` 头部弹出首元素 `current_endpoint`，并将剩余切片 `rest` 原地写回 `candidate_endpoints`。队列非空时走 `.some` 分支，队列耗尽时走 `.empty` 分支。
+1. **队列首元素弹出（[`builtin:array_shift`](../../reference/builtins/array-shift.md)）**：从 `candidate_endpoints` 头部弹出首元素 `current_endpoint`（在 `graph.variables` 中声明其 `TypeSpec`），并将剩余切片 `rest` 原地写回 `candidate_endpoints`。队列非空时走 `.some` 分支，队列耗尽时走 `.empty` 分支。
 2. **失败记录追加（[`builtin:array_append`](../../reference/builtins/array-append.md)）**：在 `try_call.failed` 分支下，将单步产出的 `error_entry` 追加至 `failed_trace` 列表末尾，随后沿回边跳回 `pop_endpoint`。
 
 ```yaml
@@ -59,12 +59,14 @@ branches:
 graph:
   max_steps: 50
 
-  # 4. 显式声明带类型的空数组初值，供 builtin:array_append 累积失败记录
+  # 4. 声明带初值的失败轨迹列表与未初始化的弹出元素变量 current_endpoint
   variables:
     failed_trace:
       type: array
       items: { type: string }
       default: []
+    current_endpoint:
+      type: string
 
   nodes:
     # 步骤 1：从队列头部弹出首元素 current_endpoint，剩余切片写回 candidate_endpoints

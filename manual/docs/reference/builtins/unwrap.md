@@ -10,7 +10,7 @@
 | :--- | :--- | :--- | :--- |
 | **`with.input`** | `source` | **必填** | 绑定已定值的显式可空类型 `[<BaseType>, "null"]` 变量或结构体静态字段路径（包括在 `TypedDict.properties` 中声明但未列入 `required` 的可选最末级字段，其静态投影类型自动提升为 `[<BaseType>, "null"]` 且运行期缺失键时求值为 `null`；若 `source` 推导结果本身是非空类型则编译期报错）。记移除 `"null"` 后的非空类型为 `T`。 |
 | **`with.input`** | `default` | 可选 | 绑定已定值的非空 `T` 类型变量/字段路径，或兼容非空 `T` 的常量字面量（不可为 `null`）。 |
-| **`with.output`** | `value` | **必填** | 自动推导为非空类型 `T`。不可与 `source` 的根变量同名。 |
+| **`with.output`** | `value` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{out}}$，要求 $\Sigma(v_{\text{out}}) \equiv T$ 且不可与 `source` 的根变量同名。 |
 
 ### 控制流分支行为与反定值（Kill）语义
 
@@ -24,32 +24,41 @@
 ## 二、 YAML 用法示例
 
 ```yaml
-nodes:
-  # 模式 A（省略 default）：双分支条件拆包（.some / .none）
-  # 当 maybe_articles 非空时走 .some 并定值 valid_articles；为 null 时走 .none（valid_articles 在 .none 路径上被反定值置为未绑定）
-  unwrap_optional_articles:
-    use: builtin:unwrap
-    with:
-      input:
-        source: maybe_articles
-      output:
-        value: valid_articles
+graph:
+  # 显式声明拆包后的非空目标变量类型
+  variables:
+    valid_articles:
+      type: array
+      items: { type: string }
+    author_name:
+      type: string
 
-  # 模式 B（传入 default）：无分支默认值合并（doc_meta.maybe_author ?? "佚名"）
-  # doc_meta.maybe_author 既可显式声明为 [string, "null"]，也可为未列入 doc_meta.required 的可选 string 属性
-  # 直接产出非空 string 变量 author_name
-  resolve_author_name:
-    use: builtin:unwrap
-    with:
-      input:
-        source: doc_meta.maybe_author
-        default: { value: "佚名" }
-      output:
-        value: author_name
+  nodes:
+    # 模式 A（省略 default）：双分支条件拆包（.some / .none）
+    # 当 maybe_articles 非空时走 .some 并定值 valid_articles；为 null 时走 .none（valid_articles 在 .none 路径上被反定值置为未绑定）
+    unwrap_optional_articles:
+      use: builtin:unwrap
+      with:
+        input:
+          source: maybe_articles
+        output:
+          value: valid_articles
 
-edges:
-  - start -> resolve_author_name
-  - resolve_author_name -> unwrap_optional_articles
-  - unwrap_optional_articles.some -> process_articles
-  - unwrap_optional_articles.none -> end.skipped
+    # 模式 B（传入 default）：无分支默认值合并（doc_meta.maybe_author ?? "佚名"）
+    # doc_meta.maybe_author 既可显式声明为 [string, "null"]，也可为未列入 doc_meta.required 的可选 string 属性
+    # 直接产出非空 string 变量 author_name
+    resolve_author_name:
+      use: builtin:unwrap
+      with:
+        input:
+          source: doc_meta.maybe_author
+          default: { value: "佚名" }
+        output:
+          value: author_name
+
+  edges:
+    - start -> resolve_author_name
+    - resolve_author_name -> unwrap_optional_articles
+    - unwrap_optional_articles.some -> process_articles
+    - unwrap_optional_articles.none -> end.skipped
 ```

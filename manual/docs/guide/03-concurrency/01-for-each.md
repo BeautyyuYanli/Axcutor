@@ -1,26 +1,27 @@
 # 01. 同构结构化并发：集合遍历（`for_each`）
 
-当需要对图中某个非空强类型列表（`type: array`）或非空强类型有序映射（`type: object` + `additionalProperties`）的每个元素执行同构处理时，可在任意节点（`run`、`use` 或内联 `graph`）上挂载 **`for_each`** 修饰符。
+当需要对图中某个非空强类型列表（`type: array`）或非空强类型有序映射（`type: object` + `additionalProperties`）的每个元素执行无跨元素依赖的同构处理时，可在任意节点（`run`、`use: workflow:<path>` 或内联 `graph`）上挂载 **`for_each`** 修饰符。
 
-`for_each` 为每次元素迭代创建独立的局部隔离帧（`Iteration Frame`），在单次迭代内部消化节点的 `branches` 与 `catch`，对外层图的 `edges` 始终呈现为**单条无分支出边（`node -> target`）**，并在输出端提供三类正交数据汇聚通道：**`filter`**、**`collect`** 与 **`state`**。
+`for_each` 是纯粹的**输入集合切片与并发窗口修饰符**：它为每次元素迭代创建独立的局部隔离帧（`Iteration Frame`），在单次迭代内部消化节点的 `branches` 与 `catch`，对外层图的 `edges` 始终呈现为**单条无分支出边（`node -> target`）**，并直接复用节点自身的 **`output` / `with.output`** 与 **`branches.<branch>.output`** 完成一阶同构集合提升与按分支过滤（目标集合变量须已在所属图的宿主 `output`、未挂载 `for_each` 节点的 `output` 或 `graph.variables` 中显式声明 `TypeSpec`）。
 
 ---
 
-## 一、 单次迭代局部帧注入（`source -> item / key / index`）
+## 一、 单次迭代局部帧注入与并发控制（`source -> item / key / index / concurrency`）
 
-`for_each` 支持遍历列表与有序映射两类集合，并通过 `concurrency` 控制最大并发度（正整数，默认 `1`；未声明 `state` 时可设为 `> 1` 开启并发遍历）。
+`for_each` 仅包含 5 个输入切片与并发调度属性（`source`、`item`、`key`、`index`、`concurrency`），支持遍历列表与有序映射两类集合，并通过 `concurrency` 控制最大并发激活迭代数（正整数，默认 `1`；可设为 `> 1` 开启并发遍历）。
 
 > [!NOTE]
 > **三类节点在挂载 `for_each` 时的 `input` 声明规则**：
-> * **`run`（`ActionNode`）**：节点 `input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index`、`state` 及外层变量（未列入 `input` 的变量不会进入传给业务执行器的 `input_snapshot`）；
+> * **`run`（`ActionNode`）**：节点 `input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index` 及外层变量（未列入 `input` 的变量不会进入传给业务执行器的 `input_snapshot`）；
 > * **`use`（`CallNode`）**：在 `with.input` 中直接引用 `item` / `key` / `index`（或其结构体字段路径）及外层变量；
-> * **内联 `graph`（`InlineGraphNode`）**：由于 `item` / `key` / `index` 与 `state` 已自动注入子图的初始 `Block Frame`，内联 `graph` 节点的 `input: [...]` 仅用于捕获外层普通变量，**禁止**重复列出 `item` / `key` / `index` 或 `state`。
+> * **内联 `graph`（`InlineGraphNode`）**：由于 `item` / `key` / `index` 已自动注入子图的初始 `Block Frame`，内联 `graph` 节点的 `input: [...]` 仅用于捕获外层普通变量，**禁止**重复列出 `item` / `key` / `index`。
 
 ### 1. 遍历强类型列表（`type: array`）
 
 * **`source`（必填）**：绑定已定值的非空列表变量或结构体字段路径（如 `batch.items`）。
 * **`item`（必填）**：注入当前迭代帧的元素变量名（类型自动推导为列表 `items` 类型）。
 * **`index`（可选）**：注入当前下标 `0, 1, ...`（类型 `integer`）；遍历列表时禁止声明 `key`。
+* **一阶类型提升（`U -> Array<U>`）**：节点 `output`（或 `with.output`）中声明的单次产出类型 $U$，在外层图符号表中自动对应为列表类型 `{ type: array, items: U }`。
 
 ```yaml
 process_list_items:
@@ -29,13 +30,13 @@ process_list_items:
     item: current_item       # 注入当前元素（类型自动推导为 string）
     index: item_idx          # 注入当前下标 0, 1, ...（类型为 integer）
     concurrency: 4           # 最多同时并发执行 4 个元素迭代
-    collect:
-      processed: results
-  # 节点 input 直接读取 for_each 注入的局部变量 item_idx 与 current_item
+  # 节点 input 显式列出 for_each 注入的局部变量 item_idx 与 current_item
   input: [item_idx, current_item]
+  # output 直接声明外层集合变量名 results 及其单次元素类型 string；
+  # 在外层图中 results 的静态类型对应为 { type: array, items: { type: string } }
   output:
-    processed: { type: string }
-  run: "处理第 variables.item_idx 项 variables.current_item，写入 output.processed。"
+    results: { type: string }
+  run: "处理第 variables.item_idx 项 variables.current_item，写入 output.results。"
 ```
 
 ### 2. 遍历强类型有序映射（`type: object` + `additionalProperties`）
@@ -44,6 +45,7 @@ process_list_items:
 * **`item`（必填）**：注入当前值（Value，类型自动推导为 `additionalProperties` 类型）。
 * **`key`（可选）**：注入当前键（Key，类型 `string`）。
 * **`index`（可选）**：注入当前序号 `0, 1, ...`（类型 `integer`）。
+* **一阶类型提升（`U -> OrderedMap<string, U>`）**：节点 `output`（或 `with.output`）中声明的单次产出类型 $U$，在外层图符号表中自动保留原键序对应为有序映射类型 `{ type: object, additionalProperties: U }`。
 
 ```yaml
 translate_sections:
@@ -53,134 +55,165 @@ translate_sections:
     item: section_body       # 注入当前值（类型为 string）
     index: section_idx       # 注入当前序号（类型为 integer）
     concurrency: 4
-    collect:
-      translated_body: translated_section_map  # 自动推导为与 source 同构的有序映射
   input: [section_id, section_body]
+  # 单次产出 string，在外层图中保留原键 section_id 提升为 OrderedMap<string, string>
   output:
-    translated_body: { type: string }
-  run: "翻译章节 variables.section_id 的正文 variables.section_body，写入 output.translated_body。"
+    translated_section_map: { type: string }
+  run: "翻译章节 variables.section_id 的正文 variables.section_body，写入 output.translated_section_map。"
 ```
 
 ---
 
-## 二、 三类正交输出通道（`filter` / `collect` / `state`）
+## 二、 统一输出契约：一阶提升、多路分流、零拷贝透传与二维展平
 
-### 1. `filter`：按单次迭代分支零拷贝保留原元素（`Array<T> -> Array<T>`）
+挂载 `for_each` 的节点不引入任何额外的输出绑定语法，而是与普通节点完全共享 `output`、`with.output` 与 `branches.<branch>.output`。
 
-当节点声明了 `branches`（或 `catch`）时，`filter: { <branch>: <target_var> }` 会在单次迭代进入 `<branch>` 分支时，将该次迭代的原始输入元素 `item`（若源为有序映射则保留原键值对 `key: item`）按原顺序零拷贝收入外层变量 `<target_var>`：
+### 1. 利用 `branches.<branch>.output` 实现多路分流与条件过滤
+
+当挂载 `for_each` 的节点声明了 `branches`（或 `catch`）时，各正常分支通过 `branches.<branch>.output: [<var_1>, ...]` 声明当次迭代走该分支时产出的字段子集：
+
+* 在屏障保序汇聚时，对于每个外层目标变量 `<var>`，运行时按源集合顺序 `0 ... n-1` **仅收集实际产出了 `<var>` 的迭代结果**；
+* 走未包含 `<var>` 的分支（如 `output: []`）或被 `catch` 捕获的异常迭代会自动跳过，从而自然实现条件过滤（Filter）与多路分流（Partition）：
 
 ```yaml
-triage_articles:
+analyze_feedbacks:
   for_each:
-    source: feed_payload.articles
-    item: current_article
-    concurrency: 5
-    filter:
-      keep: valid_articles      # 收集走 keep 分支的原始元素，类型与 source 一致
-      flagged: review_queue     # 收集走 flagged 分支的原始元素，类型与 source 一致
-  input: [current_article]
+    source: batch.feedbacks
+    item: fb
+    concurrency: 4
+  input: [fb]
+  # output 直接声明外层目标集合变量名及其单次元素类型；
+  # 外层图中 urgent_tickets 对应为 Array<Ticket>，normal_summaries 对应为 Array<string>
+  output:
+    urgent_tickets:
+      type: object
+      properties:
+        id: { type: string }
+        reason: { type: string }
+      required: [id, reason]
+    normal_summaries:
+      type: string
   branches:
-    keep: "符合规范，保留"
-    flagged: "疑似违规，转人工复核"
-    drop: "垃圾内容，不进入任何 filter 目标变量"
-  run: "审阅文章 variables.current_article.title，选择 keep、flagged 或 drop 分支。"
+    urgent:
+      description: "紧急故障，收集至 urgent_tickets"
+      output: [urgent_tickets]
+    normal:
+      description: "普通反馈，收集至 normal_summaries"
+      output: [normal_summaries]
+    spam:
+      description: "垃圾信息，不产出任何字段（在汇聚时自动跳过）"
+      output: []
+  run: "评估反馈 variables.fb；若为紧急故障写入 output.urgent_tickets 并选 urgent；若为普通反馈写入 output.normal_summaries 并选 normal；若为垃圾信息直接选 spam。"
 ```
 
-### 2. `collect`：收集单次迭代产出并提升为集合（`Array<T> -> Array<U>`）
+### 2. 利用内联 `graph` + `builtin:assign` 实现原元素零拷贝过滤与死信分流
 
-节点单次迭代产出的字段 `<single_field>`（非 `state` 字段）仅存在于单次迭代帧内，通过 `collect` 汇聚提升为外层集合变量 `<target_var>`：
-
-* **默认提升（`collect: { <single_field>: <target_var> }`）**：仅从所选分支产出了该字段的迭代中收集结果；源为列表时提升为 `Array<U>`，源为有序映射时保留原键提升为 `OrderedMap<string, U>`。
-* **单层扁平化提升（`collect: { <single_field>: { into: <target_var>, flatten: true } }`）**：当源为列表且单次产出 `<single_field>` 本身也是列表 `Array<U>` 时，按迭代顺序展开拼接为一维列表 `Array<U>`。
+当需要在不让执行器（如 LLM）重抄庞大输入对象的前提下，按分支或异常原样保留输入元素 `item`（例如将合格元素过滤至 `valid_articles`、将异常元素收集至死信队列 `failed_articles`）时，在 `for_each` 挂载的内联 `graph` 分支中调用零开销算子 [`builtin:assign`](../../reference/builtins/assign.md) 将 `item` 直接赋给目标输出变量：
 
 ```yaml
-analyze_articles:
+filter_and_process_articles:
   for_each:
-    source: valid_articles
-    item: current_article
-    index: idx
-    concurrency: 5
-    collect:
-      score: all_scores                        # 收集所有迭代产出的 score -> Array<number>
-      featured_summary: featured_summaries     # 仅收集走 high_quality 分支产出的非空 string -> Array<string>
-      article_tags:
-        into: all_tags
-        flatten: true                          # 将每次迭代产出的 Array<string> 扁平化拼接为一维 Array<string>
-  input: [idx, current_article]
+    source: raw_articles
+    item: article
+    concurrency: 8
   output:
-    score: { type: number }
-    featured_summary: { type: string }
-    article_tags:
+    valid_articles:
+      type: object
+      properties:
+        id: { type: string }
+        content: { type: string }
+      required: [id, content]
+    failed_articles:
+      type: object
+      properties:
+        id: { type: string }
+        content: { type: string }
+      required: [id, content]
+  branches:
+    kept:
+      description: "保留合格文章"
+      output: [valid_articles]
+    dropped:
+      description: "丢弃不合格文章"
+      output: []
+    errored:
+      description: "处理异常进入死信队列"
+      output: [failed_articles]
+  graph:
+    nodes:
+      judge:
+        input: [article]
+        branches:
+          keep: "文章质量合格"
+          drop: "文章质量不合格"
+        catch:
+          err: ["*"]
+        run: "仅判断 variables.article 是否合格并选择 keep 或 drop 分支，无需输出原文。"
+
+      # 在 keep 分支上通过 builtin:assign 零拷贝透传原元素 article
+      assign_valid:
+        use: builtin:assign
+        with:
+          input:
+            source: article
+          output:
+            value: valid_articles
+
+      # 在异常捕获分支上通过 builtin:assign 零拷贝将原元素 article 归入死信队列
+      assign_failed:
+        use: builtin:assign
+        with:
+          input:
+            source: article
+          output:
+            value: failed_articles
+
+    edges:
+      - start -> judge
+      - judge.keep -> assign_valid
+      - assign_valid -> end.kept
+      - judge.drop -> end.dropped
+      - judge.err -> assign_failed
+      - assign_failed -> end.errored
+```
+
+### 3. 利用 [`builtin:array_flatten`](../../reference/builtins/array-flatten.md) 展平二维列表
+
+当单次迭代产出的字段本身是一个列表 `Array<W>` 时，`for_each` 遵循纯粹的一阶同构提升规则将其汇聚为二维列表 `Array<Array<W>>`；随后串联确定性内建算子 [`builtin:array_flatten`](../../reference/builtins/array-flatten.md) 即可将其保序展平为一维列表 `Array<W>`：
+
+```yaml
+# 步骤 1：单次迭代产出 Array<string>，经 for_each 一阶提升为二维列表 Array<Array<string>>
+extract_tags_per_article:
+  for_each:
+    source: articles
+    item: article
+    concurrency: 4
+  input: [article]
+  output:
+    nested_tags:
       type: array
       items: { type: string }
-  branches:
-    high_quality:
-      description: "高分文章，额外产出精选摘要"
-      output: [score, featured_summary, article_tags]
-    standard:
-      description: "普通文章，不产出精选摘要"
-      output: [score, article_tags]
-  run: "评估第 variables.idx 篇文章 variables.current_article.title，写入 output.score 与 output.article_tags；高分则写入 output.featured_summary 并选 high_quality，否则选 standard。"
+  run: "提取文章 variables.article.title 的标签列表写入 output.nested_tags。"
+
+# 步骤 2：调用 builtin:array_flatten 将二维列表 nested_tags 展平为一维列表 all_tags
+flatten_all_tags:
+  use: builtin:array_flatten
+  with:
+    input:
+      source: nested_tags
+    output:
+      result: all_tags
 ```
 
-### 3. `state`：跨元素有状态串行折叠（`Sequential Fold`）
-
-当第 $i$ 次迭代需要读取并更新第 $i-1$ 次迭代累积的状态变量时，声明 `state: [<state_var>, ...]`。声明 `state` 时，`concurrency` 必须为 `1`，且 `<state_var>` 在进入该节点前必须已在所属图中定值。
-
-```yaml
-read_chapters_sequentially:
-  for_each:
-    source: book_data.chapters
-    item: current_chapter
-    index: chapter_idx
-    concurrency: 1                # 使用 state 时必须为串行执行（concurrency: 1）
-    state: [rolling_summary]      # 跨元素原地演进外层已定值变量 rolling_summary
-    collect:
-      single_note: chapter_notes  # 可同时配合 collect 收集每章独立产出的札记
-  input: [chapter_idx, current_chapter, rolling_summary]
-  output:
-    rolling_summary: { type: string }
-    single_note: { type: string }
-  run: "阅读第 variables.chapter_idx 章 variables.current_chapter，结合上一章累积摘要 variables.rolling_summary 更新写入 output.rolling_summary，并撰写本章札记写入 output.single_note。"
-```
-
-当 `for_each.state` 与多分支（`branches`）或元素级异常捕获（`catch`）结合使用时，遵循以下静态与运行期规则：
-
-* **正常分支的 `state` 完备性约束**：若节点同时声明了 `branches`，则**每一个正常业务分支**的 `output` 列表都必须包含全部 `state` 变量（若某正常分支无需改变某个 `state` 变量，在 `run` 中将原值写回 `output`，在内联 `graph` 中由于 `state` 已在入口定值，直接走向 `end.<branch>` 即可自动提交原值）。
-* **`catch` 异常分支下的状态回滚与保持**：若第 $i$ 次迭代触发异常并被节点的 `catch` 捕获（当次尝试脏修改回滚、产出为空），累积状态 `state` 不会丢失，而是自动保留第 $i-1$ 次迭代完成时的有效快照值并传入第 $i+1$ 次迭代：
-
-```yaml
-fold_with_branch_and_catch:
-  for_each:
-    source: book_data.chapters
-    item: current_chapter
-    concurrency: 1
-    state: [rolling_summary]
-    filter:
-      bad_chapter: failed_chapters  # 收集触发异常的章节
-    collect:
-      single_note: chapter_notes    # 仅收集 updated 分支产出的札记
-  catch:
-    bad_chapter: [execution, timeout]  # 异常迭代回滚，rolling_summary 自动保留上一章的值继续传给下一章
-  input: [current_chapter, rolling_summary]
-  output:
-    rolling_summary: { type: string }
-    single_note: { type: string }
-  branches:
-    updated:
-      description: "正常提炼本章内容并产出札记"
-      output: [rolling_summary, single_note]
-    skipped:
-      description: "跳过无关章节，不产出 single_note，但必须包含 state 变量 rolling_summary"
-      output: [rolling_summary]
-  run: "若章节有效则更新 variables.rolling_summary 并写 output.single_note 选 updated；若跳过则将原 variables.rolling_summary 原样写入 output.rolling_summary 选 skipped。"
-```
+> [!TIP]
+> **跨元素有状态串行折叠与条件早退**：
+> `for_each` 专职处理无跨元素依赖的同构并行转换与分流。若业务需要**第 $i$ 步读取并更新第 $i-1$ 步累积状态**的有状态串行折叠（Sequential Fold），或需在遍历途中满足条件即提前退出（Short-Circuit / Break），请使用 [成环回边与队列消费算子（`builtin:assign` + `builtin:array_shift` + `builtin:array_append`）](../02-control-flow/02-cycles-and-back-edges.md)。
 
 ---
 
-## 三、 完整示例：并发分流过滤与结果收集流水线
+## 三、 完整示例：并发分流过滤、结果收集与二维标签展平流水线
 
-以下完整工作流串联两个 `for_each` 节点：第一步对原始文章列表执行并发三路分流（`filter`），第二步对保留下来的合规文章并发提取评分、精选摘要与扁平化标签列表（`collect`）：
+以下完整工作流串联两个 `for_each` 节点与一个 `builtin:array_flatten` 节点：第一步通过内联 `graph` + `builtin:assign` 对原始文章列表执行并发三路零拷贝分流，第二步对保留下来的合规文章并发提取精选摘要与每篇标签子列表，第三步将二维标签列表展平为一维标签总表：
 
 ```yaml
 # 1. 根节点输入契约
@@ -214,56 +247,128 @@ output:
     items: { type: string }
 
 graph:
+  # 3. 显式声明由 for_each 写入的局部中间集合变量 valid_articles 与 nested_tags
+  # （review_queue、featured_summaries、all_tags 已在顶层 output 中声明）
+  variables:
+    valid_articles:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          title: { type: string }
+          body: { type: string }
+        required: [id, title, body]
+    nested_tags:
+      type: array
+      items:
+        type: array
+        items: { type: string }
+
   nodes:
-    # 阶段 1：并发遍历原始 articles，按迭代分支使用 filter 零拷贝分流原元素
+    # 阶段 1：并发遍历原始 articles，通过内联 graph + builtin:assign 零拷贝分流原元素
     # 注意：keep / flagged / drop 分支在 for_each 内部消费，外层 edges 仅写单条无分支出边
     triage_articles:
       for_each:
         source: articles
         item: current_article
         concurrency: 5
-        filter:
-          keep: valid_articles      # 产出一阶段中间列表 valid_articles
-          flagged: review_queue     # 直接产出顶层输出所需的 review_queue
-      input: [current_article]
+      output:
+        valid_articles:
+          type: object
+          properties:
+            id: { type: string }
+            title: { type: string }
+            body: { type: string }
+          required: [id, title, body]
+        review_queue:
+          type: object
+          properties:
+            id: { type: string }
+            title: { type: string }
+            body: { type: string }
+          required: [id, title, body]
       branches:
-        keep: "内容合规，进入深度分析"
-        flagged: "疑似违规，转入人工复核队列"
-        drop: "无效内容，直接丢弃"
-      run: "审核文章 variables.current_article.title 与正文，选择 keep、flagged 或 drop 分支。"
+        keep:
+          description: "内容合规，进入深度分析队列 valid_articles"
+          output: [valid_articles]
+        flagged:
+          description: "疑似违规，转入人工复核队列 review_queue"
+          output: [review_queue]
+        drop:
+          description: "无效内容，直接丢弃"
+          output: []
+      graph:
+        nodes:
+          audit_single:
+            input: [current_article]
+            branches:
+              keep: "内容合规"
+              flagged: "疑似违规"
+              drop: "无效垃圾内容"
+            run: "审核文章 variables.current_article.title 与正文，选择 keep、flagged 或 drop 分支。"
 
-    # 阶段 2：并发遍历 valid_articles，使用 collect 收集单次迭代产出并做单层扁平化
+          keep_article:
+            use: builtin:assign
+            with:
+              input:
+                source: current_article
+              output:
+                value: valid_articles
+
+          flag_article:
+            use: builtin:assign
+            with:
+              input:
+                source: current_article
+              output:
+                value: review_queue
+
+        edges:
+          - start -> audit_single
+          - audit_single.keep -> keep_article
+          - keep_article -> end.keep
+          - audit_single.flagged -> flag_article
+          - flag_article -> end.flagged
+          - audit_single.drop -> end.drop
+
+    # 阶段 2：并发遍历 valid_articles，按分支产出 featured_summaries 与二维标签列表 nested_tags
     analyze_valid_articles:
       for_each:
         source: valid_articles
         item: current_article
         index: idx
         concurrency: 5
-        collect:
-          featured_summary: featured_summaries  # 仅从走 high_quality 分支的迭代中收集非空摘要
-          article_tags:
-            into: all_tags
-            flatten: true                       # 将每篇产出的标签子列表展开合并为一维列表 all_tags
       input: [idx, current_article]
       output:
-        featured_summary: { type: string }
-        article_tags:
+        featured_summaries: { type: string }
+        nested_tags:
           type: array
           items: { type: string }
       branches:
         high_quality:
           description: "优质文章，产出精选摘要与标签"
-          output: [featured_summary, article_tags]
+          output: [featured_summaries, nested_tags]
         standard:
           description: "常规文章，仅产出标签"
-          output: [article_tags]
-      run: "分析第 variables.idx 篇文章 variables.current_article.body，提取标签写入 output.article_tags；若属优质文章则额外撰写摘要写入 output.featured_summary 并选 high_quality，否则选 standard。"
+          output: [nested_tags]
+      run: "分析第 variables.idx 篇文章 variables.current_article.body，提取标签列表写入 output.nested_tags；若属优质文章则额外撰写摘要写入 output.featured_summaries 并选 high_quality，否则选 standard。"
 
-  # 3. 外层控制流边：挂载了 for_each 的节点对外均为单一无分支出边
+    # 阶段 3：使用 builtin:array_flatten 将二维标签列表 nested_tags 保序展平为一维列表 all_tags
+    flatten_tags:
+      use: builtin:array_flatten
+      with:
+        input:
+          source: nested_tags
+        output:
+          result: all_tags
+
+  # 4. 外层控制流边：挂载了 for_each 的节点对外均为单一无分支出边
   edges:
     - start -> triage_articles
     - triage_articles -> analyze_valid_articles
-    - analyze_valid_articles -> end
+    - analyze_valid_articles -> flatten_tags
+    - flatten_tags -> end
 ```
 
 > 更多集合与并发组合模式可参阅 Cookbook：

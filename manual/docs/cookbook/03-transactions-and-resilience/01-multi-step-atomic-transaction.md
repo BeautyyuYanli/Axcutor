@@ -52,7 +52,9 @@ graph:
     settlement_transaction:
       timeout_ms: 15000
       input: [order_id]
-      output: [settlement_id, status_note]
+      output:
+        settlement_id: { type: string }
+        status_note: { type: string }
       catch:
         tx_failed: [execution, timeout, contract]
       graph:

@@ -21,28 +21,23 @@
 
 ---
 
-## 二、 `for_each` 同构集合遍历与三通道保序汇聚状态机
+## 二、 `for_each` 同构集合遍历与保序汇聚状态机
 
-设挂载了 `for_each` 的节点为 $M$，源集合求值结果为有序序列 $S = [(k_0, v_0), (k_1, v_1), \dots, (k_{n-1}, v_{n-1})]$（当源为 `Array` 时 $k_i = i$；当源为 `OrderedMap` 时按插入顺序排列，$k_i$ 为字符串键），长度为 $n = |S|$。设进入节点 $M$ 前外层栈帧中状态变量的初始映射为 $\sigma_0 = \rho_{\text{outer}}|_{M.\text{for\_each.state}}$：
+设挂载了 `for_each` 的节点为 $M$，源集合求值结果为有序序列 $S = [(k_0, v_0), (k_1, v_1), \dots, (k_{n-1}, v_{n-1})]$（当源为 `Array` 时 $k_i = i$；当源为 `OrderedMap` 时按插入顺序排列，$k_i$ 为字符串键），长度为 $n = |S|$，外层目标输出变量集合为 $OutVars(M)$：
 
 1. **空集合边界（$n = 0$）**：
-   * 若 $n = 0$，不激活任何子迭代（计 `0` 步）：
-     * 所有 `filter` 目标变量与 `collect` 目标变量直接初始化为空集合（源为列表时写入 `[]`，源为有序映射或 `flatten: true` 时分别写入 `{}` 或 `[]`）；
-     * 所有 `state` 目标变量保持进入该节点前的初始值 $\sigma_0$ 不变；
-     * 控制令牌直接沿默认出边前进。
-2. **并发窗口控制、按序槽位分配与 `for_each.state` 迭代传递方程（$n \ge 1$）**：
-   * 运行时分配长度为 $n$ 的有序结果槽数组 $\text{Slots}[0 \dots n-1]$，并通过信号量控制同时处于激活状态的迭代数不超过 `concurrency`（当声明了非空 `state` 时 `concurrency = 1`，按 $i = 0, 1, \dots, n-1$ 串行执行）。
-   * **单次迭代完成记录与 `state` 状态传递方程**：
-     * 第 $i$ 次迭代完成（正常返回业务分支 $b_i$ 或进入 `M.catch` 异常捕获分支 $c_i$）后，将其所选分支名 $\text{choice}_i$ 与有效产出 $\text{out}_i$ 记录到 $\text{Slots}[i]$。
-     * 当 $M$ 声明了非空 `for_each.state` 时，对于第 $i = 0, 1, \dots, n-1$ 次串行迭代（以 $\sigma_i$ 作为输入状态快照）：
-       * **正常完成**：若第 $i$ 次迭代正常完成（返回正常分支 $b_i \in \text{dom}(M.\text{branches})$ 或默认无分支出口，产出 $\text{out}_i$；由编译期分支完备性断言保证 $\text{set}(M.\text{for\_each.state}) \subseteq \text{dom}(\text{out}_i)$）：
-         $$\sigma_{i+1} = \text{out}_i|_{M.\text{for\_each.state}}$$
-       * **被 `M.catch` 捕获**：若第 $i$ 次迭代触发可恢复异常并被 `M.catch` 拦截（进入异常分支 $c_i \in \text{dom}(M.\text{catch})$，当次迭代的脏修改全部回滚，$\text{out}_i = \emptyset$）：
-         $$\sigma_{i+1} = \sigma_i \quad \text{（保留上一轮有效状态快照不变，传入第 } i+1 \text{ 次迭代）}$$
+   * 若 $n = 0$，不激活任何子迭代（计 `0` 步）；
+   * 对每个外层目标变量 $v \in OutVars(M)$，直接初始化为空集合（当源为 `Array` 时写入 `[]`，当源为 `OrderedMap` 时写入 `{}`）；
+   * 控制令牌直接沿默认出边 `M -> target` 前进。
+2. **并发窗口控制与按序槽位分配（$n \ge 1$）**：
+   * 运行时分配长度为 $n$ 的有序结果槽数组 $\text{Slots}[0 \dots n-1]$，并通过信号量控制同时处于激活状态的迭代数不超过 `concurrency`。
+   * **单次迭代完成记录**：
+     * 若第 $i$ 次迭代**正常完成**（返回正常分支 $b_i$ 或默认无分支出口）：提取该分支契约承诺产出的字段子集（若 $M$ 为 `CallNode`，则将产出的字段按 $M.\text{with.output}$ 重映射为外层目标变量名，忽略未在 `with.output` 中绑定的字段），得到有效产出映射 $\text{out}_i$ 并记录至 $\text{Slots}[i]$；
+     * 若第 $i$ 次迭代触发可恢复异常并**被 `M.catch` 拦截**（进入异常分支 $c_i \in \text{dom}(M.\text{catch})$）：当次迭代的脏修改全部回滚，将空产出 $\text{out}_i = \emptyset$ 记录至 $\text{Slots}[i]$。
 3. **屏障保序汇聚（Order-Preserving Aggregation）**：
-   * 待全部 $n$ 个元素迭代完成后，按原始下标顺序 $i = 0, 1, \dots, n-1$ 扫描 $\text{Slots}[i]$（即使 `concurrency > 1` 时各元素完成先后顺序不同，最终汇聚结果仍保持源集合顺序 $0 \dots n-1$）：
-     * **`filter` 汇聚**：对每个配置 `filter.<branch>: <target_var>`，依次将满足 $\text{choice}_i = \text{branch}$ 的原元素 $v_i$（或键值对 $(k_i, v_i)$）追加到 `<target_var>`；
-     * **`collect` 汇聚（`flatten: false`）**：对每个配置 `collect.<field>: <target_var>`，依次提取满足 $\text{field} \in \text{dom}(\text{out}_i)$ 的产出值 $\text{out}_i[\text{field}]$（若源为 `OrderedMap` 则配对原键 $(k_i, \text{out}_i[\text{field}])$）追加到 `<target_var>`；
-     * **`collect` 汇聚（`flatten: true`）**：按 $i = 0 \dots n-1$ 顺序将满足 $\text{field} \in \text{dom}(\text{out}_i)$ 的子列表 $\text{out}_i[\text{field}]$ 首尾拼接（Concatenate）为一维列表写入 `<target_var>`；
-     * **`state` 提交**：将全部 $n$ 次迭代结束后的最终累积状态 $\sigma_n$ 写入外层 `<state_var>`。
-   * 一次性将全部三通道目标变量原子提交回外层图的 $\rho_{\text{outer}}$。
+   * 待全部 $n$ 个元素迭代完成后，对每个外层目标变量 $v \in OutVars(M)$，按原始下标顺序 $i = 0, 1, \dots, n-1$ 扫描 $\text{Slots}[i]$（即使 `concurrency > 1` 时各元素完成先后顺序不同，最终汇聚结果仍保持源集合顺序 $0 \dots n-1$）：
+     * 依次提取所有满足 $v \in \text{dom}(\text{out}_i)$ 的产出值 $\text{out}_i[v]$：
+       * 当源集合为 `Array` 时，按序追加至新列表 `result_list`；
+       * 当源集合为 `OrderedMap` 时，按序以原键配对插入新有序映射 `result_map[k_i] = out_i[v]`；
+     * 对于不满足 $v \in \text{dom}(\text{out}_i)$ 的槽位（即第 $i$ 次迭代走了未产出 $v$ 的正常业务分支，或被 `M.catch` 捕获），直接跳过。
+   * 一次性将全部 $v \in OutVars(M)$ 的汇聚集合原子提交回外层图的 $\rho_{\text{outer}}$。

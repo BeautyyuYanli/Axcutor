@@ -12,8 +12,8 @@
 | :--- | :--- | :--- |
 | **生成-校验-修正闭环** | 迭代次数未知，需携带上轮错误反馈重试；成功出口与超限失败出口产出不同字段 | `graph.variables` 初值 + CFG 成环回边 + `branches.<choice>.output` 按需子集 |
 | **候选节点短路早退回退链** | 按优先级逐个尝试候选节点，任一命中即刻停止返回，同时记录前置失败轨迹 | `builtin:array_shift`（`.some` / `.empty` 原地切片）+ `builtin:array_append` + 成环回边 |
-| **可选配置拆包与有状态串行折叠** | 先拆包可选全局上下文，再按序逐项累积更新全局状态并收集单步结果 | `builtin:unwrap` + `for_each`（`concurrency: 1` + `state` + `collect`） |
-| **并发多路分流、条件收集与扁平化** | 高并发遍历集合，按评估分支保留原元素、过滤无效项并将子列表展开为一维列表 | `for_each`（`concurrency > 1` + `filter` + 分支条件 `collect` + `flatten: true`） |
-| **外层并发遍历嵌套内层动态循环** | 外层并发处理多个独立模块，每个模块内部需独立运行多轮“处理 → 审校 → 重做”循环 | `for_each` 挂载于 SESE 内联 `graph` 节点（`Block Frame` 隔离内部循环状态） |
+| **可选配置拆包与有状态串行折叠** | 先拆包可选全局上下文，再按序逐项累积更新全局状态并收集单步结果 | `builtin:unwrap` + `builtin:assign` + `builtin:array_shift` + `builtin:array_append` + 成环回边 |
+| **并发多路分流、条件收集与扁平化** | 高并发遍历集合，按评估分支过滤无效项、保留原元素并将二维子列表展平为一维列表 | `for_each`（`concurrency > 1` + 内联 `graph` + `branches.<branch>.output`）+ `builtin:array_flatten` |
+| **外层并发遍历嵌套内层动态循环** | 外层并发处理多个独立模块，每个模块内部需独立运行多轮“处理 → 审校 → 重做”循环 | `for_each` 挂载于 SESE 内联 `graph` 节点（`Block Frame` 隔离内部循环状态 + `builtin:assign` 归档放弃项） |
 | **多步原子事务 `try-catch` 与补偿** | 多个串联步骤共享总超时与回滚边界；任一步失败或校验不合法则整块回滚并转入补偿 | SESE 内联 `graph` + `timeout_ms` + 子图内 `-> fail` + 外层 `catch` 补偿路由 |
-| **批处理元素级异常隔离与死信分流** | 批量并发执行任务，单元素超时仅原地重试该元素；持续超时或崩溃的元素分流至死信队列 | `for_each` + `timeout_ms` + `retry` + `catch` + `for_each.filter`（零拷贝归档失败原元素） |
+| **批处理元素级异常隔离与死信分流** | 批量并发执行任务，单元素超时仅原地重试该元素；持续超时或崩溃的元素分流至死信队列 | `for_each` 挂载于内联 `graph` + `timeout_ms` + `retry` + `catch` + `builtin:assign`（零拷贝归档失败原元素） |

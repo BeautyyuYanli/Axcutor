@@ -79,7 +79,7 @@ run: "计算 variables.raw_price * variables.discount_rate 并保留两位小数
 
 当需要编排多个步骤时，在顶层声明 `graph`。`graph` 由三个核心字段构成：
 
-* **`variables`（可选）**：图级共享变量表。进入顶层 `graph` 时，顶层 `input` 中的所有参数自动作为已定值变量注入 `variables`；同时可在 `graph.variables` 中声明图内部使用的初始状态变量。
+* **`variables`（可选）**：图级共享局部变量声明表（每个条目均为显式 `TypeSpec` 映射，可选配 `default` 初始值）。进入顶层 `graph` 时，顶层 `input` 中的所有参数自动作为已定值变量注入图级上下文；同时可在 `graph.variables` 中声明图内部使用的带初值状态变量（包含 `default` 键）或未初始化的局部变量类型（省略 `default` 键，等价于 `let v: T;`）。
 * **`nodes`（必填）**：定义图内的子节点字典。
 * **`edges`（必填）**：定义控制令牌（Control Token）从起点 `start` 到终点 `end` 的流转路径。
 
@@ -90,21 +90,36 @@ output:
   result_text: { type: string }
 
 graph:
-  # 可选：声明图内共享初始变量（顶层 input.request_id 已自动注入 variables）
+  # 可选：声明图内共享局部变量（顶层 input.request_id 已自动注入图作用域）
   variables:
-    step_tag: "v1"
+    # 1. 带初值的局部变量声明（TypeSpec + default）
+    step_tag:
+      type: string
+      default: "v1"
+    # 2. 未初始化的局部变量声明（仅声明 TypeSpec，省略 default，由后续节点写入定值）
+    normalized_id:
+      type: string
 
   # 必填：声明图内子节点
   nodes:
+    normalize_id:
+      use: builtin:assign
+      with:
+        input:
+          source: request_id
+        output:
+          value: normalized_id
+
     step_a:
-      input: [request_id, step_tag]
+      input: [normalized_id, step_tag]
       output:
         result_text: { type: string }
-      run: "拼接 variables.request_id 与 variables.step_tag 写入 output.result_text。"
+      run: "拼接 variables.normalized_id 与 variables.step_tag 写入 output.result_text。"
 
   # 必填：声明从 start 到 end 的控制流边
   edges:
-    - start -> step_a
+    - start -> normalize_id
+    - normalize_id -> step_a
     - step_a -> end
 ```
 

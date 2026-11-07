@@ -9,8 +9,8 @@
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
 | **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型列表 `{ type: array, items: T }`（支持顶层变量或结构体字段路径）。 |
-| **`with.output`** | `item` | **必填** | 自动推导为列表元素类型 `T`。不可与 `rest` 同名。 |
-| **`with.output`** | `rest` | **必填** | 自动推导为 `{ type: array, items: T }`。可与 `source` 绑定同一个顶层列表变量名，以推进队列切片。 |
+| **`with.output`** | `item` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{item}}$，要求 $\Sigma(v_{\text{item}}) \equiv T$，且不可与 `rest` 同名。 |
+| **`with.output`** | `rest` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{rest}}$，要求 $\Sigma(v_{\text{rest}}) \equiv \{ \texttt{type}: \texttt{array}, \texttt{items}: T \}$。可与 `source` 绑定同一个顶层列表变量名，以推进队列切片。 |
 
 ### 控制流分支行为、不可变切片与反定值（Kill）语义
 
@@ -22,23 +22,29 @@
 ## 二、 YAML 用法示例
 
 ```yaml
-nodes:
-  # 弹出 remaining_endpoints 的首元素至 current_endpoint，并将剩余切片新副本写回 remaining_endpoints
-  pop_next_endpoint:
-    use: builtin:array_shift
-    with:
-      input:
-        source: remaining_endpoints
-      output:
-        item: current_endpoint
-        rest: remaining_endpoints
+graph:
+  # 显式声明弹出的元素变量类型（remaining_endpoints 已在顶层 input 中声明）
+  variables:
+    current_endpoint:
+      type: string
 
-edges:
-  - start -> pop_next_endpoint
-  # 队列非空时尝试当前节点；成功则短路退出，失败则回边继续弹出下一项
-  - pop_next_endpoint.some -> try_request
-  - try_request.ok -> end.success
-  - try_request.failed -> pop_next_endpoint
-  # 队列耗尽时退出循环（current_endpoint 在 .empty 分支上被反定值置为未绑定）
-  - pop_next_endpoint.empty -> end.all_failed
+  nodes:
+    # 弹出 remaining_endpoints 的首元素至 current_endpoint，并将剩余切片新副本写回 remaining_endpoints
+    pop_next_endpoint:
+      use: builtin:array_shift
+      with:
+        input:
+          source: remaining_endpoints
+        output:
+          item: current_endpoint
+          rest: remaining_endpoints
+
+  edges:
+    - start -> pop_next_endpoint
+    # 队列非空时尝试当前节点；成功则短路退出，失败则回边继续弹出下一项
+    - pop_next_endpoint.some -> try_request
+    - try_request.ok -> end.success
+    - try_request.failed -> pop_next_endpoint
+    # 队列耗尽时退出循环（current_endpoint 在 .empty 分支上被反定值置为未绑定）
+    - pop_next_endpoint.empty -> end.all_failed
 ```

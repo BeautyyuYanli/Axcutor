@@ -53,7 +53,7 @@
 
 1. **基于顶层签名的模块化独立校验**：
    * 每个工作流文件在文件顶层显式声明了完备的静态函数签名 $(I_{\text{target}}, O_{\text{target}}, B_{\text{target}}) = (\text{target.input}, \text{target.output}, \text{target.branches})$；
-   * 静态检查器在校验调用节点 $N$ 时，仅依赖被调用工作流的顶层静态签名验证 `with.input`、`with.output`（或 `for_each` 通道）及外层分支出边的合法性，无需在编译期展开被调用方的内部图体。
+   * 静态检查器在校验调用节点 $N$ 时，仅依赖被调用工作流的顶层静态签名验证 `with.input`、`with.output` 及外层分支出边的合法性，无需在编译期展开被调用方的内部图体。
 2. **允许直接或间接递归调用**：
    * 跨文件工作流调用图允许存在直接递归（如工作流 $A$ 内部某条分支通过 `use: workflow:A` 调用自身）或相互递归环路（$A \to B \to A$）；
    * 运行期由 [`03-guardrails-and-step-accounting.md`](../04-runtime-execution-model/03-guardrails-and-step-accounting.md) 定义的调用栈深度护栏 $\text{MAX\_CALL\_DEPTH}$（默认 $64$）强制保证有界终止，超限时抛出不可捕获的 `StackOverflowError`。

@@ -29,12 +29,10 @@
 | AST 节点类型 | 唯一鉴别键 | 允许的可选字段 | 禁止出现的字段 |
 | :--- | :--- | :--- | :--- |
 | **`ActionNode`** | `run` | `input: List<Identifier>`<br>`output: Map<Identifier, TypeSpec>`<br>`branches: Map<BranchId, BranchSpec>`<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `with`, `graph`, `use` |
-| **`InlineGraphNode`** | `graph` | `input: List<Identifier>`<br>`output: List<Identifier> \| Map<Identifier, TypeSpec>`<br>`branches: Map<BranchId, BranchSpec>`<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `with`, `run`, `use` |
+| **`InlineGraphNode`** | `graph` | `input: List<Identifier>`<br>`output: Map<Identifier, TypeSpec>`<br>`branches: Map<BranchId, BranchSpec>`<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `with`, `run`, `use` |
 | **`CallNode`** | `use` | `with: WithSpec`<br>*(以下仅当 `use` 为 `workflow:<path>` 时允许，为 `builtin:<op>` 时禁止)*：<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `input`, `output`, `branches`, `run`, `graph` |
 
 * **`input` 列表去重约束**：在 `ActionNode` 与 `InlineGraphNode` 中，`input` 若声明，必须为无重复元素的顶层变量标识符列表 `List<Identifier>`。
-* **`InlineGraphNode.output` 列表简写去重约束**：当 `InlineGraphNode.output` 为 `List<Identifier>` 时，列表元素必须为无重复的标识符（等价于从子图内部符号表推导对应 `TypeSpec`）。
-* **`CallNode` 挂载 `for_each` 时的 `with.output` 互斥约束**：当 `CallNode`（`use: workflow:<path>`）声明了 `for_each` 时，禁止在 `with` 中声明 `output`（单次迭代输出直接由 `for_each.collect` 与 `for_each.state` 对接被调用工作流的 `output` 字段）。
 
 ---
 
@@ -62,9 +60,9 @@
 3. **`max_steps?: PositiveInt`（可选，默认 `1000`）**：
    * 若显式声明，必须为正整数（$\text{max\_steps} \ge 1$）。
 4. **`variables?: Map<Identifier, VarDecl>`（可选，默认 `{}`）**：
-   * 每个键 `<v>` 必须为合法 `Identifier`。解析器按以下确定性准则对 `<val>` 进行形态消歧：
-     * **显式带类型声明（`ExplicitVarDecl`）**：若 `<val>` 为映射对象且同时包含键 `type` 与 `default`（且除 `TypeSpec` 允许的契约字段与 `default` 外不包含其他键），则将其拆分为 `(TypeSpec, default_literal)`；
-     * **字面量简写声明（`ShorthandVarDecl`）**：否则，将 `<val>` 整体解析为初始字面量 `shorthand_literal`（注：任何直接作为 `variables` 初值的 `TypedDict` 或 `OrderedMap` 对象字面量必须采用显式带类型声明 `{ type: object, ..., default: {...} }`，见 [`03-two-phase-symbol-resolution.md`](../02-type-system-and-symbols/03-two-phase-symbol-resolution.md)）。
+   * 每个键 `<v>` 必须为合法 `Identifier`。
+   * 每个值 `<val>`（`VarDecl`）必须是一个映射对象，其除去可选键 `default` 后的其余键值映射必须构成一个良构的 [`TypeSpec`](../02-type-system-and-symbols/01-typespec-well-formedness.md)。
+   * 若 `<val>` 显式包含键 `default`（记为 $v \in \text{InitVars}(G)$），则表示该变量在图启动时持有初始默认值 `default_literal`；若 `<val>` 未包含键 `default`，则仅声明该图级局部变量的静态类型，图启动时处于未定值状态（`Unbound`）。
 
 ---
 
@@ -72,7 +70,7 @@
 
 ### 1. 集合遍历修饰符（`ForEachSpec`）
 
-当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<path>`）声明 `for_each` 时，其值必须为满足以下良构性公理的映射对象：
+当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<path>`）声明 `for_each` 时，其值必须为仅包含以下 5 个输入切片与并发控制属性的映射对象：
 
 * **`source: FieldPathExpr`（必填）**：
   * 令 $T_{\text{src}} = \text{TypeOf}(\Sigma_{\text{outer}}, \text{source})$。必须满足**非空集合约束**：
@@ -84,28 +82,11 @@
   * 若 $\text{BaseType}(T_{\text{src}}) = \texttt{array}$ 且显式声明了 `key`，编译期报错。
 * **`index?: Identifier`（可选）**：注入单次迭代序号（`0, 1, ...`，类型 `integer`）的变量名。
 * **`concurrency?: PositiveInt`（可选，默认 `1`）**：
-  * 必须为正整数（$\text{concurrency} \ge 1$）；当声明了非空 `state` 时，必须满足 $\text{concurrency} = 1$。
-* **三通道数据出口与键存在性公理**：
-  * 记节点 $N$ 的**单次迭代输出字段契约表 $\text{SingleOut}(N)$** 为：
-    * 当 $N$ 为 `ActionNode` 或 `InlineGraphNode` 时，$\text{SingleOut}(N) = N.\text{output}$（若 `InlineGraphNode.output` 为列表简写，则为其关联的子图符号表类型映射）；
-    * 当 $N$ 为 `CallNode`（`use: workflow:<path>`）时，$\text{SingleOut}(N) = \text{target.output}$（被调用工作流顶层声明的 `output` 映射）。
-  * **数据出口非空约束**：`filter`、`collect`、`state` 三者不可同时为空：
-    $$\text{dom}(\text{filter}) \cup \text{dom}(\text{collect}) \cup \text{set}(\text{state}) \neq \emptyset$$
-  * **`filter?: Map<BranchOrCatchId, Identifier>`（可选，默认 `{}`）**：
-    * 每个键 $b \in \text{dom}(\text{filter})$ 必须为当前节点已声明的正常分支或异常捕获分支：
-      $$\forall b \in \text{dom}(\text{filter}), \quad b \in \text{dom}(N.\text{branches}) \cup \text{dom}(N.\text{catch})$$
-      *(注：对 `CallNode` 而言，$N.\text{branches}$ 即被调用工作流顶层声明的 `target.branches`)*。
-    * 每个值 `<target_var>` 必须为合法顶层 `Identifier`。
-  * **`collect?: Map<Identifier, Identifier | { into: Identifier, flatten?: Boolean }>`（可选，默认 `{}`）**：
-    * 每个键 $f \in \text{dom}(\text{collect})$ 必须属于节点单次迭代输出字段集，且不得与 `state` 变量重叠：
-      $$\forall f \in \text{dom}(\text{collect}), \quad f \in \text{dom}(\text{SingleOut}(N)) \;\land\; f \notin \text{set}(N.\text{for\_each.state})$$
-    * 当值采用 `{ into: <target_var>, flatten: true }` 时，必须同时满足：
-      $$\text{BaseType}(T_{\text{src}}) = \texttt{array} \;\land\; \text{BaseType}(\text{SingleOut}(N)[f]) = \texttt{array} \;\land\; \text{Nullable}(\text{SingleOut}(N)[f]) = \texttt{false}$$
-  * **`state?: List<Identifier>`（可选，默认 `[]`）**：
-    * 必须为无重复元素的顶层 `Identifier` 列表，且每个状态变量必须属于节点单次迭代输出字段集：
-      $$\text{set}(\text{state}) \subseteq \text{dom}(\text{SingleOut}(N))$$
-    * **多分支下的 `state` 完备性约束**（详见 [`03-branch-sensitive-definite-assignment.md`](../03-static-flow-analysis/03-branch-sensitive-definite-assignment.md)）：若节点 $N$ 同时声明了非空 `branches`（对 `CallNode` 指 `target.branches`），则每一个正常业务分支 $b \in \text{dom}(N.\text{branches})$ 承诺产出的字段子集均必须包含全部 `state` 变量：
-      $$\forall b \in \text{dom}(N.\text{branches}), \quad \text{set}(\text{state}) \subseteq \text{set}(N.\text{branches}[b].\text{output})$$
+  * 必须为正整数（$\text{concurrency} \ge 1$）。
+* **挂载 `for_each` 节点的有效输出非空约束**：
+  * 挂载了 `for_each` 的节点 $N$ 必须向外层图绑定至少一个目标输出变量（即 $OutVars(N) \neq \emptyset$）：
+    * 当 $N$ 为 `ActionNode` 或 `InlineGraphNode` 时：$\text{dom}(N.\text{output}) \neq \emptyset$；
+    * 当 $N$ 为 `CallNode`（`use: workflow:<path>`）时：经 $N.\text{with.output}$ 绑定的有效目标变量集合非空（$\text{values}(N.\text{with.output}) \neq \emptyset$）。
 
 ### 2. 原地快照重试修饰符（`RetrySpec`）
 

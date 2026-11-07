@@ -12,7 +12,7 @@
 | :--- | :--- | :--- | :--- |
 | **`with.input`** | `source` | **必填** | 绑定已定值的非空强类型有序映射 `{ type: object, additionalProperties: TV }`。 |
 | **`with.input`** | `key` | **必填** | 绑定已定值的非空 `type: string` 变量、结构体静态字段路径或 `{ value: "<str>" }` 常量字面量。 |
-| **`with.output`** | `result` | **必填** | 自动推导为 `{ type: object, additionalProperties: TV }`。可与 `source` 绑定同一个顶层映射变量名以更新变量绑定。 |
+| **`with.output`** | `result` | **必填** | 写入当前图符号表中已声明的目标顶层变量 $v_{\text{res}}$，要求 $\Sigma(v_{\text{res}}) \equiv \{ \texttt{type}: \texttt{object}, \texttt{additionalProperties}: TV \}$。可与 `source` 绑定同一个顶层映射变量名以更新变量绑定。 |
 
 ### 控制流、纯函数式不可变删除与键序保持
 

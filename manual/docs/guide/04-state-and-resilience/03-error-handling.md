@@ -44,7 +44,8 @@ nodes:
   # 形态 B：按异常类型分流至不同恢复出边（contract 未列出，发生时直接向父图冒泡）
   autonomous_research_subgraph:
     input: [topic]
-    output: [report]
+    output:
+      report: { type: string }
     catch:
       bounded_stop: [max_steps, timeout]  # 暴露 .bounded_stop 出边
       exec_failed: [execution]            # 暴露 .exec_failed 出边
@@ -142,7 +143,8 @@ graph:
     # 阶段 1：使用内联 graph 构成原子结算边界，挂载 catch 拦截任何执行失败或主动 -> fail
     settlement_transaction:
       input: [order_id, amount]
-      output: [settlement_receipt]
+      output:
+        settlement_receipt: { type: string }
       catch:
         tx_aborted: [execution, timeout]
       graph:
