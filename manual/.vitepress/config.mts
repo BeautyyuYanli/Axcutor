@@ -29,8 +29,7 @@ export default withMermaid(
         { text: '渐进式教程 (Guide)', link: '/docs/guide/', activeMatch: '^/docs/guide/' },
         { text: '实战配方 (Cookbook)', link: '/docs/cookbook/', activeMatch: '^/docs/cookbook/' },
         { text: '速查字典 (Reference)', link: '/docs/reference/', activeMatch: '^/docs/reference/' },
-        { text: '引擎规范 (Spec)', link: '/spec/', activeMatch: '^/spec/' },
-        { text: '早期原型 (Prototype)', link: '/prototype/', activeMatch: '^/prototype/' }
+        { text: '引擎规范 (Spec)', link: '/spec/', activeMatch: '^/spec/' }
       ],
 
       sidebar: {
@@ -203,20 +202,6 @@ export default withMermaid(
             items: [
               { text: '01. run 业务执行器标准 ABI 契约', link: '/spec/05-executor-abi/01-run-executor-contract' },
               { text: '02. builtin 受信任 Python 执行器规范', link: '/spec/05-executor-abi/02-builtin-python-executor' }
-            ]
-          }
-        ],
-
-        '/prototype/': [
-          {
-            text: '早期原型设计稿归档',
-            items: [
-              { text: '原型演进概览', link: '/prototype/' },
-              { text: 'DSL.md (初始总体规范)', link: '/prototype/DSL' },
-              { text: 'builtins.md (内建算子初稿)', link: '/prototype/builtins' },
-              { text: 'error_handling.md (容错模型初稿)', link: '/prototype/error_handling' },
-              { text: 'while_and_iter.md (循环与遍历初稿)', link: '/prototype/while_and_iter' },
-              { text: 'while_plus_iter.md (嵌套子图初稿)', link: '/prototype/while_plus_iter' }
             ]
           }
         ]
