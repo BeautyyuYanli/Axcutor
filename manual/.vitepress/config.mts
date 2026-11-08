@@ -39,7 +39,8 @@ export default withMermaid(
             text: '渐进式教程导读',
             items: [
               { text: '教程总览', link: '/docs/guide/' },
-              { text: '使用 Docker 执行工作流', link: '/docs/guide/00-run-with-docker' }
+              { text: '使用 Docker 执行工作流', link: '/docs/guide/00-run-with-docker' },
+              { text: 'Web Playground', link: '/docs/guide/00-web-playground' }
             ]
           },
           {

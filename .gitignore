@@ -3,3 +3,7 @@
 __pycache__/
 *.pyc
 /crates/axcutor-wasm/pkg/
+/playground/node_modules/
+/playground/dist/
+/playground/src/wasm-pkg/
+/playground/.browser-test/

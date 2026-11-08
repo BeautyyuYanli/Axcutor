@@ -11,7 +11,8 @@ import httpx
 import pytest
 import uvicorn
 from axcutor_host import ExecutionService
-from axcutor_host.http import create_app
+from axcutor_host.http import create_app, openapi_schema
+from axcutor_host.service import Execution, ExecutionError, ExecutionResult, Frame
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.worker import create_worker
 from helpers import INTEGER, N, assign, graph
@@ -73,6 +74,26 @@ def assert_error(response, status, code):
     assert set(error) == {"code", "message", "details"}
     assert error["code"] == code and isinstance(error["message"], str)
     return error
+
+
+async def test_openapi_is_stateless_and_matches_execution_shapes():
+    backend = await Client.connect("127.0.0.1:1", lazy=True)
+    async with client_for(backend) as client:
+        response = await client.get("/openapi.json")
+    assert response.status_code == 200
+    schema = loads(response.text)
+    assert schema == openapi_schema()
+    assert schema["openapi"] == "3.1.0"
+    components = schema["components"]["schemas"]
+    for model in (Execution, Frame, ExecutionResult, ExecutionError):
+        assert set(components[model.__name__]["required"]) == set(model.__annotations__)
+        assert set(components[model.__name__]["properties"]) == set(model.__annotations__)
+    paths = schema["paths"]
+    assert paths["/v1/executions"]["post"]["operationId"] == "submitExecution"
+    assert paths["/v1/executions/{execution_id}"]["get"]["operationId"] == "getExecution"
+    cancel = paths["/v1/executions/{execution_id}:cancel"]["post"]
+    assert cancel["operationId"] == "cancelExecution"
+    assert {"200", "202"} <= cancel["responses"].keys()
 
 
 @pytest.mark.parametrize(

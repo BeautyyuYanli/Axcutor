@@ -1,0 +1,82 @@
+import { readFileSync } from 'node:fs';
+import { beforeAll, describe, expect, it } from 'vitest';
+import init, { compile_workflow, get_available_vars_at_node } from '../src/wasm-pkg/axcutor_wasm';
+import { defaultPreset } from '../src/presets';
+import { handleId, layoutGraph, liveOverlay, locateFrame, scopeBody } from '../src/utils/graphLayout';
+import { JsonText } from '../src/utils/losslessJson';
+import type { CompileOutput, Scope } from '../src/types/compiler';
+import type { Frame } from '../src/client/types.gen';
+
+beforeAll(async () => { await init({ module_or_path: readFileSync(new URL('../src/wasm-pkg/axcutor_wasm_bg.wasm', import.meta.url)) }); });
+
+function compile(document: object, entry = 'folder/main.yaml') {
+  const raw = compile_workflow(JSON.stringify({ entry, sources: { [entry]: { format: 'json', text: JSON.stringify(document) } } }));
+  const result = JSON.parse(raw) as CompileOutput;
+  expect(result.diagnostics).toEqual([]);
+  return { result, raw: new JsonText(raw) };
+}
+const run = { run: { executor: 'builtin', content: 'return Output()' } };
+const frame = (address: string, kind: Frame['kind'] = 'function', cursor = 'start', children: Frame[] = []): Frame => ({
+  address, kind, cursor, children, call_depth: 1, steps: 0, max_steps: null, variables: {},
+});
+
+describe('real WASM serialization and CFG', () => {
+  it('compiles the repository preset, expands Root Run and resolves same-address iteration/function frames', () => {
+    const preset = defaultPreset();
+    const output = JSON.parse(compile_workflow(JSON.stringify({ entry: preset.entry, sources: preset.sources }))) as CompileOutput;
+    expect(output.diagnostics).toEqual([]);
+    const bundle = output.bundle!;
+    const scope: Scope = { workflowId: 'main.yaml', scopeGraphPath: [] };
+    const graph = layoutGraph(bundle, scope, output.analysis[0]);
+    expect(graph.nodes.map(node => node.id)).toEqual(['start', 'double', 'summarize', 'end']);
+    expect(graph.edges).toHaveLength(3);
+    expect(graph.nodes.every(node => Number.isFinite(node.position.x) && Number.isFinite(node.position.y))).toBe(true);
+    expect(layoutGraph(bundle, { workflowId: 'double.yaml', scopeGraphPath: [] }, null).nodes.map(node => node.id)).toEqual(['start', 'run', 'end']);
+    expect(locateFrame(bundle, frame('main.yaml/double[0]', 'iteration', 'double'))).toEqual({ ...scope, nodeId: 'double', iteration: '[0]' });
+    expect(locateFrame(bundle, frame('main.yaml/double[0]', 'function', 'run'))).toEqual({ workflowId: 'double.yaml', scopeGraphPath: [], nodeId: 'run' });
+    const frames = [frame('main.yaml', 'function', 'double', [frame('main.yaml/double[0]', 'iteration', 'double'), frame('main.yaml/double[1]', 'iteration', 'double')])];
+    const overlay = liveOverlay(bundle, frames, scope);
+    expect(overlay.active.has('double')).toBe(true);
+    expect(overlay.iterations.get('double')).toEqual(['[0]', '[1]']);
+  });
+
+  it('maps real fork/join routes and named end/fail/catch targets without handle collisions', () => {
+    const { result } = compile({ input: {}, output: {}, branches: { done: 'done' }, graph: {
+      nodes: { a: run, b: run, join: { ...run, catch: { default: '*' } } },
+      edges: ['start -> [a, b] -> join', 'join -> end.done', 'join.default -> fail'],
+    } });
+    const graph = layoutGraph(result.bundle, { workflowId: 'folder/main.yaml', scopeGraphPath: [] }, result.analysis[0]);
+    expect(graph.edges).toHaveLength(6);
+    expect(graph.nodes.map(node => node.id)).toContain('end.done');
+    expect(graph.nodes.map(node => node.id)).toContain('fail');
+    expect(graph.edges.find(edge => edge.target === 'fail')?.sourceHandle).toBe('default');
+    expect(handleId(null)).not.toBe(handleId('default'));
+  });
+
+  it('navigates inline scopes under entries containing slashes and overlays named branch routes', () => {
+    const { result } = compile({ input: {}, output: {}, graph: {
+      nodes: { block: { graph: { nodes: { work: { ...run, branches: { ok: 'done' } } }, edges: ['start -> work', 'work.ok -> end'] } } },
+      edges: ['start -> block', 'block -> end'],
+    } });
+    const scope = { workflowId: 'folder/main.yaml', scopeGraphPath: ['block'] };
+    expect(scopeBody(result.bundle, scope)?.kind).toBe('graph');
+    expect(locateFrame(result.bundle!, frame('folder/main.yaml/block', 'block', 'work.ok'))).toEqual({ ...scope, nodeId: 'work' });
+    const overlay = liveOverlay(result.bundle, [frame('folder/main.yaml/block', 'block', 'work.ok')], scope);
+    expect(overlay.cursors.has('work.ok')).toBe(true);
+    expect(locateFrame(result.bundle!, frame('another/main.yaml/block', 'block'))).toBeNull();
+  });
+
+  it('keeps exact enum tokens in the WASM analysis query and proves field projections/subtyping', () => {
+    const source = '{"input":{"n":{"type":"integer","enum":[99999999999999999999999999999999999]},"user":{"type":"object","properties":{"age":{"type":"integer"},"name":{"type":"string"}},"required":["age"]}},"output":{},"graph":{"nodes":{"work":{"run":{"executor":"builtin","content":"return Output()"}}},"edges":["start -> work","work -> end"]}}';
+    const output = new JsonText(compile_workflow(JSON.stringify({ entry: 'main', sources: { main: { format: 'json', text: source } } })));
+    expect(JSON.parse(output.raw(['diagnostics'])!)).toEqual([]);
+    const analysisRaw = output.raw(['analysis', 0])!;
+    const integer = get_available_vars_at_node(analysisRaw, 'work', '{"type":"integer"}');
+    expect(integer).toContain('99999999999999999999999999999999999');
+    expect(JSON.parse(integer).map((candidate: { path: { root: string; fields: string[] } }) => [candidate.path.root, ...candidate.path.fields].join('.'))).toEqual(['n', 'user.age']);
+    const number = JSON.parse(get_available_vars_at_node(analysisRaw, 'work', '{"type":"number"}'));
+    expect(number).toHaveLength(2);
+    const all = get_available_vars_at_node(analysisRaw, 'work');
+    expect(all).toContain('"type":["string","null"]');
+  });
+});
