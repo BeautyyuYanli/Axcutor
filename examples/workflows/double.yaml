@@ -1,0 +1,12 @@
+# A trusted Python Activity. The delay makes Running visible in Temporal UI.
+input:
+  value: {type: integer}
+  delay_seconds: {type: integer}
+output:
+  value: {type: integer}
+run:
+  executor: builtin
+  content: |
+    import asyncio
+    await asyncio.sleep(input.delay_seconds)
+    return Output(value=input.value * 2)

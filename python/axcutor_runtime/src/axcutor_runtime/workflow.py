@@ -47,6 +47,7 @@ class Frame:
     max_steps: int | None = None
     steps: int = 0
     cursor: str = "start"
+    child_execution: JsonObject | None = None
 
 
 def _path_type(symbols: JsonObject, path: JsonObject) -> JsonObject:
@@ -229,7 +230,11 @@ class AxcutorInterpreterWorkflow:
 
     @workflow.query
     def get_runtime_snapshot(self) -> JsonObject:
-        """Independent active-frame tree; envs remain exact JSON text."""
+        """Independent active-frame tree; envs remain exact JSON text.
+
+        Offloaded calls include a private child_execution link for host-side
+        live queries. Queries issue no Workflow commands or network operations.
+        """
         nodes: dict[int, JsonObject] = {
             frame.id: {
                 "id": frame.id,
@@ -242,6 +247,11 @@ class AxcutorInterpreterWorkflow:
                 "max_steps": frame.max_steps,
                 "env_json": dumps(frame.env),
                 "children": [],
+                **(
+                    {"child_execution": dict(frame.child_execution)}
+                    if frame.child_execution
+                    else {}
+                ),
             }
             for frame in self._frames.values()
         }
@@ -370,14 +380,14 @@ class AxcutorInterpreterWorkflow:
         node = graph["nodes"][node_id]
         address = f"{frame.address}/{node_id}"
         if node["modifiers"]["for_each"] is not None:
-            return await self._for_each(frame, node, env, address)
+            return await self._for_each(frame, node, env, address, node_id)
         self._tick(frame)
         return await self._state_machine(
             frame, node, _snapshot(node["body"], env), frame.symbols, {}, address
         )
 
     async def _for_each(
-        self, frame: Frame, node: JsonObject, env: JsonObject, address: str
+        self, frame: Frame, node: JsonObject, env: JsonObject, address: str, node_id: str
     ) -> JsonObject:
         each = node["modifiers"]["for_each"]
         source = loads(
@@ -421,9 +431,12 @@ class AxcutorInterpreterWorkflow:
                         f"{address}[{index}]",
                         frame.call_depth,
                         frame.id,
-                        {**snapshot, **injected},
+                        # Observation retains the complete parent view; actual
+                        # execution still receives only its declared snapshot.
+                        {**locked, **injected},
                         symbols,
                     )
+                    diagnostic.cursor = node_id
                     try:
                         return await self._state_machine(
                             diagnostic, node, snapshot, symbols, injected, diagnostic.address
@@ -542,8 +555,19 @@ class AxcutorInterpreterWorkflow:
             threshold is not None and workflow.info().get_current_history_length() >= threshold
         )
         if use_child:
+            # Keep the call's place in the frame tree while the SDK owns the
+            # child execution. The host follows this link without exposing IDs.
+            remote = self._frame(
+                "function",
+                address,
+                depth,
+                frame.id,
+                values,
+                root["input"],
+                root["body"]["graph"]["max_steps"] if root["body"]["kind"] == "graph" else None,
+            )
             try:
-                response = await workflow.execute_child_workflow(
+                child = await workflow.start_child_workflow(
                     AxcutorInterpreterWorkflow.run,
                     {
                         "bundle_json": self._bundle_json,
@@ -556,8 +580,15 @@ class AxcutorInterpreterWorkflow:
                     cancellation_type=workflow.ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED,
                     parent_close_policy=workflow.ParentClosePolicy.REQUEST_CANCEL,
                 )
+                remote.child_execution = {
+                    "workflow_id": child.id,
+                    "run_id": child.first_execution_run_id,
+                }
+                response = await child
             except exceptions.FailureError as error:
                 raise boundary_error(error) from error
+            finally:
+                del self._frames[remote.id]
             result = _contract(response, root)
         else:
             result = await self._exec_root(target, values, depth, frame.id, address)

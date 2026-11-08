@@ -1,4 +1,4 @@
-"""Small source documents, always compiled by Rust before real execution."""
+"""Shared source documents, always compiled by Rust before real execution."""
 
 INTEGER = {"type": "integer"}
 N = {"type": "number"}

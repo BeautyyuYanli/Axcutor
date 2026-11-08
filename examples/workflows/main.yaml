@@ -1,0 +1,37 @@
+# Iterate a child workflow concurrently, then summarize its ordered results.
+input:
+  items: {type: array, items: {type: integer}}
+  delay_seconds: {type: integer}
+output:
+  doubled: {type: array, items: {type: integer}}
+  total: {type: integer}
+
+graph:
+  nodes:
+    double:
+      # Source IDs include the extension and are relative to the source root.
+      use: workflow:double.yaml
+      with:
+        input:
+          value: item
+          delay_seconds: delay_seconds
+        output:
+          value: doubled
+      for_each:
+        source: items
+        item: item
+        concurrency: 2
+
+    summarize:
+      input: [doubled]
+      output:
+        total: {type: integer}
+      run:
+        executor: builtin
+        content: |
+          return Output(total=sum(input.doubled))
+
+  edges:
+    - start -> double
+    - double -> summarize
+    - summarize -> end

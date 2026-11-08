@@ -141,6 +141,9 @@ async def test_query_tree_is_independent_and_iteration_siblings_keep_depth(execu
         for iteration in root["children"]:
             block = iteration["children"][0]
             assert iteration["kind"] == "iteration" and iteration["call_depth"] == 1
+            variables = loads(iteration["env_json"])
+            assert variables["items"] == [1, 2, 3] and variables["secret"] == 99
+            assert "results" not in variables  # Unbound parent output stays absent.
             assert block["kind"] == "block" and block["call_depth"] == 2
             assert loads(block["env_json"])["private"] == 11
             assert "secret" not in loads(block["env_json"])

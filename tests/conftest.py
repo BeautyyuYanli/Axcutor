@@ -1,4 +1,4 @@
-"""All interpreter integration tests use the real extension, sandbox and Server."""
+"""Runtime and host integration tests share the real extension, sandbox and Server."""
 
 import asyncio
 from contextlib import asynccontextmanager

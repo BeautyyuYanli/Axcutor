@@ -5,15 +5,18 @@ requires-python = ">=3.11"
 description = "Axcutor development workspace"
 
 [tool.uv.workspace]
-members = ["crates/axcutor-py", "python/axcutor_runtime"]
+members = ["crates/axcutor-py", "python/axcutor_runtime", "python/axcutor_host"]
 
 [tool.uv.sources]
 axcutor-core = { workspace = true }
 axcutor-runtime = { workspace = true }
+axcutor-host = { workspace = true }
 
 [dependency-groups]
 dev = [
   "axcutor-runtime",
+  "axcutor-host",
+  "httpx>=0.28,<1",
   "pytest>=8",
   "pytest-asyncio>=1",
   "ruff>=0.14",
@@ -22,7 +25,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/runtime"]
+testpaths = ["tests/runtime", "tests/host"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
@@ -36,7 +39,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["python/axcutor_runtime/src"]
+files = ["python/axcutor_runtime/src", "python/axcutor_host/src"]
 check_untyped_defs = true
 disallow_untyped_defs = true
 warn_unused_ignores = true

@@ -1,0 +1,61 @@
+name: axcutor
+
+x-host: &host
+  image: axcutor-host:local
+  build: .
+  environment:
+    TEMPORAL_ADDRESS: temporal:7233
+    TEMPORAL_NAMESPACE: default
+    AXCUTOR_TASK_QUEUE: axcutor
+  depends_on:
+    temporal:
+      condition: service_healthy
+
+services:
+  temporal:
+    image: temporalio/temporal:1.6.1
+    command:
+      - server
+      - start-dev
+      - --ip=0.0.0.0
+      - --ui-ip=0.0.0.0
+      - --db-filename=/home/temporal/temporal.db
+    ports:
+      - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
+      - "${TEMPORAL_UI_PORT:-8233}:8233"
+    volumes:
+      # A fresh volume inherits this image directory's temporal user ownership.
+      - temporal-data:/home/temporal
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address=127.0.0.1:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    <<: *host
+    command: ["worker"]
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  api:
+    <<: *host
+    command: ["serve", "--host=0.0.0.0", "--port=8000"]
+    ports:
+      - "${AXCUTOR_HTTP_PORT:-8000}:8000"
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  cli:
+    <<: *host
+    profiles: ["tools"]
+    volumes:
+      - ./examples:/examples:ro
+    entrypoint: ["axcutor"]
+
+volumes:
+  temporal-data:

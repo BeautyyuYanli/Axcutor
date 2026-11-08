@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "axcutor-host"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "CLI and HTTP host for Axcutor executions"
+dependencies = [
+    "axcutor-runtime==0.1.0",
+    "axcutor-core==0.1.0",
+    "starlette>=0.49,<1",
+    "uvicorn>=0.38,<1",
+]
+
+[project.scripts]
+axcutor = "axcutor_host.cli:main"

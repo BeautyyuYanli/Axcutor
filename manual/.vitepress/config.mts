@@ -38,7 +38,8 @@ export default withMermaid(
           {
             text: '渐进式教程导读',
             items: [
-              { text: '教程总览', link: '/docs/guide/' }
+              { text: '教程总览', link: '/docs/guide/' },
+              { text: '使用 Docker 执行工作流', link: '/docs/guide/00-run-with-docker' }
             ]
           },
           {
@@ -119,7 +120,8 @@ export default withMermaid(
               { text: '文档层级结构速览', link: '/docs/reference/' },
               { text: '01. 节点与图字段速查表', link: '/docs/reference/01-node-and-graph-fields' },
               { text: '02. 6 种控制边语法速查表', link: '/docs/reference/02-edge-syntax-cheatsheet' },
-              { text: '03. TypeSpec 类型写法速查表', link: '/docs/reference/03-typespec-cheatsheet' }
+              { text: '03. TypeSpec 类型写法速查表', link: '/docs/reference/03-typespec-cheatsheet' },
+              { text: '04. Execution HTTP API', link: '/docs/reference/04-execution-http-api' }
             ]
           },
           {
