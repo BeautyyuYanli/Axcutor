@@ -2,6 +2,16 @@
 
 `axcutor serve` 启动 HTTP 宿主，三个接口统一返回 `Execution` 资源。源码闭包与初始输入在提交端同步编译、校验，通过后才创建执行。宿主不保存执行状态；重启宿主不会取消已提交的执行。
 
+## OpenAPI 契约
+
+`GET /openapi.json` 返回 OpenAPI 3.1 描述，包含 `submitExecution`、`getExecution`、`cancelExecution` 操作及执行、帧和错误模型。读取 Schema 不连接 Temporal。静态导出使用同一份定义：
+
+```sh
+uv run --locked python -m axcutor_host.http --output openapi.json
+```
+
+`input`、帧变量和输出为任意业务 JSON；生成的客户端类型不能替代无损 JSON 处理。[Web Playground](../guide/00-web-playground.md) 展示原始文本序列化与响应切片的集成方式。
+
 ## 提交执行
 
 ```http

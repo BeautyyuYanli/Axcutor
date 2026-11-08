@@ -31,3 +31,5 @@ POST /v1/executions/{execution_id}:cancel
 ```
 
 请求字段、执行状态与错误码见 [HTTP API 参考](manual/docs/reference/04-execution-http-api.md)。本机安装使用 `uv sync --locked`，随后分别运行 `uv run --locked axcutor worker` 和 `uv run --locked axcutor serve`。CLI 与 HTTP 均通过 `axcutor-host` 包中的同一执行服务完成编译、输入预检与状态查询；执行历史由 Temporal 保存。
+
+浏览器工作台位于 `playground/`，提供 WASM 实时编译、CFG 画布、静态变量探针、HTTP 执行与活跃帧联动。安装依赖、生成 WASM/客户端及启动方式见 [Web Playground](manual/docs/guide/00-web-playground.md)。宿主通过 `GET /openapi.json` 提供生成客户端所用的 OpenAPI 3.1 契约。

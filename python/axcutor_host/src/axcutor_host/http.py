@@ -6,6 +6,7 @@ The injected service owns execution behavior; the app owns no execution state.
 """
 
 import logging
+from pathlib import Path
 from urllib.parse import quote
 
 from axcutor_runtime.bundle import CompilationError
@@ -46,8 +47,253 @@ def _error(code: str, message: str, status: int, details: object = None) -> Resp
     return _json({"error": {"code": code, "message": message, "details": details}}, status)
 
 
+def openapi_schema() -> dict[str, object]:
+    """Describe the same lossless JSON wire contract used by the ASGI routes.
+
+    Arbitrary business JSON is deliberately untyped here. Clients must retain
+    raw input, frame variables and output instead of converting through floats.
+    This function is also the source for the generated Playground client.
+    """
+
+    def ref(name: str) -> dict[str, str]:
+        return {"$ref": f"#/components/schemas/{name}"}
+
+    schemas: dict[str, object] = {
+        "SourceDocument": {
+            "type": "object",
+            "required": ["format", "text"],
+            "additionalProperties": False,
+            "properties": {
+                "format": {"type": "string", "enum": ["yaml", "json"]},
+                "text": {"type": "string"},
+            },
+        },
+        "SubmitExecutionRequest": {
+            "type": "object",
+            "required": ["entry", "sources"],
+            "additionalProperties": False,
+            "properties": {
+                "entry": {"type": "string", "minLength": 1},
+                "sources": {"type": "object", "additionalProperties": ref("SourceDocument")},
+                "input": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "description": "Lossless JSON object; preserve number tokens and key order.",
+                },
+                "execution_id": {"type": "string", "minLength": 1},
+            },
+        },
+        "Frame": {
+            "type": "object",
+            "required": [
+                "kind",
+                "address",
+                "cursor",
+                "call_depth",
+                "steps",
+                "max_steps",
+                "variables",
+                "children",
+            ],
+            "additionalProperties": False,
+            "properties": {
+                "kind": {"type": "string", "enum": ["function", "block", "iteration"]},
+                "address": {"type": "string"},
+                "cursor": {"type": "string"},
+                "call_depth": {"type": "integer", "minimum": 1},
+                "steps": {"type": "integer", "minimum": 0},
+                "max_steps": {"type": ["integer", "null"]},
+                "variables": {"type": "object", "additionalProperties": True},
+                "children": {"type": "array", "items": ref("Frame")},
+            },
+        },
+        "ExecutionResult": {
+            "type": "object",
+            "required": ["branch", "output"],
+            "additionalProperties": False,
+            "properties": {
+                "branch": {"type": ["string", "null"]},
+                "output": {"type": "object", "additionalProperties": True},
+            },
+        },
+        "ExecutionError": {
+            "type": "object",
+            "required": ["category", "type", "message"],
+            "additionalProperties": False,
+            "properties": {
+                "category": {"type": "string", "enum": ["recoverable", "panic"]},
+                "type": {"type": "string"},
+                "message": {"type": "string"},
+            },
+        },
+        "Execution": {
+            "type": "object",
+            "required": [
+                "execution_id",
+                "status",
+                "started_at",
+                "finished_at",
+                "frames",
+                "result",
+                "error",
+            ],
+            "additionalProperties": False,
+            "properties": {
+                "execution_id": {"type": "string"},
+                "status": {
+                    "type": "string",
+                    "enum": ["running", "completed", "failed", "cancelled"],
+                },
+                "started_at": {"type": "string", "format": "date-time"},
+                "finished_at": {"type": ["string", "null"], "format": "date-time"},
+                "frames": {"type": "array", "items": ref("Frame")},
+                "result": {"anyOf": [ref("ExecutionResult"), {"type": "null"}]},
+                "error": {"anyOf": [ref("ExecutionError"), {"type": "null"}]},
+            },
+        },
+        "Diagnostic": {
+            "type": "object",
+            "required": [
+                "workflow_id",
+                "scope_graph_path",
+                "target_kind",
+                "node_id",
+                "branch_id",
+                "edge_index",
+                "param_path",
+                "code",
+                "message",
+                "source_location",
+            ],
+            "properties": {
+                "workflow_id": {"type": "string"},
+                "scope_graph_path": {"type": "array", "items": {"type": "string"}},
+                "target_kind": {"type": "string"},
+                "node_id": {"type": ["string", "null"]},
+                "branch_id": {"type": ["string", "null"]},
+                "edge_index": {"type": ["integer", "null"]},
+                "param_path": {"type": "string"},
+                "code": {"type": "string"},
+                "message": {"type": "string"},
+                "source_location": {
+                    "type": ["object", "null"],
+                    "required": ["line", "column"],
+                    "properties": {"line": {"type": "integer"}, "column": {"type": "integer"}},
+                },
+            },
+        },
+        "ErrorResponse": {
+            "type": "object",
+            "required": ["error"],
+            "additionalProperties": False,
+            "properties": {
+                "error": {
+                    "type": "object",
+                    "required": ["code", "message", "details"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "details": {
+                            "description": "Optional details; compilation_failed has diagnostics.",
+                            "anyOf": [
+                                {"type": "null"},
+                                {
+                                    "type": "object",
+                                    "additionalProperties": True,
+                                    "properties": {
+                                        "diagnostics": {
+                                            "type": "array",
+                                            "items": ref("Diagnostic"),
+                                        }
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    def response(name: str, description: str) -> dict[str, object]:
+        return {
+            "description": description,
+            "content": {"application/json": {"schema": ref(name)}},
+        }
+
+    errors: dict[str, object] = {
+        str(status): response("ErrorResponse", description)
+        for status, description in {
+            400: "Invalid JSON or request",
+            404: "Execution not found",
+            405: "Method not allowed",
+            409: "Execution ID already exists",
+            422: "Compilation or input validation failed",
+            503: "Runtime unavailable",
+            500: "Internal server error",
+        }.items()
+    }
+    parameter = {
+        "name": "execution_id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string", "minLength": 1},
+    }
+
+    def responses(success: dict[str, object]) -> dict[str, object]:
+        return {**errors, **success}
+
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": "Axcutor Execution API", "version": "0.1.0"},
+        "paths": {
+            "/v1/executions": {
+                "post": {
+                    "operationId": "submitExecution",
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": ref("SubmitExecutionRequest")}},
+                    },
+                    "responses": responses(
+                        {
+                            "202": {
+                                **response("Execution", "Submitted; may already be terminal"),
+                                "headers": {"Location": {"schema": {"type": "string"}}},
+                            },
+                        }
+                    ),
+                }
+            },
+            "/v1/executions/{execution_id}": {
+                "get": {
+                    "operationId": "getExecution",
+                    "parameters": [parameter],
+                    "responses": responses({"200": response("Execution", "Current execution")}),
+                }
+            },
+            "/v1/executions/{execution_id}:cancel": {
+                "post": {
+                    "operationId": "cancelExecution",
+                    "parameters": [parameter],
+                    "responses": responses(
+                        {
+                            "200": response("Execution", "Terminal execution"),
+                            "202": response("Execution", "Cooperative cleanup is still running"),
+                        }
+                    ),
+                }
+            },
+        },
+        "components": {"schemas": schemas},
+    }
+
+
 def create_app(service: ExecutionService) -> Starlette:
-    """Build the three execution routes around one reusable service instance."""
+    """Build execution routes and their stateless schema around one service."""
+
+    async def schema(request: Request) -> Response:
+        return _json(openapi_schema())
 
     async def submit(request: Request) -> Response:
         try:
@@ -99,6 +345,7 @@ def create_app(service: ExecutionService) -> Starlette:
 
     app = Starlette(
         routes=[
+            Route("/openapi.json", schema, methods=["GET"]),
             Route("/v1/executions", submit, methods=["POST"]),
             Route("/v1/executions/{execution_id:execution_id}:cancel", cancel, methods=["POST"]),
             Route("/v1/executions/{execution_id:execution_id}", get, methods=["GET"]),
@@ -112,3 +359,12 @@ def create_app(service: ExecutionService) -> Starlette:
     )
     app.router.redirect_slashes = False
     return app
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Export the execution API OpenAPI 3.1 schema")
+    parser.add_argument("--output", type=Path, required=True)
+    arguments = parser.parse_args()
+    arguments.output.write_text(dumps(openapi_schema()) + "\n", encoding="utf-8")
