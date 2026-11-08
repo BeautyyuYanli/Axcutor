@@ -13,7 +13,7 @@ import type { JsonText } from './utils/losslessJson';
 import { locateFrame, sameScope } from './utils/graphLayout';
 
 const initial = defaultPreset();
-const sources = ref(initial.sources);
+const packages = ref(initial.packages);
 const entry = ref(initial.entry);
 const inputRawText = ref(initial.inputRawText);
 const selectedFile = ref(entry.value);
@@ -22,7 +22,7 @@ const selectedNode = ref<string | null>(null);
 const selectedFrameKey = ref<string | null>(null);
 const canvasSource = ref<'editor' | 'execution'>('editor');
 const submitted = shallowRef<{ output: CompileOutput; raw: JsonText } | null>(null);
-const { ready, error: compilerError, compileOutput, rawOutput, availableVariables } = useCompiler(entry, sources);
+const { ready, error: compilerError, compileOutput, rawOutput, availableVariables } = useCompiler(entry, packages);
 const { execution, slices, error: httpError, submitting, cancelRequested, run, cancel } = useExecution();
 const current = computed(() => canvasSource.value === 'execution' ? submitted.value?.output ?? null : compileOutput.value);
 const currentRaw = computed(() => canvasSource.value === 'execution' ? submitted.value?.raw ?? null : rawOutput.value);
@@ -43,26 +43,26 @@ function selectFile(path: string) {
 }
 function reset() {
   const preset = defaultPreset();
-  sources.value = preset.sources;
+  packages.value = preset.packages;
   entry.value = preset.entry;
   inputRawText.value = preset.inputRawText;
   selectFile(entry.value);
 }
 function addFile(path: string, format: SourceFormat) {
-  sources.value = { ...sources.value, [path]: { format, text: '' } };
+  packages.value = { ...packages.value, [path]: { format, text: '' } };
   if (!entry.value) entry.value = path;
   selectFile(path);
 }
 function removeFile(path: string) {
-  const remaining = { ...sources.value };
+  const remaining = { ...packages.value };
   delete remaining[path];
-  sources.value = remaining;
+  packages.value = remaining;
   const first = Object.keys(remaining)[0] ?? '';
   if (entry.value === path) entry.value = first;
   selectFile(first);
 }
-function editText(path: string, text: string) { sources.value[path].text = text; canvasSource.value = 'editor'; }
-function editFormat(path: string, format: SourceFormat) { sources.value[path].format = format; canvasSource.value = 'editor'; }
+function editText(path: string, text: string) { packages.value[path].text = text; canvasSource.value = 'editor'; }
+function editFormat(path: string, format: SourceFormat) { packages.value[path].format = format; canvasSource.value = 'editor'; }
 function locateDiagnostic(diagnostic: Diagnostic) {
   selectedFile.value = diagnostic.workflow_id;
   canvasSource.value = 'editor';
@@ -99,7 +99,7 @@ async function submit() {
   canvasSource.value = 'execution';
   navigate({ workflowId: entry.value, scopeGraphPath: [] });
   selectedFrameKey.value = null;
-  await run(entry.value, sources.value, inputRawText.value);
+  await run(entry.value, packages.value, inputRawText.value);
 }
 function changeCanvasSource() {
   const id = canvasSource.value === 'execution' ? submitted.value?.output.bundle?.entry : entry.value;
@@ -120,7 +120,7 @@ watch(entry, value => { selectFile(value); });
       </label>
     </header>
     <div class="workbench">
-      <SourceWorkspace :sources="sources" :entry="entry" :selected-file="selectedFile" :input-raw-text="inputRawText" :diagnostics="diagnostics" :compiler-raw="rawOutput" @file="selectFile" @entry="entry = $event" @input="inputRawText = $event" @text="editText" @format="editFormat" @add="addFile" @remove="removeFile" @reset="reset" />
+      <SourceWorkspace :packages="packages" :entry="entry" :selected-file="selectedFile" :input-raw-text="inputRawText" :diagnostics="diagnostics" :compiler-raw="rawOutput" @file="selectFile" @entry="entry = $event" @input="inputRawText = $event" @text="editText" @format="editFormat" @add="addFile" @remove="removeFile" @reset="reset" />
       <CfgCanvas :bundle="bundle" :scope="scope" :analysis="analysis" :analysis-raw="analysisRaw" :compiler-raw="currentRaw" :selected-node="selectedNode" :frames="frames" :query-variables="availableVariables" @select="selectNode" @navigate="navigate" />
       <ExecutionInspector :execution="execution" :slices="slices" :selected-key="selectedFrameKey" @select="selectFrame" />
     </div>

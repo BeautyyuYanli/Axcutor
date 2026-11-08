@@ -43,13 +43,16 @@ pub fn identifier(s: &str) -> bool {
 }
 
 pub fn control_id(s: &str) -> bool {
+    package_segment(s) && !matches!(s, "start" | "end" | "fail")
+}
+
+/// Package names share Python's ASCII identifiers and hard keyword exclusions,
+/// but may use graph endpoint names (start, end, fail).
+pub fn package_segment(s: &str) -> bool {
     identifier(s)
         && !matches!(
             s,
-            "start"
-                | "end"
-                | "fail"
-                | "False"
+            "False"
                 | "None"
                 | "True"
                 | "and"
@@ -87,11 +90,46 @@ pub fn control_id(s: &str) -> bool {
         )
 }
 
-/// Builtin is closed; extensions retain opaque, ordered JSON configuration.
+/// Absolute logical package names have public roots and no file suffixes.
+/// __main__ is reserved for the separate anonymous document, never a package.
+pub fn package_path(s: &str) -> bool {
+    !s.starts_with('_')
+        && s.split('.')
+            .all(|p| package_segment(p) && p != "__axcutor__")
+        && !matches!(s.rsplit('.').next(), Some("yaml" | "yml" | "json"))
+}
+
+pub fn public_package_path(s: &str) -> bool {
+    package_path(s) && s.split('.').all(|p| !p.starts_with('_'))
+}
+
+pub fn local_module_spec(s: &str) -> bool {
+    s == "."
+        || s.strip_prefix('.')
+            .is_some_and(|p| p.split('.').all(package_segment))
+}
+
+/// All private segments independently restrict access to their parent subtree.
+pub fn workflow_visible(caller: &str, target: &str) -> bool {
+    target.match_indices('.').all(|(index, _)| {
+        let segment = target[index + 1..].split('.').next().unwrap();
+        let owner = &target[..index];
+        !segment.starts_with('_')
+            || caller == owner
+            || caller
+                .strip_prefix(owner)
+                .is_some_and(|rest| rest.starts_with('.'))
+    })
+}
+
+/// Builtin and module are closed; extensions retain opaque, ordered JSON configuration.
 /// The executor tag is an Identifier, not a restricted graph symbol.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunSpec {
     Builtin {
+        content: String,
+    },
+    Module {
         content: String,
     },
     Extension {
@@ -108,6 +146,10 @@ impl Serialize for RunSpec {
         match self {
             Self::Builtin { content } => {
                 map.serialize_entry("executor", "builtin")?;
+                map.serialize_entry("content", content)?;
+            }
+            Self::Module { content } => {
+                map.serialize_entry("executor", "module")?;
                 map.serialize_entry("content", content)?;
             }
             Self::Extension { executor, config } => {
@@ -233,6 +275,8 @@ pub enum Builtin {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NodeBody {
     Run {
+        /// Owning package, including for inline graphs and iterations.
+        workflow_id: String,
         input: Vec<String>,
         /// Restricted scope in input declaration order, including explicit iteration captures.
         input_schema: Symbols,
@@ -357,6 +401,7 @@ pub struct NormalizedGraph {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RootBody {
     Run {
+        workflow_id: String,
         run: RunSpec,
         input_schema: Symbols,
         timeout_ms: Option<Number>,

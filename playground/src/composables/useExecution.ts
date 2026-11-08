@@ -100,10 +100,10 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
     } finally { polling = false; schedule(); }
   }
 
-  async function run(entry: string, sources: Record<string, SourceDocument>, inputRawText: string) {
+  async function run(entry: string, packages: Record<string, SourceDocument>, inputRawText: string) {
     if (disposed || submitting.value || execution.value?.status === 'running') return false;
     // Snapshot before the first await: editors can continue changing independently.
-    const body = { entry, sources: Object.fromEntries(Object.entries(sources).map(([path, source]) => [
+    const body = { entry, packages: Object.fromEntries(Object.entries(packages).map(([path, source]) => [
       path, { format: source.format, text: source.text },
     ])) };
     let serialized: string;

@@ -21,7 +21,7 @@ $$\rho : \text{dom}(\Sigma_G) \to \text{JSONValue} \cup \{\text{Unbound}\}$$
 ## 一、 三类栈帧的构造与销毁生命周期
 
 ### 1. 函数调用栈帧（`FunctionFrame`）
-* **创建时机**：根工作流启动，或图内执行 `CallNode`（`use: workflow:<path>`）。
+* **创建时机**：根工作流启动，或图内执行 `CallNode`（`use: workflow:<PackagePath>`）。
 * **初始内存绑定 $\rho_0$**：
   * 仅由调用方传入的 `input` 参数深拷贝（或不可变值引用）与目标图自身的 `graph.variables` 中声明了 `default` 键的变量子集 $\text{InitVars}(G)$ 的初始值深拷贝 $\rho_{\text{graph\_defaults}}$ 构成（在 `graph.variables` 中未声明 `default` 键的局部变量在栈帧创建时保持未绑定 `Unbound`）：
     $$\rho_0 = \rho_{\text{caller\_in}} \uplus \rho_{\text{graph\_defaults}}$$

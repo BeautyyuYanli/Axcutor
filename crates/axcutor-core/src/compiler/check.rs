@@ -315,6 +315,14 @@ fn graph(
                 bindings,
             } => {
                 check_references(bindings, &local, &at, ds);
+                if !workflow_visible(&a.workflow, workflow_id) {
+                    at.at("use").error(
+                        ds,
+                        "node",
+                        "visibility.private_workflow",
+                        format!("workflow {workflow_id} is private to its parent package"),
+                    );
+                }
                 if let Some(target) = signatures.get(workflow_id) {
                     for p in target.input.keys() {
                         if !bindings.input.contains_key(p) {

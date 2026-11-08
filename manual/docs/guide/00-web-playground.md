@@ -44,13 +44,15 @@ AXCUTOR_API_URL=http://127.0.0.1:9000 npm --prefix playground run dev
 
 ## 编辑、检查与执行
 
-1. 在 Sources 中选择文件，编辑原始 YAML/JSON，或添加、删除文件。Entry 选择编译入口；未被入口闭包引用的文件不参与编译。默认预设直接读取 `examples/workflows/main.yaml`、`double.yaml` 和 `examples/inputs/demo.json`。
+1. 在 Packages 中选择点分包名，编辑原始 YAML/JSON，或添加、删除包。Entry 选择公开包或 `__main__`；未被入口闭包引用的文档不参与编译。默认预设读取 `examples/workflows/demo/main/__axcutor__.yaml`、`demo/double/__axcutor__.yaml` 和 `examples/inputs/demo.json`，包名分别为 `demo.main` 与 `demo.double`。
 2. 编译自动在浏览器内执行。诊断显示文件、作用域、节点与参数位置；点击诊断可切换到对应源码和节点。Input 上方可展开入口的字段契约。
 3. 点击 CFG 节点查看 `definite_in`、注入项、派生端口及可用变量投影；Expected type 选择器演示 WASM 的子类型过滤。双击 workflow/graph 节点或点击 Open 按钮进入目标工作流/内联图，面包屑返回上层作用域。
 4. 点击 Run 提交。运行中每隔 300ms 查询一次；右侧展示活跃帧的地址、游标、调用深度、步数与变量。点击帧可跳转到对应 CFG；在执行快照中点击节点也会选中对应活跃帧。并发节点显示在途迭代索引，活跃节点和连边暴露语义状态属性。
 5. Cancel 发起协同取消。服务端返回 `202 / running` 表示仍在清理，页面继续轮询并禁用重复取消；进入 `completed`、`failed` 或 `cancelled` 时停止轮询。
 
 Canvas source 的 Submitted snapshot 始终对应提交时的编译结果。运行中编辑源码会切换到 Editor compilation；点击帧可返回执行快照，避免当前源码与在途执行的拓扑混用。离开页面只停止观察，不会取消已提交的执行。
+
+编译与 HTTP 提交均使用 `entry + packages`。页面可编辑 `module` 声明，但对应 Python 实现与生成契约必须由宿主预先部署到 Worker。匿名入口 `__main__` 中的 `module` 会在编译期被拒绝。
 
 ## 无损 JSON
 

@@ -1,8 +1,15 @@
-# 02. Use：跨文件调用子工作流
+# 02. Use：跨包调用子工作流
 
-在 Axcutor 中，任何独立的工作流文件均可作为子节点被其他工作流调用。
+在 Axcutor 中，具名工作流包以绝对点分包名供其他工作流调用。`billing.charge` 对应显式挂载根 `billing` 下的 `charge/__axcutor__.yaml`；同级 `__init__.py` 建立 Python 包上下文。
 
-当图内节点声明 `use: workflow:<path>`（或调用内建算子 `use: builtin:<op>`）时，运行时为其创建隔离的函数调用栈帧（`Function Frame`）。被调用方拥有独立的 `input`、`output` 与 `branches` 命名空间，无法隐式读取调用方图中的变量，仅通过 `with` 进行按值传参与返回值映射。编译器基于各工作流顶层声明的静态签名（`input`、`output`、`branches`）独立完成类型与定值校验（支持跨文件直接或间接递归调用，运行期受调用栈深度上限保护）。
+```yaml
+# 引用已挂载的公开包；不包含文件扩展名或相对路径。
+use: workflow:billing.charge
+```
+
+包根必须公开，`_` 开头的私有段仅供其父包及子树调用。例如 `billing.checkout` 可调用 `billing._risk`，匿名 `__main__` 不可调用；每层私有段分别检查。入口必须为公开包或 `__main__`，后者不能被 `use` 引用。布局、挂载和 Python 实现见 [包与模块](./04-packages-and-modules.md)。
+
+当图内节点声明 `use: workflow:<PackagePath>`（或调用内建算子 `use: builtin:<op>`）时，运行时为其创建隔离的函数调用栈帧（`Function Frame`）。被调用方拥有独立的 `input`、`output` 与 `branches` 命名空间，无法隐式读取调用方图中的变量，仅通过 `with` 进行按值传参与返回值映射。编译器基于各工作流顶层声明的静态签名（`input`、`output`、`branches`）独立完成类型与定值校验（支持跨包直接或间接递归调用，运行期受调用栈深度上限保护）。
 
 ---
 
@@ -12,7 +19,7 @@
 
 ### 1. 显式入参绑定、按需输出接收与子类型兼容
 
-对于 `use: workflow:<path>` 节点，参数绑定遵循显式边界与单向子类型兼容原则：
+对于 `use: workflow:<PackagePath>` 节点，参数绑定遵循显式边界与单向子类型兼容原则：
 
 * **`with.input` 必填参数显式绑定与入参子类型兼容**：被调用子工作流顶层声明的每一个 `input` 参数，均必须在 `with.input` 中显式写出（若调用方变量与参数同名，显式写作 `<param>: <param>`；仅当被调用工作流 `input: {}` 为空时可省略 `with.input`）。传入实参的类型只需是目标输入参数声明类型的**子类型**——例如可将非空 `string` 传给子工作流的可选参数 `[string, "null"]`、将 `integer` 传给 `number` 参数、将带 `enum` 的分类字符串传给普通 `string` 参数，或将 `Array<integer>` 协变传给 `Array<number>`（详见 [TypeSpec 速查表：静态子类型与容器协变](../../reference/03-typespec-cheatsheet.md)）。
 * **`with.output` 按需映射与出参子类型兼容**：在 `with.output` 中仅需列出调用方需要接收的输出字段 `<target_field>: <local_var>`（其中 `<local_var>` 为合法顶层标识符，禁止设为 `null`）。子工作流输出字段的类型只需是当前图中目标接收变量声明类型的**子类型**，即允许父图使用更宽泛的变量类型（如可空类型、父枚举或 `number`）接收子工作流产出的精确类型。未在 `with.output` 中列出的其余子工作流输出字段默认自动忽略，既不注入调用方符号表，也不会在被调用工作流升级新增输出字段时污染或冲突调用方命名空间。
@@ -28,7 +35,7 @@ graph:
   nodes:
     # 1. 显式传入全部目标 input 参数，并接收 clean_text 与 word_count 两个输出字段：
     normalize_full:
-      use: workflow:text/normalize_document
+      use: workflow:text.normalize_document
       with:
         input:
           raw_text: raw_text
@@ -41,7 +48,7 @@ graph:
     # - 显式传入 raw_text 与 max_length 变量
     # - 仅绑定需要的 clean_text -> final_body；未列出的 word_count 自动忽略，无需额外编写丢弃语法
     normalize_only_text:
-      use: workflow:text/normalize_document
+      use: workflow:text.normalize_document
       with:
         input:
           raw_text: draft_body
@@ -65,7 +72,7 @@ graph:
 
   nodes:
     normalize_submission:
-      use: workflow:text/normalize_document
+      use: workflow:text.normalize_document
       with:
         input:
           author_id: current_user_id          # 绑定当前图顶层变量 current_user_id
@@ -85,7 +92,7 @@ graph:
 ```yaml
 nodes:
   normalize_with_literals:
-    use: workflow:text/normalize_document
+    use: workflow:text.normalize_document
     with:
       input:
         raw_text: user_submission.body
@@ -97,7 +104,7 @@ nodes:
         clean_text: normalized_body
 ```
 
-> **提示**：`use: workflow:<path>` 节点同样支持挂载 `for_each` 进行批量调用，详见 [01. For-Each：静态集合并发映射](../03-concurrency/01-for-each.md)。
+> **提示**：`use: workflow:<PackagePath>` 节点同样支持挂载 `for_each` 进行批量调用，详见 [01. For-Each：静态集合并发映射](../03-concurrency/01-for-each.md)。
 
 ---
 
@@ -106,7 +113,7 @@ nodes:
 若被调用的子工作流在顶层声明了 `branches`，调用该子工作流的 `use` 节点会在当前图中自动暴露相同的分支集合，并继承各分支关联的 `output` 子集契约。
 
 ```yaml
-# 被调用文件：workflow:security/audit_content
+# 被调用文件：workflow:security.audit_content
 input:
   text: { type: string }
 output:
@@ -138,7 +145,7 @@ graph:
 
   nodes:
     audit_step:
-      use: workflow:security/audit_content
+      use: workflow:security.audit_content
       with:
         input:
           text: normalized_body
@@ -156,7 +163,7 @@ graph:
 
 ---
 
-## 三、 完整示例：跨文件调用与分支路由
+## 三、 完整示例：跨包调用与分支路由
 
 以下完整工作流演示如何组合多个 `use` 节点，串联文档标准化子工作流与合规审计子工作流，并根据子工作流返回的分支走向不同出口：
 
@@ -193,7 +200,7 @@ graph:
     # 步骤 1：调用外部文本标准化子工作流
     # 混合使用结构体字段路径、顶层变量、数值字面量与 { value } 字符串字面量传参；仅绑定 clean_text（未列出的 word_count 自动忽略）
     normalize_doc:
-      use: workflow:text/normalize_document
+      use: workflow:text.normalize_document
       with:
         input:
           author_id: current_user_id
@@ -205,7 +212,7 @@ graph:
 
     # 步骤 2：调用带 branches (approved / rejected) 的外部合规审计子工作流
     audit_doc:
-      use: workflow:security/audit_content
+      use: workflow:security.audit_content
       with:
         input:
           text: normalized_body

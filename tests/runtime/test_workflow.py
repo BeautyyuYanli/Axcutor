@@ -68,7 +68,7 @@ async def test_graph_call_projection_defaults_and_static_numeric_types(execution
     )
     async with execution({}) as run:
         result = await run.execute(
-            document, {"n": 2}, sources={"child": {"format": "json", "text": dumps(callee)}}
+            document, {"n": 2}, packages={"child": {"format": "json", "text": dumps(callee)}}
         )
         assert dumps(result) == '{"branch":null,"output":{"answer":3.0}}'
 

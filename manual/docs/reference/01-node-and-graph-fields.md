@@ -65,21 +65,21 @@ graph:
 
 | 字段 | `run` 动作节点 | 内联 `graph` 子图节点 | `use` 调用节点 |
 | :--- | :--- | :--- | :--- |
-| **执行体鉴别字段** | `run: { executor: ..., ... }`（**必填**） | `graph`（**必填**） | `use: workflow:<path> \| builtin:<op>`（**必填**） |
+| **执行体鉴别字段** | `run: { executor: ..., ... }`（**必填**） | `graph`（**必填**） | `use: workflow:<PackagePath> \| builtin:<op>`（**必填**） |
 | `input` | 可选，`[<var_name>, ...]`（默认 `[]`） | 可选，`[<var_name>, ...]`（默认 `[]`） | *不支持*（通过 `with.input` 绑定） |
 | `output` | 可选，`{ <var>: <TypeSpec> }`（默认 `{}`） | 可选，`{ <var>: <TypeSpec> }`（默认 `{}`） | *不支持*（通过 `with.output` 映射） |
 | `with` | *不支持* | *不支持* | 可选，`{ input?: {...}, output?: {...} }` |
 | `branches` | 可选 | 可选 | *自动继承自被调用目标* |
-| `for_each` | 可选 | 可选 | 可选（仅限 `workflow:<path>`，`builtin:*` 禁用） |
-| `timeout_ms` | 可选 | 可选 | 可选（仅限 `workflow:<path>`，`builtin:*` 禁用） |
-| `retry` | 可选 | 可选 | 可选（仅限 `workflow:<path>`，`builtin:*` 禁用） |
-| `catch` | 可选 | 可选 | 可选（仅限 `workflow:<path>`，`builtin:*` 禁用） |
+| `for_each` | 可选 | 可选 | 可选（仅限 `workflow:<PackagePath>`，`builtin:*` 禁用） |
+| `timeout_ms` | 可选 | 可选 | 可选（仅限 `workflow:<PackagePath>`，`builtin:*` 禁用） |
+| `retry` | 可选 | 可选 | 可选（仅限 `workflow:<PackagePath>`，`builtin:*` 禁用） |
+| `catch` | 可选 | 可选 | 可选（仅限 `workflow:<PackagePath>`，`builtin:*` 禁用） |
 
 - **挂载 `for_each` 时的输入与输出特殊规则**：
   - **`input` 注入项差异**：`run` 节点须在 `input` 中显式列出其读取的 `item` / `key` / `index` 注入项及外层变量；内联 `graph` 子图节点已将 `item` / `key` / `index` 自动注入子图作用域，其 `input` 仅用于捕获外层变量，**禁止**重复列出 `for_each` 注入项。
   - **`output` / `with.output` 非空与集合类型提升**：挂载 `for_each` 时，`run` 与内联 `graph` 节点的 `output`（声明单次迭代元素类型 `U`）以及 `use` 节点的 `with.output` 均变为**必填且非空**，并在外层符号表中一阶同构提升为集合类型（`Array<U>` 或 `OrderedMap<string, U>`）。
-- **`use: workflow:<path>` 与 `use: builtin:<op>` 的修饰符差异**：
-  - `for_each`、`timeout_ms`、`retry`、`catch` 四类修饰符仅支持 `use: workflow:<path>` 子工作流调用，对所有 `use: builtin:<op>` 内建算子禁用。
+- **`use: workflow:<PackagePath>` 与 `use: builtin:<op>` 的修饰符差异**：
+  - `for_each`、`timeout_ms`、`retry`、`catch` 四类修饰符仅支持 `use: workflow:<PackagePath>` 子工作流调用，对所有 `use: builtin:<op>` 内建算子禁用。
 
 ---
 
@@ -87,12 +87,13 @@ graph:
 
 ### 1. `run`（结构化业务执行体配置）
 
-`run` 字段必须是一个以 `executor` 为鉴别键的映射对象（不支持裸字符串简写）。标准内置受信任 Python 执行器（`executor: builtin`）字段如下：
+`run` 字段必须是一个以 `executor` 为鉴别键的映射对象。标准 Python 执行器 `builtin` 与 `module` 均为闭合对象，只含 `executor` 和 `content`：
 
 | 字段 | 必填/可选 | 格式 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `executor` | **必填** | `Identifier` | 执行器类型鉴别键：`builtin` 使用下述闭合配置，其他合法标识符对应宿主注册的扩展执行器，其特定配置字段保留并交给对应后端。此处使用通用标识符，不排除 Python 关键字。 |
+| `executor` | **必填** | `Identifier` | `builtin`、`module` 为标准执行器；其余标识符对应宿主注册的扩展执行器，配置字段保留并交给后端。此处不排除 Python 关键字。 |
 | `content` | **必填**（当 `executor: builtin` 时） | 非空多行 Python 代码字符串 | 作为 `async def execute(input: Input) -> ReturnType:` 的函数体执行。通过只读冻结模型 `input.<var>` 读取输入快照（其中 `type: number` 自动映射为原生 `float`）；无分支节点返回 `Output(...)`，有分支节点返回 `Branch.<branch_id>(...)`。 |
+| `content` | **必填**（当 `executor: module` 时） | `.` 或 `.<LocalPath>` | 当前工作流包内预置 Python 模块，如 `.gateway`。禁止绝对模块名和上级跳转；匿名 `__main__` 禁用。 |
 
 结构体输出必须显式构造生成的 `Output_<path>` 模型。非必填属性可以省略；只有属性类型可空时才允许显式传入 `None`：
 
@@ -101,7 +102,7 @@ graph:
 return Output(user=Output_user(id=1, note=None))  # 输出省略 nickname，保留 note: null。
 ```
 
-Python Worker 默认提供 `builtin`；`options.task_queues` 按执行器名路由。需要导出独立 Python 源码进行类型检查时，可调用 `axcutor_runtime.builtin.synthesize_module(input_schema, output_schema, branches_contract, content)`，其结果包含 `source` 与 `line_offset`。生成源码使用 Python 3.11 支持的 `TypeAlias` 表达返回联合类型；数值枚举由严格数值注解与枚举校验器共同约束，因为 Python `Literal` 不支持小数字面量。超过原生有限 `float` 范围的 `number` 输入在模型边界产生 `contract` 异常。
+Python Worker 默认提供 `builtin` 与 `module`；`options.task_queues` 按执行器名路由。`module` 的同级契约模板通过 `axcutor contracts` 生成，并在运行期校验 SHA，见 [包与模块](../guide/01-foundations/04-packages-and-modules.md)。需要导出带函数体的独立 Python 源码进行类型检查时，可调用 `axcutor_runtime.builtin.synthesize_module(input_schema, output_schema, branches_contract, content)`，其结果包含 `source` 与 `line_offset`。生成源码使用 Python 3.11 支持的 `TypeAlias`；数值枚举由严格数值注解与枚举校验器共同约束。超过有限 `float` 范围的 `number` 输入在模型边界产生 `contract` 异常。
 
 ### 2. `with`（用于 `use` 节点）
 
@@ -112,9 +113,9 @@ Python Worker 默认提供 `builtin`；`options.task_queues` 按执行器名路�
 
 - **字段投影与参数绑定规则（`with.input`）**：
   - 传入结构体字段路径 `root_var.field` 时，若最末级字段未列入宿主 `object` 的 `required`，其投影类型会自动提升为可空联合类型 `[<BaseType>, "null"]`。
-  - 无论 `use: workflow:<path>` 还是 `use: builtin:<op>`，目标的所有必填输入参数均须在 `with.input` 中显式声明。
-- **`use: workflow:<path>` 与 `use: builtin:<op>` 的输出映射差异（`with.output`）**：
-  - **`use: workflow:<path>`**：支持按需子集映射；未在 `with.output` 中列出的目标输出字段默认自动忽略（不要求在调用方符号表中存在、不写回调用方栈帧）。
+  - 无论 `use: workflow:<PackagePath>` 还是 `use: builtin:<op>`，目标的所有必填输入参数均须在 `with.input` 中显式声明。
+- **`use: workflow:<PackagePath>` 与 `use: builtin:<op>` 的输出映射差异（`with.output`）**：
+  - **`use: workflow:<PackagePath>`**：支持按需子集映射；未在 `with.output` 中列出的目标输出字段默认自动忽略（不要求在调用方符号表中存在、不写回调用方栈帧）。
   - **`use: builtin:<op>`**：
     - `builtin:switch`：**禁止**声明 `with.output`。
     - `builtin:compare` 与 `builtin:logic`：`with.output` **可选**；省略时直接暴露 `.true` / `.false` 控制分支，显式声明 `result` 映射时为无分支单出边。

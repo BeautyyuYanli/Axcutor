@@ -16,7 +16,7 @@ Axcutor 工作流使用声明式的 YAML 或 JSON 文档描述数据契约与控
 2. **控制流图容器层（Graph Container）**：由顶层或内联子图节点的 `graph` 字段开启，负责维护当前图级作用域（Graph Scope）。该层可配置当前栈帧的最大执行步数 `max_steps`，并通过 `variables` 显式声明图级局部变量的 `TypeSpec` 与可选的静态初值 `default`。
 3. **图内多态子节点层（Inner Nodes）**：挂载于 `graph.nodes` 映射表下，每个子节点必须且只能选择以下三种多态形态之一：
    - **动作节点（`run`）**：声明 `input` / `output` 变量契约，并通过结构化 `run: { executor: ..., ... }`（如内置受信任 Python 执行器 `executor: builtin`）交由对应执行器运行。
-   - **调用节点（`use`）**：调用跨文件工作流（`workflow:<path>`）或运行时内建算子（`builtin:<op>`），通过 `with.input` 与 `with.output` 显式完成跨边界的参数绑定与返回值写回。
+   - **调用节点（`use`）**：调用跨包工作流（`workflow:<PackagePath>`）或运行时内建算子（`builtin:<op>`），通过 `with.input` 与 `with.output` 显式完成跨边界的参数绑定与返回值写回。
    - **内联块级子图（`graph`）**：在当前图内嵌套独立的子图作用域，按名捕获外层变量并导出子图输出。
    此外，子节点可挂载同构集合遍历（`for_each`）、单次超时（`timeout_ms`）、原地重试（`retry`）与可恢复异常捕获（`catch`）四类执行修饰符。
 4. **控制流连边层（Control Edges）**：挂载于 `graph.edges` 列表下，使用直观的箭头 DSL 串联虚拟起点 `start`、图内子节点、正常汇聚终点 `end[.branch]` 与异常中止汇点 `fail`，驱动图栈帧内的并发派发、分支路由与循环迭代。
@@ -83,9 +83,9 @@ graph:
         content: |
           return Branch.<choice>(<out_var>=...)
 
-    # 形态 B：跨文件工作流或内建算子调用节点（use）
+    # 形态 B：跨包工作流或内建算子调用节点（use）
     <call_node_id>:
-      use: workflow:<path>              # 或 use: builtin:<op>
+      use: workflow:<PackagePath>              # 或 use: builtin:<op>
       with:
         input: { <param>: <binding> }   # 显式传入变量名、结构体静态字段路径或常量字面量
         output: { <field>: <var_name> } # 显式将需要的输出字段映射回当前图顶层变量（未列出的输出自动忽略）

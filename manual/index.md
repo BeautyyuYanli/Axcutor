@@ -46,7 +46,7 @@ graph:
   nodes:
     # 调用外部独立工作流（创建独立函数栈帧）
     verify_order:
-      use: workflow:billing/verify_order
+      use: workflow:billing.verify_order
       with:
         input:
           id: order_id

@@ -17,6 +17,7 @@ import axcutor_core
 from axcutor_runtime.bundle import compile_bundle
 from axcutor_runtime.codec import JsonObject, dumps, loads
 from axcutor_runtime.errors import SELECTORS
+from axcutor_runtime.packages import package_path
 from axcutor_runtime.workflow import AxcutorInterpreterWorkflow
 from temporalio import exceptions
 from temporalio.client import (
@@ -112,27 +113,19 @@ def _failure(cause: BaseException) -> ExecutionError:
 
 
 def _validate_submission(
-    entry: str, sources: dict[str, dict[str, Any]], inputs: JsonObject, execution_id: str | None
+    entry: str, packages: dict[str, dict[str, Any]], inputs: JsonObject, execution_id: str | None
 ) -> None:
     if not isinstance(entry, str) or not entry:
-        raise InvalidRequest("entry must be a nonempty relative POSIX path")
-    if (
-        entry.startswith("/")
-        or "\\" in entry
-        or any(p in ("", ".", "..") for p in entry.split("/"))
-    ):
-        raise InvalidRequest("entry must be a relative POSIX path without dot segments")
-    if not isinstance(sources, dict):
-        raise InvalidRequest("sources must be an object")
-    for path, source in sources.items():
+        raise InvalidRequest("entry must be __main__ or a public dotted package path")
+    if entry != "__main__" and not package_path(entry, public=True):
+        raise InvalidRequest("entry must be __main__ or a public dotted package path")
+    if not isinstance(packages, dict):
+        raise InvalidRequest("packages must be an object")
+    for path, source in packages.items():
         if not isinstance(path, str) or not isinstance(source, dict):
-            raise InvalidRequest("sources must map paths to {format, text} objects")
-        if (
-            path.startswith("/")
-            or "\\" in path
-            or any(part in ("", ".", "..") for part in path.split("/"))
-        ):
-            raise InvalidRequest("source paths must be relative POSIX paths without dot segments")
+            raise InvalidRequest("packages must map dotted names to {format, text} objects")
+        if path != "__main__" and not package_path(path):
+            raise InvalidRequest("package names require dotted paths with public roots")
         if (
             source.keys() != {"format", "text"}
             or source["format"] not in ("yaml", "json")
@@ -173,7 +166,7 @@ class ExecutionService:
     async def submit(
         self,
         entry: str,
-        sources: dict[str, dict[str, Any]],
+        packages: dict[str, dict[str, Any]],
         input: JsonObject | None = None,
         execution_id: str | None = None,
     ) -> Execution:
@@ -183,8 +176,8 @@ class ExecutionService:
         never create a durable execution or contact the backend.
         """
         inputs = {} if input is None else input
-        _validate_submission(entry, sources, inputs, execution_id)
-        bundle_json = compile_bundle(entry, sources)
+        _validate_submission(entry, packages, inputs, execution_id)
+        bundle_json = compile_bundle(entry, packages)
         bundle = loads(bundle_json)
         try:
             input_json = axcutor_core.validate_input(

@@ -32,9 +32,9 @@ class OtherWorkflow:
         await workflow.wait_condition(lambda: False)
 
 
-def sources(document, **extra):
+def packages(document, **extra):
     return {
-        "main.yaml": {"format": "json", "text": dumps(document)},
+        "demo.main": {"format": "json", "text": dumps(document)},
         **{name: {"format": "json", "text": dumps(value)} for name, value in extra.items()},
     }
 
@@ -69,19 +69,19 @@ async def test_static_preflight_runs_without_backend_and_creates_no_execution():
     client = await Client.connect("127.0.0.1:1", lazy=True)
     host = service(client, rpc_timeout=timedelta(milliseconds=100))
     with pytest.raises(CompilationError) as error:
-        await host.submit("main.yaml", sources({"input": {}, "output": {}, "graph": {}}))
+        await host.submit("demo.main", packages({"input": {}, "output": {}, "graph": {}}))
     assert error.value.diagnostics
     assert all("code" in diagnostic for diagnostic in error.value.diagnostics)
     doc = empty()
     doc["input"] = {"n": INTEGER}
     with pytest.raises(InputValidationError):
-        await host.submit("main.yaml", sources(doc), {"n": Decimal("1.0")})
+        await host.submit("demo.main", packages(doc), {"n": Decimal("1.0")})
     with pytest.raises(InputValidationError):
-        await host.submit("main.yaml", sources(doc), {})
+        await host.submit("demo.main", packages(doc), {})
     with pytest.raises(InvalidRequest):
-        await host.submit("main.yaml", {"main.yaml": {"format": "xml", "text": ""}})
+        await host.submit("demo.main", {"demo.main": {"format": "xml", "text": ""}})
     with pytest.raises(RuntimeUnavailable):
-        await host.submit("main.yaml", sources(empty()))
+        await host.submit("demo.main", packages(empty()))
 
 
 async def test_input_preflight_does_not_reserve_id(server):
@@ -91,8 +91,8 @@ async def test_input_preflight_does_not_reserve_id(server):
     doc["input"] = {"n": INTEGER}
     with pytest.raises(InputValidationError):
         await host.submit(
-            "main.yaml",
-            sources(doc),
+            "demo.main",
+            packages(doc),
             {},
             execution_id,
         )
@@ -124,7 +124,7 @@ async def test_lossless_result_named_branch_and_read_after_worker_stops(server):
         '"ordered":{"z":3,"a":1,"m":2}}'
     )
     async with create_worker(server.client, queue):
-        first = await host.submit("main.yaml", sources(doc), {"value": value}, execution_id)
+        first = await host.submit("demo.main", packages(doc), {"value": value}, execution_id)
         assert first["execution_id"] == execution_id
         final = await host.wait(execution_id)
     assert final["status"] == "completed"
@@ -139,7 +139,7 @@ async def test_lossless_result_named_branch_and_read_after_worker_stops(server):
     assert dumps(await fresh.get(execution_id)) == dumps(final)
     assert dumps(await fresh.cancel(execution_id)) == dumps(final)
     with pytest.raises(ExecutionAlreadyExists):
-        await fresh.submit("main.yaml", sources(empty()), execution_id=execution_id)
+        await fresh.submit("demo.main", packages(empty()), execution_id=execution_id)
 
 
 async def test_duplicate_id_while_running_and_generated_uuid(server):
@@ -154,10 +154,10 @@ async def test_duplicate_id_while_running_and_generated_uuid(server):
     doc = {"input": {}, "output": {}, "run": {"executor": "builtin", "content": "wait"}}
     async with create_worker(server.client, queue, {"builtin": work}):
         try:
-            first = await host.submit("main.yaml", sources(doc))
+            first = await host.submit("demo.main", packages(doc))
             assert len(first["execution_id"]) == 36
             with pytest.raises(ExecutionAlreadyExists):
-                await host.submit("main.yaml", sources(doc), execution_id=first["execution_id"])
+                await host.submit("demo.main", packages(doc), execution_id=first["execution_id"])
             release.set()
             assert (await host.wait(first["execution_id"]))["status"] == "completed"
         finally:
@@ -211,14 +211,14 @@ async def test_live_frame_tree_and_cooperative_cancel_include_all_descendants(se
     async with create_worker(server.client, queue, {"builtin": work}):
         try:
             first = await host.submit(
-                "main.yaml", sources(doc, leaf=leaf), {"items": [Decimal("1.0"), Decimal("2.0")]}
+                "demo.main", packages(doc, leaf=leaf), {"items": [Decimal("1.0"), Decimal("2.0")]}
             )
             await asyncio.wait_for(entered.wait(), 10)
             view = await host.get(first["execution_id"])
             root = view["frames"][0]
             assert view["status"] == "running"
             assert view["finished_at"] is view["result"] is view["error"] is None
-            assert root["address"] == "main.yaml" and root["cursor"] == "batch"
+            assert root["address"] == "demo.main" and root["cursor"] == "batch"
             assert root["kind"] == "function" and root["steps"] == 2 and root["max_steps"] == 1000
             assert list(root["variables"]) == ["items", "private"]
             assert len(root["children"]) == 2
@@ -234,7 +234,7 @@ async def test_live_frame_tree_and_cooperative_cancel_include_all_descendants(se
                 function = block["children"][0]
                 assert function == {
                     "kind": "function",
-                    "address": f"main.yaml/batch[{i}]/invoke",
+                    "address": f"demo.main/batch[{i}]/invoke",
                     "cursor": "run",
                     "call_depth": 3,
                     "steps": 0,
@@ -323,7 +323,7 @@ async def test_failure_categories_from_real_interpreter(server, selector):
             **({"timeout_ms": 40} if selector == "timeout" else {}),
         }
     async with create_worker(server.client, queue):
-        first = await host.submit("main.yaml", sources(doc), inputs)
+        first = await host.submit("demo.main", packages(doc), inputs)
         final = await host.wait(first["execution_id"])
     assert final["status"] == "failed"
     assert final["frames"] == [] and final["result"] is None
@@ -337,12 +337,12 @@ async def test_no_worker_is_bounded_and_accepted_execution_is_durable(server):
     execution_id = str(uuid4())
     with pytest.raises(RuntimeUnavailable):
         await asyncio.wait_for(
-            host.submit("main.yaml", sources(empty()), execution_id=execution_id), 3
+            host.submit("demo.main", packages(empty()), execution_id=execution_id), 3
         )
     with pytest.raises(RuntimeUnavailable):
         await asyncio.wait_for(host.get(execution_id), 3)
     with pytest.raises(ExecutionAlreadyExists):
-        await host.submit("main.yaml", sources(empty()), execution_id=execution_id)
+        await host.submit("demo.main", packages(empty()), execution_id=execution_id)
     await server.client.get_workflow_handle(execution_id).terminate()
     final = await host.get(execution_id)
     assert final["status"] == "failed" and final["error"]["type"] == "EngineError"
@@ -378,7 +378,7 @@ async def test_wait_long_polls_one_run_through_worker_absence(server, monkeypatc
     queue, execution_id = str(uuid4()), str(uuid4())
     host = service(server.client, queue, rpc_timeout=timedelta(milliseconds=250))
     with pytest.raises(RuntimeUnavailable):
-        await host.submit("main.yaml", sources(empty()), execution_id=execution_id)
+        await host.submit("demo.main", packages(empty()), execution_id=execution_id)
     handle = server.client.get_workflow_handle(execution_id)
     describes, queries = [], []
     original_describe, original_query = WorkflowHandle.describe, WorkflowHandle.query
@@ -439,7 +439,7 @@ async def test_completion_racing_live_query_returns_coherent_terminal_view(
     doc = {"input": {}, "output": {}, "run": {"executor": "builtin", "content": "wait"}}
     async with create_worker(server.client, queue, {"builtin": work}):
         try:
-            first = await host.submit("main.yaml", sources(doc))
+            first = await host.submit("demo.main", packages(doc))
             original_query = WorkflowHandle.query
 
             async def close_during_query(handle, *args, **kwargs):
@@ -474,7 +474,7 @@ async def test_completion_racing_cancel_is_idempotent(server, monkeypatch):
     doc = {"input": {}, "output": {}, "run": {"executor": "builtin", "content": "wait"}}
     async with create_worker(server.client, queue, {"builtin": work}):
         try:
-            first = await host.submit("main.yaml", sources(doc))
+            first = await host.submit("demo.main", packages(doc))
             original_cancel = WorkflowHandle.cancel
 
             async def close_before_cancel(handle, **kwargs):

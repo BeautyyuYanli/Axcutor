@@ -1,7 +1,8 @@
 """Owned task cleanup shared by Workflow and Activity code.
 
-Call only while unwinding a failure/timeout/cancellation: repeated cancellation
-must not interrupt resource cleanup. The caller retains and raises the cause.
+Clean up owned tasks on both successful and exceptional exits. Repeated
+cancellation must not interrupt cleanup. On exceptional exits, the caller
+retains and raises the original cause.
 Ordered gather is deterministic; Workflow races use temporalio.workflow.wait.
 """
 

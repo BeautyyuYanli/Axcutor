@@ -32,13 +32,13 @@
 
 ## 三、 `use.with` 绑定语法、`{ value: <literal> }` 消歧与输出映射规则
 
-在 `CallNode`（`use: workflow:<path>` 或 `use: builtin:<op>`）中，`with` 包含可选的 `input` 映射与 `output` 映射。
+在 `CallNode`（`use: workflow:<PackagePath>` 或 `use: builtin:<op>`）中，`with` 包含可选的 `input` 映射与 `output` 映射。
 
 ### 1. `with.input` 与 `with.output` 必填参数显式声明约束
 
-无论 `CallNode` 是调用外部子工作流（`use: workflow:<path>`）还是调用内建算子（`use: builtin:<op>`），**均不支持 `with.input` 的隐式同名省略**：
+无论 `CallNode` 是调用外部子工作流（`use: workflow:<PackagePath>`）还是调用内建算子（`use: builtin:<op>`），**均不支持 `with.input` 的隐式同名省略**：
 
-* **对 `use: workflow:<path>`**：必须满足 $\text{dom}(N.\text{with.input}) = \text{dom}(\text{target.input})$（当 $\text{target.input}$ 非空时，每个目标参数 $p \in \text{dom}(\text{target.input})$ 均须在 `with.input` 中显式写出；若与外层变量同名，写作 `p: p`；当 $\text{dom}(\text{target.input}) = \emptyset$ 时，允许省略 `with.input`）；缺失任何目标参数或包含不属于 $\text{dom}(\text{target.input})$ 的键名，编译期报错。
+* **对 `use: workflow:<PackagePath>`**：必须满足 $\text{dom}(N.\text{with.input}) = \text{dom}(\text{target.input})$（当 $\text{target.input}$ 非空时，每个目标参数 $p \in \text{dom}(\text{target.input})$ 均须在 `with.input` 中显式写出；若与外层变量同名，写作 `p: p`；当 $\text{dom}(\text{target.input}) = \emptyset$ 时，允许省略 `with.input`）；缺失任何目标参数或包含不属于 $\text{dom}(\text{target.input})$ 的键名，编译期报错。
 * **对 `use: builtin:<op>`**（其中 `<op>` 必须属于按逻辑类别划分的 16 个标准内建算子集合）：
   * **标量、赋值与拆包类（2 个）**：`assign`、`unwrap`；
   * **路由、比较、逻辑、算术与长度类（5 个）**：`switch`、`compare`、`logic`、`math`、`length`；
@@ -71,7 +71,7 @@
 
 ### 3. `with.output.<target_out_field>` 的显式映射、未绑定默认忽略与单射规则
 
-当 `CallNode`（`use: workflow:<path>`，无论是否挂载 `for_each`）映射被调用工作流的顶层 `target.output` 时：
+当 `CallNode`（`use: workflow:<PackagePath>`，无论是否挂载 `for_each`）映射被调用工作流的顶层 `target.output` 时：
 
 * **键与值合法性**：`with.output`（可选，默认 `{}`；当挂载 `for_each` 时要求至少映射 1 个目标输出字段）中的每个键 $f$ 必须满足 $f \in \text{dom}(\text{target.output})$，每个值 `<local_var>` 必须为合法顶层 `RestrictedIdentifier`（**禁止将值设为 `null`**）。
 * **显式映射与未列出字段默认忽略**：

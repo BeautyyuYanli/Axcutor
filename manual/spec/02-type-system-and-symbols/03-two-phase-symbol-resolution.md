@@ -26,7 +26,7 @@ $$\text{Lift}(T_{\text{src}}, U) = \begin{cases} \{ \texttt{type}: \texttt{array
 
 ## 二、 阶段 1：单遍 $O(N)$ 显式符号表构建算法（双向等价 $\equiv$）
 
-每张图 $G$ 的符号表 $\Sigma_G : \text{RestrictedIdentifier} \rightharpoonup \text{TypeSpec}$ 完全由以下四类显式 `TypeSpec` 声明源在单遍扫描中构建完毕；任何节点（包括 `builtin:*`、`use: workflow:<path>` 与 `for_each`）均不向 $\Sigma_G$ 隐式注入未声明的新变量类型。
+每张图 $G$ 的符号表 $\Sigma_G : \text{RestrictedIdentifier} \rightharpoonup \text{TypeSpec}$ 完全由以下四类显式 `TypeSpec` 声明源在单遍扫描中构建完毕；任何节点（包括 `builtin:*`、`use: workflow:<PackagePath>` 与 `for_each`）均不向 $\Sigma_G$ 隐式注入未声明的新变量类型。
 
 向符号表 $\Sigma_G$ 并入类型绑定 $(v, T)$ 时：
 * 若 $v \notin \text{dom}(\Sigma_G)$，则注册 $\Sigma_G(v) \leftarrow T$；
@@ -48,7 +48,7 @@ $$\text{Lift}(T_{\text{src}}, U) = \begin{cases} \{ \texttt{type}: \texttt{array
 4. **图内未挂载 `for_each` 的 `ActionNode.output` 与 `InlineGraphNode.output`**：
    * 对图 $G$ 内每个未挂载 `for_each` 的 `ActionNode`（`run`）或 `InlineGraphNode`（内联 `graph`）$M$，将其显式声明的 $M.\text{output}$ 中的所有 $(v, T)$ 并入 $\Sigma_G$。
 
-> **注**：若图内某变量仅由 `builtin:*`、`use: workflow:<path>` 或挂载了 `for_each` 的节点写入，且不属于 `host.input`、`host.output` 或图内其他未挂载 `for_each` 的 `run` / `graph` 节点的显式 `output`，则必须在 `G.variables` 中显式声明其 `TypeSpec`（无需初值时省略 `default` 键）。
+> **注**：若图内某变量仅由 `builtin:*`、`use: workflow:<PackagePath>` 或挂载了 `for_each` 的节点写入，且不属于 `host.input`、`host.output` 或图内其他未挂载 `for_each` 的 `run` / `graph` 节点的显式 `output`，则必须在 `G.variables` 中显式声明其 `TypeSpec`（无需初值时省略 `default` 键）。
 
 ---
 
@@ -62,7 +62,7 @@ $$\text{Lift}(T_{\text{src}}, U) = \begin{cases} \{ \texttt{type}: \texttt{array
 2. **未挂载 `for_each` 的 `InlineGraphNode`（内联 `graph`）**：
    * 校验 $\text{set}(M.\text{input}) \subseteq \text{dom}(\Sigma_G)$；
    * 以 $\Sigma_{\text{host}}(M.\text{graph}) = \Sigma_G|_{M.\text{input}}$ 和 $\text{host.output} = M.\text{output}$ 递归独立执行子图 $M.\text{graph}$ 的阶段 1 符号表构建与阶段 2 静态类型检查（子图内部通过 `builtin:*` 或 `use` 等向 `host.output` 声明的输出变量写入值时，按阶段 2 规则满足对 $\text{host.output}[v]$ 的子类型兼容）。
-3. **未挂载 `for_each` 的跨文件 `CallNode`（`use: workflow:<path>`）**：
+3. **未挂载 `for_each` 的跨包 `CallNode`（`use: workflow:<PackagePath>`）**：
    * 校验每个显式入参绑定 `p: val`（$p \in \text{dom}(\text{target.input})$）：若 `val` 为引用表达式 $E$，须满足子类型兼容 $\text{TypeOf}(\Sigma_G, E) <: \text{target.input}[p]$；若 `val` 为常量字面量 $L$，须满足实例兼容 $L \models \text{target.input}[p]$；
    * 校验每个显式出参绑定 `f: local_var`（$f \in \text{dom}(M.\text{with.output})$）：须满足 $\text{local\_var} \in \text{dom}(\Sigma_G)$ 且满足子类型兼容 $\text{target.output}[f] <: \Sigma_G(\text{local\_var})$（未在 $M.\text{with.output}$ 中列出的目标输出字段默认忽略）。
 4. **内建算子节点（`use: builtin:<op>`）**：
@@ -70,7 +70,7 @@ $$\text{Lift}(T_{\text{src}}, U) = \begin{cases} \{ \texttt{type}: \texttt{array
 5. **挂载了 `for_each` 的节点 $M$**：
    * **源集合校验与注入符号表构造**：校验源集合 $T_{\text{src}} = \text{TypeOf}(\Sigma_G, M.\text{for\_each.source})$ 为非空 `Array<T>` 或 `OrderedMap<string, TV>`，并按第一节构造单次迭代注入符号表 $\Sigma_{\text{injected}}(M)$。
    * **节点内部解析与 `input` 捕获校验**：
-     * **若 $M$ 为 `ActionNode`（`run`）或 `CallNode`（`use: workflow:<path>`）**：定义节点 $M$ 的**单次迭代局部符号表**为 $\Sigma_{\text{iter}}(M) = \Sigma_G \uplus \Sigma_{\text{injected}}(M)$。
+     * **若 $M$ 为 `ActionNode`（`run`）或 `CallNode`（`use: workflow:<PackagePath>`）**：定义节点 $M$ 的**单次迭代局部符号表**为 $\Sigma_{\text{iter}}(M) = \Sigma_G \uplus \Sigma_{\text{injected}}(M)$。
        * 对 `ActionNode`：校验 $\text{set}(M.\text{input}) \subseteq \text{dom}(\Sigma_{\text{iter}}(M))$（根据 [`01-run-executor-contract.md`](../05-executor-abi/01-run-executor-contract.md)，`ActionNode` 的 `input` 必须显式列出 `run` 所需读取的 `item` / `key` / `index` 及外层变量，否则不会进入执行器的 `input_snapshot` 与 `input_schema`），并导出单次迭代的受限输入符号表 $\text{input\_schema}(M) = \Sigma_{\text{iter}}(M)|_{M.\text{input}}$；
        * 对 `CallNode`：校验 $M.\text{with.input}$ 中的每个显式入参绑定 `p: val`——若 `val` 为引用表达式 $E$，须在 $\Sigma_{\text{iter}}(M)$ 下满足子类型兼容 $\text{TypeOf}(\Sigma_{\text{iter}}(M), E) <: \text{target.input}[p]$；若 `val` 为常量字面量 $L$，须满足实例兼容 $L \models \text{target.input}[p]$。
      * **若 $M$ 为 `InlineGraphNode`（内联 `graph`）**：
@@ -79,6 +79,6 @@ $$\text{Lift}(T_{\text{src}}, U) = \begin{cases} \{ \texttt{type}: \texttt{array
    * **输出目标变量一阶集合提升与子类型兼容校验**：
      记节点 $M$ 向外层绑定的**单次迭代目标类型表 $\text{SingleTargetOut}(M) : \text{RestrictedIdentifier} \rightharpoonup \text{TypeSpec}$** 为：
      * 若 $M$ 为 `ActionNode` 或 `InlineGraphNode`：$\text{SingleTargetOut}(M) = M.\text{output}$；
-     * 若 $M$ 为 `CallNode`（`use: workflow:<path>`）：$\text{SingleTargetOut}(M) = \{ \text{outer\_var} \mapsto \text{target.output}[f] \mid (f, \text{outer\_var}) \in M.\text{with.output} \}$。
+     * 若 $M$ 为 `CallNode`（`use: workflow:<PackagePath>`）：$\text{SingleTargetOut}(M) = \{ \text{outer\_var} \mapsto \text{target.output}[f] \mid (f, \text{outer\_var}) \in M.\text{with.output} \}$。
      对每个 $(v_{\text{out}}, U) \in \text{SingleTargetOut}(M)$，校验 $v_{\text{out}} \in \text{dom}(\Sigma_G)$，且经 `for_each` 屏障汇聚后的一阶同构提升集合类型满足对当前图目标变量类型的单向子类型兼容：
      $$\text{Lift}(T_{\text{src}}, U) <: \Sigma_G(v_{\text{out}})$$

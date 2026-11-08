@@ -1,4 +1,4 @@
-//! JSON text is the boundary: JS numbers and object enumeration never touch sources.
+//! JSON text is the boundary: JS numbers and object enumeration never touch packages.
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]

@@ -19,7 +19,7 @@ Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通
 
 ## 二、 使用 `catch` 将异常物化为控制分支
 
-在业务节点（`run`、内联 `graph`、`use: workflow:<path>`）上声明 `catch`，可将指定类型的异常拦截并转化为出边 `<node>.<catch_branch>`。
+在业务节点（`run`、内联 `graph`、`use: workflow:<PackagePath>`）上声明 `catch`，可将指定类型的异常拦截并转化为出边 `<node>.<catch_branch>`。
 
 ### 1. 通配符兜底与按异常类型分流
 

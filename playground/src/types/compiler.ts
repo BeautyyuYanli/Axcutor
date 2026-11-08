@@ -4,7 +4,7 @@
  */
 export type SourceFormat = 'yaml' | 'json';
 export interface SourceDocument { format: SourceFormat; text: string }
-export interface CompileRequest { entry: string; sources: Record<string, SourceDocument> }
+export interface CompileRequest { entry: string; packages: Record<string, SourceDocument> }
 export interface TypeSpec {
   type: string | string[];
   description?: string;
@@ -61,7 +61,7 @@ export interface Modifiers {
   catch: Record<string, string[]>;
 }
 export type NodeBody =
-  | { kind: 'run'; input: string[]; input_schema: Symbols; output: Symbols; branches: Record<string, BranchContract>; run: RunSpec }
+  | { kind: 'run'; workflow_id: string; input: string[]; input_schema: Symbols; output: Symbols; branches: Record<string, BranchContract>; run: RunSpec }
   | { kind: 'graph'; input: string[]; output: Symbols; branches: Record<string, BranchContract>; graph: NormalizedGraph }
   | { kind: 'workflow'; workflow_id: string; bindings: Bindings }
   | { kind: 'builtin'; op: string; bindings: Bindings };
@@ -92,7 +92,7 @@ export interface NormalizedRoot {
   output: Symbols;
   branches: Record<string, BranchContract>;
   body: { kind: 'graph'; graph: NormalizedGraph } | {
-    kind: 'run'; run: RunSpec; input_schema: Symbols; timeout_ms: number | null; retry: Retry | null;
+    kind: 'run'; workflow_id: string; run: RunSpec; input_schema: Symbols; timeout_ms: number | null; retry: Retry | null;
   };
 }
 export interface WorkflowBundle { entry: string; workflows: Record<string, NormalizedRoot> }

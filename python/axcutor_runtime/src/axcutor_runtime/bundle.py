@@ -1,4 +1,4 @@
-"""Compile complete source snapshots before submitting any Workflow execution."""
+"""Compile immutable package snapshots before submitting any Workflow execution."""
 
 from typing import Any
 
@@ -17,9 +17,9 @@ class CompilationError(ValueError):
         super().__init__(f"Axcutor compilation failed: {summary}")
 
 
-def compile_bundle(entry: str, sources: dict[str, dict[str, Any]]) -> str:
-    """Accept the existing compiler's {format, text} source map, without I/O."""
-    result_json = axcutor_core.compile_workflow(dumps({"entry": entry, "sources": sources}))
+def compile_bundle(entry: str, packages: dict[str, dict[str, Any]]) -> str:
+    """Compile a dotted package map without filesystem I/O or Python imports."""
+    result_json = axcutor_core.compile_workflow(dumps({"entry": entry, "packages": packages}))
     result = loads(result_json)
     if result["bundle"] is None:
         raise CompilationError(result_json)

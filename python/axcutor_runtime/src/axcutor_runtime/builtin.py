@@ -1,14 +1,17 @@
 """Trusted Python executor and deterministic, standalone Pydantic v2 source synthesis.
 
-Only the Activity imports this module. Every attempt gets a fresh module namespace
-and copied input; generated globals and mutable containers cannot leak into another
-attempt. Source generation preserves schema order and never executes user content.
+Workflow code never imports this module. Each builtin attempt gets a fresh module
+namespace and copied input; generated globals and mutable containers cannot leak
+into another attempt. Source generation preserves schema order and never executes user content.
 The shared Activity owns deadlines, heartbeat, cancellation and final Rust checks.
+execute_python shares the loaded Python invocation lifecycle with module.py;
+loading and executor-specific error diagnostics remain at their entry points.
 """
 
 import asyncio
 import hashlib
 import textwrap
+from collections.abc import Callable, Coroutine, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -160,13 +163,20 @@ class BuiltinModule:
     line_offset: int
 
 
-def synthesize_module(
+def compute_contract_sha256(
+    input_schema: JsonObject, output_schema: JsonObject, branches_contract: JsonObject
+) -> str:
+    """Hash normalized compiler schemas, preserving declaration and branch order."""
+    payload = {"input": input_schema, "output": output_schema, "branches": branches_contract}
+    return hashlib.sha256(dumps(payload).encode("utf-8")).hexdigest()
+
+
+def synthesize_contract_module(
     input_schema: JsonObject,
     output_schema: JsonObject,
     branches_contract: JsonObject,
-    content: str,
-) -> BuiltinModule:
-    """Generate Python 3.11+ source, including concrete constructors and return union.
+) -> str:
+    """Generate standalone Python 3.11+ contracts without evaluating business code.
 
     Model names follow Input_<path>/Output_<path>; a deterministic suffix resolves
     flattened path collisions. Number enums use Annotated numeric validators because
@@ -191,8 +201,12 @@ def synthesize_module(
     private = "_ax_"
     while any(name.startswith(private) for name in names):
         private += "_"
-    sections = [_PRELUDE.replace("_ax_", private)]
+    sections = [
+        "# === AUTO-GENERATED AXCUTOR CONTRACT MODULE ===\n",
+        _PRELUDE.replace("_ax_", private),
+    ]
     used = {"Input", "Output", "Branch", "ReturnType"}
+    exports = ["Input", "Branch" if branches_contract else "Output", "ReturnType"]
     model_count = 0
 
     def annotation(schema: JsonObject, path: str, output: bool) -> str:
@@ -207,6 +221,7 @@ def synthesize_module(
                 name = f"{desired}_{index}"
                 index += 1
             used.add(name)
+            exports.append(name)
             model(name, schema["properties"], schema["required"], output, path)
             model_count += 1
             alias = f"{private}type_{model_count}"
@@ -375,8 +390,21 @@ def synthesize_module(
         model("Output", output_schema, list(output_schema), True, top=True)
         returns = "Output"
     sections.append(f"ReturnType: {private}typing.TypeAlias = {returns}\n\n")
-    sections.append("async def execute(input: Input) -> ReturnType:\n")
-    prefix = "".join(sections)
+    sha = compute_contract_sha256(input_schema, output_schema, branches_contract)
+    sections.append(f"__axcutor_contract_sha256__: str = {sha!r}\n\n")
+    sections.append(f"__all__ = {exports!r}\n")
+    return "".join(sections)
+
+
+def synthesize_module(
+    input_schema: JsonObject,
+    output_schema: JsonObject,
+    branches_contract: JsonObject,
+    content: str,
+) -> BuiltinModule:
+    """Add a trusted builtin function body to the shared contract model source."""
+    prefix = synthesize_contract_module(input_schema, output_schema, branches_contract)
+    prefix += "\nasync def execute(input: Input) -> ReturnType:\n"
     # Python recognizes CR/LF physical lines. str.splitlines/textwrap.indent also
     # split Unicode separators that are ordinary characters inside Python strings.
     lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -437,12 +465,52 @@ def _output_validation(error: ValidationError, model: type[BaseModel]) -> bool:
     return False
 
 
-async def execute_builtin(request: JsonObject, signal: "AbortSignal") -> JsonObject:
-    """Evaluate one attempt; validation failures are contract, user faults execution.
+async def execute_python(
+    request: JsonObject,
+    signal: "AbortSignal",
+    contract: Mapping[str, Any],
+    function: Callable[[Any], Coroutine[Any, Any, Any]],
+) -> JsonObject:
+    """Invoke one loaded Python implementation with an isolated input and owned tasks.
 
     A direct caller's AbortSignal also cancels and drains the user coroutine. The
     Activity still owns the outer signal/deadline race and discards late outcomes.
+    Business exceptions retain their traceback for the executor's own diagnostics.
     """
+    tasks: list[asyncio.Task[Any]] = []
+    try:
+        signal.raise_if_aborted()
+        try:
+            input_model = contract["Input"].model_validate(deepcopy(request["input_snapshot"]))
+        except ValidationError as error:
+            raise axcutor_core.ContractError(str(error)) from error
+        signal.raise_if_aborted()
+        business = asyncio.create_task(function(input_model))
+        aborted = asyncio.create_task(signal.wait())
+        tasks = [business, aborted]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        signal.raise_if_aborted()
+        result = business.result()
+        branches = request["branches_contract"]
+        variants = (
+            tuple(getattr(contract["Branch"], branch) for branch in branches)
+            if branches
+            else (contract["Output"],)
+        )
+        if not isinstance(result, variants):
+            raise axcutor_core.ContractError(
+                "execute must return this node's Output or Branch instance"
+            )
+        try:
+            return {"branch": type(result)._branch, "output": _export(result, contract["_UNSET"])}
+        except (ValueError, TypeError, RecursionError, OverflowError) as error:
+            raise axcutor_core.ContractError(str(error)) from error
+    finally:
+        await cancel_and_drain(tasks)
+
+
+async def execute_builtin(request: JsonObject, signal: "AbortSignal") -> JsonObject:
+    """Load a fresh builtin namespace and report user faults at run.content lines."""
     generated = synthesize_module(
         request["input_schema"],
         request["output_schema"],
@@ -451,34 +519,10 @@ async def execute_builtin(request: JsonObject, signal: "AbortSignal") -> JsonObj
     )
     filename = "<axcutor-builtin-" + hashlib.sha256(generated.source.encode()).hexdigest() + ">"
     namespace: JsonObject = {"__name__": "__axcutor_builtin__"}
-    tasks: list[asyncio.Task[Any]] = []
     try:
         signal.raise_if_aborted()
         exec(compile(generated.source, filename, "exec"), namespace)
-        try:
-            input_model = namespace["Input"].model_validate(deepcopy(request["input_snapshot"]))
-        except ValidationError as error:
-            raise axcutor_core.ContractError(str(error)) from error
-        business = asyncio.create_task(namespace["execute"](input_model))
-        aborted = asyncio.create_task(signal.wait())
-        tasks = [business, aborted]
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        signal.raise_if_aborted()
-        result = business.result()
-        branches = request["branches_contract"]
-        variants = (
-            tuple(getattr(namespace["Branch"], branch) for branch in branches)
-            if branches
-            else (namespace["Output"],)
-        )
-        if not isinstance(result, variants):
-            raise axcutor_core.ContractError(
-                "execute must return this node's Output or Branch instance"
-            )
-        try:
-            return {"branch": type(result)._branch, "output": _export(result, namespace["_UNSET"])}
-        except (ValueError, TypeError, RecursionError, OverflowError) as error:
-            raise axcutor_core.ContractError(str(error)) from error
+        return await execute_python(request, signal, namespace, namespace["execute"])
     except ValidationError as error:
         message = _message(error, filename, generated.line_offset)
         if _output_validation(error, namespace["_StrictModel"]):
@@ -488,5 +532,3 @@ async def execute_builtin(request: JsonObject, signal: "AbortSignal") -> JsonObj
         raise
     except Exception as error:
         raise RuntimeError(_message(error, filename, generated.line_offset)) from error
-    finally:
-        await cancel_and_drain(tasks)

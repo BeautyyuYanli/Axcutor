@@ -1,6 +1,6 @@
 # 01. CFG 拓扑穷尽、SESE 并发限制与可达性公理
 
-本规范定义控制流图（CFG）在编译期必须通过的拓扑良构性检查（Topological Validation）以及跨文件调用图（Workflow Call Graph）的模块化校验准则。
+本规范定义控制流图（CFG）在编译期必须通过的拓扑良构性检查（Topological Validation）以及跨包调用图（Workflow Call Graph）的模块化校验准则。
 
 ---
 
@@ -50,13 +50,13 @@
 
 ---
 
-## 四、 跨文件工作流调用图（Workflow Call Graph）与受护栏保护的递归
+## 四、 跨包工作流调用图（Workflow Call Graph）与受护栏保护的递归
 
-当图内 `CallNode` 通过 `use: workflow:<path>` 调用外部工作流文件时：
+当图内 `CallNode` 通过 `use: workflow:<PackagePath>` 调用外部工作流文件时：
 
 1. **基于顶层签名的模块化独立校验**：
    * 每个工作流文件在文件顶层显式声明了完备的静态函数签名 $(I_{\text{target}}, O_{\text{target}}, B_{\text{target}}) = (\text{target.input}, \text{target.output}, \text{target.branches})$；
    * 静态检查器在校验调用节点 $N$ 时，仅依赖被调用工作流的顶层静态签名验证 `with.input`、`with.output` 及外层分支出边的合法性，无需在编译期展开被调用方的内部图体。
 2. **允许直接或间接递归调用**：
-   * 跨文件工作流调用图允许存在直接递归（如工作流 $A$ 内部某条分支通过 `use: workflow:A` 调用自身）或相互递归环路（$A \to B \to A$）；
+   * 跨包工作流调用图允许存在直接递归（如工作流 $A$ 内部某条分支通过 `use: workflow:A` 调用自身）或相互递归环路（$A \to B \to A$）；
    * 运行期由 [`03-guardrails-and-step-accounting.md`](../04-runtime-execution-model/03-guardrails-and-step-accounting.md) 定义的调用栈深度护栏 $\text{MAX\_CALL\_DEPTH}$（默认 $64$）强制保证有界终止，超限时抛出不可捕获的 `StackOverflowError`。

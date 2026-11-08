@@ -20,6 +20,7 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 
 | 字段 | 类型 | 契约说明 |
 | :--- | :--- | :--- |
+| **`workflow_id`** | `PackagePath` 或 `__main__` | 当前节点所属工作流标识，嵌套内联图与迭代沿用所属包。`module` 据此解析包内模块；Worker 的 Python 根映射不由提交者指定。 |
 | **`run_spec`** | `RunSpec`（含鉴别键 `executor: Identifier`） | 节点声明的结构化执行体定义（如 `{ executor: "builtin", content: "..." }` 或其他扩展执行器配置对象）。 |
 | **`input_schema`** | `Map<RestrictedIdentifier, TypeSpec>` | **输入变量的静态类型契约表**：由编译器在阶段 2 符号表解析期间从当前作用域符号表提取并导出的归一化 JSON Schema `TypeSpec` 映射（即 $\Sigma|_{N.\text{input}}$ 或 `root.input`），供执行器在边界生成强类型输入模型或执行静态/动态入参投影。 |
 | **`input_snapshot`** | `ReadOnlyMap<RestrictedIdentifier, JSONValue>` | **最小权限只读输入快照**：仅包含该节点 `input: [...]` 声明的变量（或顶层 `RootRunNode` 的 `input`）在激活时刻的**深拷贝/不可变值（Deep-Frozen / Immutable Value）**。未在 `input` 中声明的图变量不出现在此映射中；执行器在本地内存或进程内对该快照的任何就地修改（In-place Mutation）均与运行时所属栈帧的 `variables` 物理隔离，不得产生任何跨节点副作用。 |

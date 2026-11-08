@@ -9,7 +9,7 @@ Axcutor 将 YAML/JSON 工作流编译为自包含快照，通过 Temporal 执行
 docker compose up -d --build
 
 # 编译并提交示例，输出执行 ID 和最终结果。
-docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/inputs/demo.json
+docker compose run --rm cli run /examples/workflows/demo/main --mount demo=/examples/workflows/demo --input /examples/inputs/demo.json
 ```
 
 在 [Temporal Web UI](http://localhost:8233/namespaces/default/workflows) 查看执行历史、Activity 和输出。远程访问时，将 `localhost` 替换为运行 Docker 的主机地址。
@@ -31,5 +31,7 @@ POST /v1/executions/{execution_id}:cancel
 ```
 
 请求字段、执行状态与错误码见 [HTTP API 参考](manual/docs/reference/04-execution-http-api.md)。本机安装使用 `uv sync --locked`，随后分别运行 `uv run --locked axcutor worker` 和 `uv run --locked axcutor serve`。CLI 与 HTTP 均通过 `axcutor-host` 包中的同一执行服务完成编译、输入预检与状态查询；执行历史由 Temporal 保存。
+
+具名工作流使用点分包名，例如 `demo.main`，对应含 `__axcutor__.yaml` 与 `__init__.py` 的目录。编译与 HTTP 请求使用 `packages` 映射；独立入口文档使用 `__main__`。预置 Python 模块执行器及契约生成方式见 [包与模块指南](manual/docs/guide/01-foundations/04-packages-and-modules.md)。
 
 浏览器工作台位于 `playground/`，提供 WASM 实时编译、CFG 画布、静态变量探针、HTTP 执行与活跃帧联动。安装依赖、生成 WASM/客户端及启动方式见 [Web Playground](manual/docs/guide/00-web-playground.md)。宿主通过 `GET /openapi.json` 提供生成客户端所用的 OpenAPI 3.1 契约。

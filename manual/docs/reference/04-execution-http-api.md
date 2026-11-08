@@ -22,17 +22,19 @@ Content-Type: application/json
 | 字段 | 类型 | 规则 |
 | --- | --- | --- |
 | `execution_id` | string，可省略 | 非空执行 ID；省略时生成 UUID。保留期内相同 ID 返回 `409`，不复用已有执行。 |
-| `entry` | string | 入口在 `sources` 中的相对 POSIX 路径，不包含 `.`、`..` 路径段。 |
-| `sources` | object | 路径到 `{ "format": "yaml" 或 "json", "text": "源码" }` 的映射；应提供全部传递引用。 |
+| `entry` | string | `__main__` 或 `packages` 中各段均公开的绝对点分包名，如 `billing.charge`。 |
+| `packages` | object | 点分包名到 `{ "format": "yaml" 或 "json", "text": "源码" }` 的映射；应提供全部传递引用。 |
 | `input` | object，可省略 | 默认 `{}`；字段集合和类型必须符合入口输入契约。 |
 
 局部字段示例：
 
 ```json
-{"entry":"main.yaml","sources":{"main.yaml":{"format":"yaml","text":"..."}},"input":{"n":7}}
+{"entry":"__main__","packages":{"__main__":{"format":"yaml","text":"..."}},"input":{"n":7}}
 ```
 
-`text` 应为完整合法工作流，示例中的 `...` 只表示源码位置。路径按 source ID 精确匹配，`use: workflow:billing/verify.yaml` 引用 `sources["billing/verify.yaml"]`，不相对于调用文档解析。未被入口闭包引用的文档不参与编译。
+`text` 应为完整合法工作流，示例中的 `...` 只表示源码位置。`use: workflow:billing.verify` 精确引用 `packages["billing.verify"]`；禁止文件路径、扩展名、相对引用与 `workflow:__main__`。根包必须公开，每个私有段都限制调用方位于其父包子树。未被入口闭包引用的文档不参与编译，但所有包名均检查合法性，重复 JSON 键会被拒绝。
+
+具名包中的 `module` 节点绑定 Worker 已安装的 Python 实现；请求不包含 Python 文件或 Worker 挂载配置。匿名 `__main__` 不能直接使用 `module`，可调用公开具名包。执行的工作流快照不会随源码文件更新，Python 依赖部署由宿主管理，见 [包与模块指南](../guide/01-foundations/04-packages-and-modules.md)。
 
 成功返回 `202 Accepted`，附带资源路径 `Location: /v1/executions/{execution_id}` 和初始 `Execution`。短工作流可能在响应前完成，响应可直接包含终态。提交会通过有期限的活跃查询确认 Worker 能响应；无响应时返回 `503`。后端已接受的执行不会因查询超时被自动撤销。调用方可指定 ID，并在收到不确定的 `503` 后查询该 ID。
 
@@ -84,7 +86,7 @@ POST /v1/executions/order-001:cancel
 | `variables` | object | 当前帧中已绑定变量；未绑定变量不出现。 |
 | `children` | Frame[] | 在途函数、内联图与并发迭代的后代帧。 |
 
-例如，一个迭代下的函数地址可为 `main.yaml/batch[0]/invoke`。内部帧号、父帧号和后端子执行 ID 不进入 HTTP 资源。移交到后端子工作流的调用通过只读查询还原到同一拓扑路径；树的不同部分是在查询期间分别观察的，不承诺跨后端执行的原子内存快照。根执行在查询期间结束时，最终响应采用终态并清空帧。
+例如，一个迭代下的函数地址可为 `demo.main/batch[0]/invoke`。内部帧号、父帧号和后端子执行 ID 不进入 HTTP 资源。移交到后端子工作流的调用通过只读查询还原到同一拓扑路径；树的不同部分是在查询期间分别观察的，不承诺跨后端执行的原子内存快照。根执行在查询期间结束时，最终响应采用终态并清空帧。
 
 iteration 的 `variables` 包含父帧锁定快照中的全部已绑定变量及当前 `item`、`key`、`index` 注入项。该观察视图不扩大执行输入：执行器和内联块仍只接收其显式声明的读取集合及适用的注入项。
 

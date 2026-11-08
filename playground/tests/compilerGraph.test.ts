@@ -9,8 +9,8 @@ import type { Frame } from '../src/client/types.gen';
 
 beforeAll(async () => { await init({ module_or_path: readFileSync(new URL('../src/wasm-pkg/axcutor_wasm_bg.wasm', import.meta.url)) }); });
 
-function compile(document: object, entry = 'folder/main.yaml') {
-  const raw = compile_workflow(JSON.stringify({ entry, sources: { [entry]: { format: 'json', text: JSON.stringify(document) } } }));
+function compile(document: object, entry = 'folder.demo.main') {
+  const raw = compile_workflow(JSON.stringify({ entry, packages: { [entry]: { format: 'json', text: JSON.stringify(document) } } }));
   const result = JSON.parse(raw) as CompileOutput;
   expect(result.diagnostics).toEqual([]);
   return { result, raw: new JsonText(raw) };
@@ -23,18 +23,18 @@ const frame = (address: string, kind: Frame['kind'] = 'function', cursor = 'star
 describe('real WASM serialization and CFG', () => {
   it('compiles the repository preset, expands Root Run and resolves same-address iteration/function frames', () => {
     const preset = defaultPreset();
-    const output = JSON.parse(compile_workflow(JSON.stringify({ entry: preset.entry, sources: preset.sources }))) as CompileOutput;
+    const output = JSON.parse(compile_workflow(JSON.stringify({ entry: preset.entry, packages: preset.packages }))) as CompileOutput;
     expect(output.diagnostics).toEqual([]);
     const bundle = output.bundle!;
-    const scope: Scope = { workflowId: 'main.yaml', scopeGraphPath: [] };
+    const scope: Scope = { workflowId: 'demo.main', scopeGraphPath: [] };
     const graph = layoutGraph(bundle, scope, output.analysis[0]);
     expect(graph.nodes.map(node => node.id)).toEqual(['start', 'double', 'summarize', 'end']);
     expect(graph.edges).toHaveLength(3);
     expect(graph.nodes.every(node => Number.isFinite(node.position.x) && Number.isFinite(node.position.y))).toBe(true);
-    expect(layoutGraph(bundle, { workflowId: 'double.yaml', scopeGraphPath: [] }, null).nodes.map(node => node.id)).toEqual(['start', 'run', 'end']);
-    expect(locateFrame(bundle, frame('main.yaml/double[0]', 'iteration', 'double'))).toEqual({ ...scope, nodeId: 'double', iteration: '[0]' });
-    expect(locateFrame(bundle, frame('main.yaml/double[0]', 'function', 'run'))).toEqual({ workflowId: 'double.yaml', scopeGraphPath: [], nodeId: 'run' });
-    const frames = [frame('main.yaml', 'function', 'double', [frame('main.yaml/double[0]', 'iteration', 'double'), frame('main.yaml/double[1]', 'iteration', 'double')])];
+    expect(layoutGraph(bundle, { workflowId: 'demo.double', scopeGraphPath: [] }, null).nodes.map(node => node.id)).toEqual(['start', 'run', 'end']);
+    expect(locateFrame(bundle, frame('demo.main/double[0]', 'iteration', 'double'))).toEqual({ ...scope, nodeId: 'double', iteration: '[0]' });
+    expect(locateFrame(bundle, frame('demo.main/double[0]', 'function', 'run'))).toEqual({ workflowId: 'demo.double', scopeGraphPath: [], nodeId: 'run' });
+    const frames = [frame('demo.main', 'function', 'double', [frame('demo.main/double[0]', 'iteration', 'double'), frame('demo.main/double[1]', 'iteration', 'double')])];
     const overlay = liveOverlay(bundle, frames, scope);
     expect(overlay.active.has('double')).toBe(true);
     expect(overlay.iterations.get('double')).toEqual(['[0]', '[1]']);
@@ -45,7 +45,7 @@ describe('real WASM serialization and CFG', () => {
       nodes: { a: run, b: run, join: { ...run, catch: { default: '*' } } },
       edges: ['start -> [a, b] -> join', 'join -> end.done', 'join.default -> fail'],
     } });
-    const graph = layoutGraph(result.bundle, { workflowId: 'folder/main.yaml', scopeGraphPath: [] }, result.analysis[0]);
+    const graph = layoutGraph(result.bundle, { workflowId: 'folder.demo.main', scopeGraphPath: [] }, result.analysis[0]);
     expect(graph.edges).toHaveLength(6);
     expect(graph.nodes.map(node => node.id)).toContain('end.done');
     expect(graph.nodes.map(node => node.id)).toContain('fail');
@@ -58,17 +58,17 @@ describe('real WASM serialization and CFG', () => {
       nodes: { block: { graph: { nodes: { work: { ...run, branches: { ok: 'done' } } }, edges: ['start -> work', 'work.ok -> end'] } } },
       edges: ['start -> block', 'block -> end'],
     } });
-    const scope = { workflowId: 'folder/main.yaml', scopeGraphPath: ['block'] };
+    const scope = { workflowId: 'folder.demo.main', scopeGraphPath: ['block'] };
     expect(scopeBody(result.bundle, scope)?.kind).toBe('graph');
-    expect(locateFrame(result.bundle!, frame('folder/main.yaml/block', 'block', 'work.ok'))).toEqual({ ...scope, nodeId: 'work' });
-    const overlay = liveOverlay(result.bundle, [frame('folder/main.yaml/block', 'block', 'work.ok')], scope);
+    expect(locateFrame(result.bundle!, frame('folder.demo.main/block', 'block', 'work.ok'))).toEqual({ ...scope, nodeId: 'work' });
+    const overlay = liveOverlay(result.bundle, [frame('folder.demo.main/block', 'block', 'work.ok')], scope);
     expect(overlay.cursors.has('work.ok')).toBe(true);
-    expect(locateFrame(result.bundle!, frame('another/main.yaml/block', 'block'))).toBeNull();
+    expect(locateFrame(result.bundle!, frame('another/demo.main/block', 'block'))).toBeNull();
   });
 
   it('keeps exact enum tokens in the WASM analysis query and proves field projections/subtyping', () => {
     const source = '{"input":{"n":{"type":"integer","enum":[99999999999999999999999999999999999]},"user":{"type":"object","properties":{"age":{"type":"integer"},"name":{"type":"string"}},"required":["age"]}},"output":{},"graph":{"nodes":{"work":{"run":{"executor":"builtin","content":"return Output()"}}},"edges":["start -> work","work -> end"]}}';
-    const output = new JsonText(compile_workflow(JSON.stringify({ entry: 'main', sources: { main: { format: 'json', text: source } } })));
+    const output = new JsonText(compile_workflow(JSON.stringify({ entry: 'main', packages: { main: { format: 'json', text: source } } })));
     expect(JSON.parse(output.raw(['diagnostics'])!)).toEqual([]);
     const analysisRaw = output.raw(['analysis', 0])!;
     const integer = get_available_vars_at_node(analysisRaw, 'work', '{"type":"integer"}');

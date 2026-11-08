@@ -1,0 +1,8 @@
+# Generate _contract.py before deploying this package to a Worker.
+input:
+  value: {type: integer}
+output:
+  value: {type: integer}
+run:
+  executor: module
+  content: .

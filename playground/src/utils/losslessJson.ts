@@ -132,9 +132,9 @@ export function executionSlices(json: JsonText): RawExecutionSlices {
 /** The only stringification is the string-only request envelope. Input is spliced
  * after strict validation, without converting its numeric or object tokens.
  */
-export function serializeSubmitBody(body: { entry: string; sources: object }, inputRawText: string): string {
+export function serializeSubmitBody(body: { entry: string; packages: object }, inputRawText: string): string {
   const input = inputRawText.trim() || '{}';
   if (new JsonText(input).root.kind !== 'object') throw new TypeError('Input must be a JSON object');
-  const prefix = JSON.stringify({ entry: body.entry, sources: body.sources }).slice(0, -1);
+  const prefix = JSON.stringify({ entry: body.entry, packages: body.packages }).slice(0, -1);
   return `${prefix},"input":${input}}`;
 }
