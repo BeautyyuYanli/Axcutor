@@ -30,7 +30,12 @@ def assign(source, target):
 
 
 def action(run, inputs=None, outputs=None, **modifiers):
-    return {"run": run, "input": inputs or [], "output": outputs or {}, **modifiers}
+    return {
+        "run": {"executor": "builtin", "content": run},
+        "input": inputs or [],
+        "output": outputs or {},
+        **modifiers,
+    }
 
 
 def graph(

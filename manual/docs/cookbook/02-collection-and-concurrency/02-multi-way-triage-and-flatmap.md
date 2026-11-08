@@ -154,20 +154,20 @@ graph:
                     return Branch.spam()
                 if "crash" in text.lower() or "outage" in text.lower():
                     return Branch.urgent(
-                        analyzed_items={
-                            "index": input.idx,
-                            "user_id": input.feedback.user_id,
-                            "sentiment": "negative",
-                        },
+                        analyzed_items=Output_analyzed_items(
+                            index=input.idx,
+                            user_id=input.feedback.user_id,
+                            sentiment="negative",
+                        ),
                         urgent_tickets=f"INC-{input.idx}:{input.feedback.user_id}",
                         nested_feature_tags=["reliability", "incident"],
                     )
                 return Branch.normal(
-                    analyzed_items={
-                        "index": input.idx,
-                        "user_id": input.feedback.user_id,
-                        "sentiment": "neutral",
-                    },
+                    analyzed_items=Output_analyzed_items(
+                        index=input.idx,
+                        user_id=input.feedback.user_id,
+                        sentiment="neutral",
+                    ),
                     nested_feature_tags=["general"],
                 )
 

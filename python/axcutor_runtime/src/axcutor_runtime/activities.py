@@ -1,4 +1,4 @@
-"""Async Python executor ABI. Only this module owns registered business functions.
+"""Async executor dispatch and shared attempt lifecycle outside the Workflow sandbox.
 
 An attempt owns its business task, local deadline, cancellation watcher and
 heartbeat. AbortSignal is process-local and never crosses a Temporal payload.
@@ -48,11 +48,13 @@ Executor = Callable[[JsonObject, AbortSignal], Awaitable[JsonObject]]
 class RunActivities:
     """A worker-local, fixed registry; never imported by the interpreter Workflow."""
 
-    def __init__(self, executors: Mapping[str, Executor]) -> None:
-        self._executors = dict(executors)
+    def __init__(self, executors: Mapping[str, Executor] | None = None) -> None:
+        from .builtin import execute_builtin
+
+        self._executors = {"builtin": execute_builtin, **(executors or {})}
         for name, function in self._executors.items():
             if not name or not inspect.iscoroutinefunction(function):
-                raise TypeError("executors must map nonempty run specs to async Python functions")
+                raise TypeError("executors must map executor names to async Python functions")
 
     @activity.defn(name="execute_run")
     async def execute_run(self, request_json: str) -> str:
@@ -69,11 +71,14 @@ class RunActivities:
             ) from error
 
         signal = AbortSignal()
+        loop = asyncio.get_running_loop()
+        expires_at = loop.time() + timeout
 
         async def invoke() -> JsonObject:
-            function = self._executors.get(request["run_spec"])
+            executor = request["run_spec"]["executor"]
+            function = self._executors.get(executor)
             if function is None:
-                raise LookupError(f"no executor registered for {request['run_spec']}")
+                raise LookupError(f"no executor registered for {executor}")
             return await function(deepcopy(request), signal)
 
         async def heartbeats() -> None:
@@ -91,7 +96,7 @@ class RunActivities:
             if cancelled.done() or activity.is_cancelled():
                 signal._abort("cancelled")
                 raise asyncio.CancelledError
-            if deadline.done():
+            if deadline.done() or loop.time() >= expires_at:
                 signal._abort("timeout")
                 raise exceptions.ApplicationError("attempt deadline exceeded", type="timeout")
             if heartbeat.done():
@@ -105,6 +110,8 @@ class RunActivities:
                 response = business.result()
             except asyncio.CancelledError:
                 raise
+            except axcutor_core.ContractError as error:
+                raise exceptions.ApplicationError(str(error), type="contract") from error
             except Exception as error:
                 raise exceptions.ApplicationError(str(error), type="execution") from error
             signal.raise_if_aborted()
@@ -124,6 +131,12 @@ class RunActivities:
                 raise exceptions.ApplicationError(
                     str(error), type="EngineError", non_retryable=True
                 ) from error
+            # Trusted code/model compilation and Rust validation can run without
+            # yielding. Never commit an overdue result just because the event
+            # loop has not yet resumed its deadline task.
+            if loop.time() >= expires_at:
+                signal._abort("timeout")
+                raise exceptions.ApplicationError("attempt deadline exceeded", type="timeout")
         except asyncio.CancelledError:
             signal._abort("cancelled")
             raise

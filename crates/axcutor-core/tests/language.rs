@@ -24,7 +24,7 @@ graph:
       branches: {done: "description"}
       catch: {problem: "*"}
       retry: {max_attempts: 2}
-      run: "Read variables.person.name."
+      run: {executor: builtin, content: "Read variables.person.name."}
   edges: ["start->work", "work.done -> end", "work.problem->fail"]
 "#,
     );
@@ -57,14 +57,14 @@ graph:
         "0"
     );
     let NodeBody::Run {
-        references,
+        input_schema,
         branches,
         ..
     } = &node.body
     else {
         panic!()
     };
-    assert_eq!(references[0].text(), "person.name");
+    assert_eq!(input_schema.keys().collect::<Vec<_>>(), vec!["person"]);
     assert!(branches["done"].output.is_empty());
     let text = serde_json::to_string(&bundle).unwrap();
     let decoded: Value = serde_json::from_str(&text).unwrap();
@@ -82,10 +82,10 @@ fn source_errors_reject_duplicates_extensions_and_non_json_values() {
         "input: {}\noutput: {}\nrun: &a work",
         "input: {}\noutput: {}\nrun: *a",
         "input: {}\noutput: {}\nrun: !custom work",
-        "input: {}\noutput: {}\nrun: work\n---\ninput: {}",
-        "input: {}\noutput: {}\nrun: work\n1: invalid",
-        "input: {}\noutput: {}\nrun: work\nvalue: .inf",
-        "input: {}\noutput: {}\nrun: work\nvalue: .nan",
+        "input: {}\noutput: {}\nrun: {executor: builtin, content: work}\n---\ninput: {}",
+        "input: {}\noutput: {}\nrun: {executor: builtin, content: work}\n1: invalid",
+        "input: {}\noutput: {}\nrun: {executor: builtin, content: work}\nvalue: .inf",
+        "input: {}\noutput: {}\nrun: {executor: builtin, content: work}\nvalue: .nan",
         "input: [",
     ];
     for text in cases {
@@ -94,8 +94,8 @@ fn source_errors_reject_duplicates_extensions_and_non_json_values() {
         assert!(out.diagnostics[0].source_location.is_some());
     }
     for text in [
-        r#"{"input":{},"input":{},"output":{},"run":"work"}"#,
-        r#"{"input":{},"output":{},"run":"work",}"#,
+        r#"{"input":{},"input":{},"output":{},"run":{"executor":"builtin","content":"work"}}"#,
+        r#"{"input":{},"output":{},"run":{"executor":"builtin","content":"work"},}"#,
     ] {
         let out = compile_sources(
             "main",
@@ -113,34 +113,42 @@ fn source_errors_reject_duplicates_extensions_and_non_json_values() {
 
 #[test]
 fn json_decodes_unicode_with_exact_numbers_and_order() {
-    let escaped = json_text(r#"{"input":{},"output":{},"run":"work \ud83d\ude00"}"#);
-    let literal = json_text(r#"{"input":{},"output":{},"run":"work 😀"}"#);
+    let escaped = json_text(
+        r#"{"input":{},"output":{},"run":{"executor":"builtin","content":"work \ud83d\ude00"}}"#,
+    );
+    let literal =
+        json_text(r#"{"input":{},"output":{},"run":{"executor":"builtin","content":"work 😀"}}"#);
     ok(&escaped);
     ok(&literal);
     let RootBody::Run { run, .. } = &escaped.bundle.as_ref().unwrap().workflows["main"].body else {
         panic!()
     };
-    assert_eq!(run, "work 😀");
+    assert_eq!(
+        run,
+        &RunSpec::Builtin {
+            content: "work 😀".into()
+        }
+    );
     assert_eq!(
         serde_json::to_string(&escaped).unwrap(),
         serde_json::to_string(&literal).unwrap()
     );
     for text in [
-        r#"{"input":{},"output":{},"run":"work \ud83d"}"#,
-        r#"{"input":{},"output":{},"run":"work \ude00"}"#,
-        r#"{"input":{},"output":{},"run":"work","\u0072un":"duplicate"}"#,
-        r#"{"input":{},"output":{},"graph":{"variables":{"m":{"type":"object","additionalProperties":{"type":"integer"},"default":{"x":1,"\u0078":2}}},"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}}"#,
+        r#"{"input":{},"output":{},"run":{"executor":"builtin","content":"work \ud83d"}}"#,
+        r#"{"input":{},"output":{},"run":{"executor":"builtin","content":"work \ude00"}}"#,
+        r#"{"input":{},"output":{},"run":{"executor":"builtin","content":"work"},"\u0072un":"duplicate"}"#,
+        r#"{"input":{},"output":{},"graph":{"variables":{"m":{"type":"object","additionalProperties":{"type":"integer"},"default":{"x":1,"\u0078":2}}},"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}}"#,
     ] {
         only_error(&json_text(text), "parse.source", "");
     }
     let duplicate = json_text(
-        "\n \n{\n  \"input\":{},\n  \"output\":{},\n  \"run\":\"work\",\n  \"extra\":{\n    \"x\":1,\n    \"\\u0078\":2\n  }\n}",
+        "\n \n{\n  \"input\":{},\n  \"output\":{},\n  \"run\":{\"executor\":\"builtin\",\"content\":\"work\"},\n  \"extra\":{\n    \"x\":1,\n    \"\\u0078\":2\n  }\n}",
     );
     only_error(&duplicate, "parse.source", "");
     let mark = duplicate.diagnostics[0].source_location.as_ref().unwrap();
     assert_eq!((mark.line, mark.column), (9, 12));
     let out = json_text(
-        r#"{"input":{},"output":{},"graph":{"variables":{"huge":{"type":"integer","default":1234567890123456789012345678901234567890},"tiny":{"type":"number","default":1.000000000000000000000000001},"exponent":{"type":"number","default":1e10000},"m":{"type":"object","additionalProperties":{"type":"string"},"default":{"10":"ten","2":"two","0":"zero","$serde_json::private::Number":"ordinary"}}},"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}}"#,
+        r#"{"input":{},"output":{},"graph":{"variables":{"huge":{"type":"integer","default":1234567890123456789012345678901234567890},"tiny":{"type":"number","default":1.000000000000000000000000001},"exponent":{"type":"number","default":1e10000},"m":{"type":"object","additionalProperties":{"type":"string"},"default":{"10":"ten","2":"two","0":"zero","$serde_json::private::Number":"ordinary"}}},"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}}"#,
     );
     ok(&out);
     let text = serde_json::to_string(&out.bundle).unwrap();
@@ -154,9 +162,11 @@ fn json_decodes_unicode_with_exact_numbers_and_order() {
 
 #[test]
 fn standard_yaml_tags_normalize_only_matching_json_shapes() {
-    ok(&yaml("input: {}\noutput: {}\nrun: !!str work\n"));
     ok(&yaml(
-        "input: {}\noutput: {}\nrun: !<tag:yaml.org,2002:str> work\n",
+        "input: {}\noutput: {}\nrun: {executor: builtin, content: !!str work}\n",
+    ));
+    ok(&yaml(
+        "input: {}\noutput: {}\nrun: {executor: builtin, content: !<tag:yaml.org,2002:str> work}\n",
     ));
     for (tagged, target, expected) in [
         ("!!str 01", "{type: string}", json!("01")),
@@ -179,7 +189,7 @@ fn standard_yaml_tags_normalize_only_matching_json_shapes() {
     ] {
         let declaration = target.strip_suffix('}').unwrap();
         let out = yaml(&format!(
-            "input: !!map {{}}\noutput: {{}}\ngraph:\n  variables:\n    v: {declaration}, default: {tagged}}}\n  nodes: {{n: {{run: work}}}}\n  edges: !!seq ['start -> n', 'n -> end']\n"
+            "input: !!map {{}}\noutput: {{}}\ngraph:\n  variables:\n    v: {declaration}, default: {tagged}}}\n  nodes: {{n: {{run: {{executor: builtin, content: work}}}}}}\n  edges: !!seq ['start -> n', 'n -> end']\n"
         ));
         ok(&out);
         let RootBody::Graph { graph } = &out.bundle.as_ref().unwrap().workflows["main"].body else {
@@ -213,7 +223,9 @@ fn standard_yaml_tags_normalize_only_matching_json_shapes() {
         assert!(out.diagnostics[0].source_location.is_some(), "{tagged}");
     }
     only_error(
-        &yaml("%TAG !! tag:custom.example,2026:\n---\ninput: {}\noutput: {}\nrun: !!str work\n"),
+        &yaml(
+            "%TAG !! tag:custom.example,2026:\n---\ninput: {}\noutput: {}\nrun: {executor: builtin, content: !!str work}\n",
+        ),
         "parse.source",
         "",
     );
@@ -232,7 +244,7 @@ fn integer_bounds_use_exact_values_and_preserve_integer_zero() {
         ("0e0", false),
     ] {
         let out = json_text(&format!(
-            r#"{{"input":{{}},"output":{{}},"run":"work","retry":{{"max_attempts":2,"backoff_ms":{literal}}}}}"#
+            r#"{{"input":{{}},"output":{{}},"run":{{"executor":"builtin","content":"work"}},"retry":{{"max_attempts":2,"backoff_ms":{literal}}}}}"#
         ));
         if valid {
             ok(&out);
@@ -247,7 +259,7 @@ fn integer_bounds_use_exact_values_and_preserve_integer_zero() {
     }
     for literal in ["-0", "0", "-1", "0.0", "1.0"] {
         let out = json_text(&format!(
-            r#"{{"input":{{}},"output":{{}},"run":"work","timeout_ms":{literal}}}"#
+            r#"{{"input":{{}},"output":{{}},"run":{{"executor":"builtin","content":"work"}},"timeout_ms":{literal}}}"#
         ));
         only_error(&out, "schema.integer", "/timeout_ms");
     }
@@ -259,7 +271,7 @@ fn source_depth_limit_is_shared_by_json_and_yaml() {
         for arrays in [127, 128] {
             // The root is depth 0; the extra field's leaf is depth arrays + 1.
             let text = format!(
-                r#"{{"input":{{}},"output":{{}},"run":"work","extra":{}0{}}}"#,
+                r#"{{"input":{{}},"output":{{}},"run":{{"executor":"builtin","content":"work"}},"extra":{}0{}}}"#,
                 "[".repeat(arrays),
                 "]".repeat(arrays)
             );
@@ -284,10 +296,12 @@ fn source_depth_limit_is_shared_by_json_and_yaml() {
 
 #[test]
 fn catch_branch_collisions_have_one_authoritative_diagnostic() {
-    let target = source(json!({"input":{},"output":{},"branches":{"ok":"success"},"run":"work"}));
+    let target = source(
+        json!({"input":{},"output":{},"branches":{"ok":"success"},"run":{"executor":"builtin","content":"work"}}),
+    );
     for body in [
-        json!({"run":"work","branches":{"ok":"success"}}),
-        json!({"branches":{"ok":"success"},"graph":{"nodes":{"inner":{"run":"work"}},"edges":["start -> inner","inner -> end.ok"]}}),
+        json!({"run":{"executor":"builtin","content":"work"},"branches":{"ok":"success"}}),
+        json!({"branches":{"ok":"success"},"graph":{"nodes":{"inner":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> inner","inner -> end.ok"]}}),
         json!({"use":"workflow:target"}),
     ] {
         for collision in [false, true] {
@@ -322,7 +336,7 @@ fn catch_branch_collisions_have_one_authoritative_diagnostic() {
 #[test]
 fn strict_nodes_modifiers_identifiers_and_edges() {
     let valid = graph(
-        json!({"one":{"run":"work"},"two":{"run":"work"}}),
+        json!({"one":{"run":{"executor":"builtin","content":"work"}},"two":{"run":{"executor":"builtin","content":"work"}}}),
         json!([" \tstart\t-> [ one ,\ttwo ] -> end\t"]),
     );
     ok(&compile(valid));
@@ -342,7 +356,7 @@ fn strict_nodes_modifiers_identifiers_and_edges() {
         "start -> start",
     ] {
         let out = compile(graph(
-            json!({"one":{"run":"work"},"two":{"run":"work"}}),
+            json!({"one":{"run":{"executor":"builtin","content":"work"}},"two":{"run":{"executor":"builtin","content":"work"}}}),
             json!([edge]),
         ));
         error(&out, "schema.edge");
@@ -350,85 +364,85 @@ fn strict_nodes_modifiers_identifiers_and_edges() {
     }
     let cases = [
         (
-            json!({"run":" "}),
-            json!({"run":"work"}),
+            json!({"run":{"executor":"builtin","content":" "}}),
+            json!({"run":{"executor":"builtin","content":"work"}}),
             json!(["one -> end"]),
             "schema.run",
-            "/run",
+            "/run/content",
         ),
         (
-            json!({"run":"work","input":["a","a"]}),
-            json!({"run":"work","input":["a"]}),
+            json!({"run":{"executor":"builtin","content":"work"},"input":["a","a"]}),
+            json!({"run":{"executor":"builtin","content":"work"},"input":["a"]}),
             json!(["one -> end"]),
             "schema.duplicate",
             "/input/1",
         ),
         (
-            json!({"run":"work","graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}}),
-            json!({"graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}}),
+            json!({"run":{"executor":"builtin","content":"work"},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}}),
+            json!({"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}}),
             json!(["one -> end"]),
             "schema.body",
             "",
         ),
         (
-            json!({"run":"work","extra":true}),
-            json!({"run":"work"}),
+            json!({"run":{"executor":"builtin","content":"work"},"extra":true}),
+            json!({"run":{"executor":"builtin","content":"work"}}),
             json!(["one -> end"]),
             "schema.unknown_field",
             "/extra",
         ),
         (
-            json!({"run":"work","retry":{"max_attempts":1}}),
-            json!({"run":"work","retry":{"max_attempts":2}}),
+            json!({"run":{"executor":"builtin","content":"work"},"retry":{"max_attempts":1}}),
+            json!({"run":{"executor":"builtin","content":"work"},"retry":{"max_attempts":2}}),
             json!(["one -> end"]),
             "schema.integer",
             "/retry/max_attempts",
         ),
         (
-            json!({"run":"work","retry":{"max_attempts":2,"on":["max_steps"]}}),
-            json!({"run":"work","retry":{"max_attempts":2,"on":["execution"]}}),
+            json!({"run":{"executor":"builtin","content":"work"},"retry":{"max_attempts":2,"on":["max_steps"]}}),
+            json!({"run":{"executor":"builtin","content":"work"},"retry":{"max_attempts":2,"on":["execution"]}}),
             json!(["one -> end"]),
             "schema.selectors",
             "/retry/on",
         ),
         (
-            json!({"run":"work","catch":{"err":["execution"],"other":["execution"]}}),
-            json!({"run":"work","catch":{"err":["execution"],"other":["timeout"]}}),
+            json!({"run":{"executor":"builtin","content":"work"},"catch":{"err":["execution"],"other":["execution"]}}),
+            json!({"run":{"executor":"builtin","content":"work"},"catch":{"err":["execution"],"other":["timeout"]}}),
             json!(["one -> end", "one.err -> fail", "one.other -> fail"]),
             "schema.catch",
             "/catch/other",
         ),
         (
-            json!({"run":"work","catch":{"err":["*"]}}),
-            json!({"run":"work","catch":{"err":["execution"]}}),
+            json!({"run":{"executor":"builtin","content":"work"},"catch":{"err":["*"]}}),
+            json!({"run":{"executor":"builtin","content":"work"},"catch":{"err":["execution"]}}),
             json!(["one -> end", "one.err -> fail"]),
             "schema.selectors",
             "/catch/err",
         ),
         (
-            json!({"run":"work","catch":{"err":"*","other":"*"}}),
-            json!({"run":"work","catch":{"err":["execution"],"other":"*"}}),
+            json!({"run":{"executor":"builtin","content":"work"},"catch":{"err":"*","other":"*"}}),
+            json!({"run":{"executor":"builtin","content":"work"},"catch":{"err":["execution"],"other":"*"}}),
             json!(["one -> end", "one.err -> fail", "one.other -> fail"]),
             "schema.catch",
             "/catch/other",
         ),
         (
-            json!({"run":"work","catch":{"err":["execution","timeout","contract"],"other":"*"}}),
-            json!({"run":"work","catch":{"err":["execution"],"other":"*"}}),
+            json!({"run":{"executor":"builtin","content":"work"},"catch":{"err":["execution","timeout","contract"],"other":"*"}}),
+            json!({"run":{"executor":"builtin","content":"work"},"catch":{"err":["execution"],"other":"*"}}),
             json!(["one -> end", "one.err -> fail", "one.other -> fail"]),
             "schema.catch",
             "/catch/other",
         ),
         (
-            json!({"run":"work","branches":{"end":"reserved"}}),
-            json!({"run":"work","branches":{"ok":"success"}}),
+            json!({"run":{"executor":"builtin","content":"work"},"branches":{"end":"reserved"}}),
+            json!({"run":{"executor":"builtin","content":"work"},"branches":{"ok":"success"}}),
             json!(["one.ok -> end"]),
             "schema.identifier",
             "/branches/end",
         ),
         (
-            json!({"run":"work","output":{"x":{"type":"integer"}},"branches":{"a":{"description":"x","output":["unknown"]}}}),
-            json!({"run":"work","output":{"x":{"type":"integer"}},"branches":{"a":{"description":"x","output":["x"]}}}),
+            json!({"run":{"executor":"builtin","content":"work"},"output":{"x":{"type":"integer"}},"branches":{"a":{"description":"x","output":["unknown"]}}}),
+            json!({"run":{"executor":"builtin","content":"work"},"output":{"x":{"type":"integer"}},"branches":{"a":{"description":"x","output":["x"]}}}),
             json!(["one.a -> end"]),
             "schema.branch_output",
             "/branches/a/output",
@@ -441,8 +455,8 @@ fn strict_nodes_modifiers_identifiers_and_edges() {
             "/timeout_ms",
         ),
         (
-            json!({"run":"work","output":{"ys":{"type":"integer"}},"for_each":{"source":"items","item":"i","index":"i"}}),
-            json!({"run":"work","output":{"ys":{"type":"integer"}},"for_each":{"source":"items","item":"i","index":"idx"}}),
+            json!({"run":{"executor":"builtin","content":"work"},"output":{"ys":{"type":"integer"}},"for_each":{"source":"items","item":"i","index":"i"}}),
+            json!({"run":{"executor":"builtin","content":"work"},"output":{"ys":{"type":"integer"}},"for_each":{"source":"items","item":"i","index":"idx"}}),
             json!(["one -> end"]),
             "symbol.injected_collision",
             "/for_each/index",
@@ -458,7 +472,10 @@ fn strict_nodes_modifiers_identifiers_and_edges() {
         no_facts(&out);
     }
     for key in ["start", "end", "fail", "has-hyphen", "has.dot", "é"] {
-        let out = compile(graph(json!({key:{"run":"work"}}), json!(["start -> end"])));
+        let out = compile(graph(
+            json!({key:{"run":{"executor":"builtin","content":"work"}}}),
+            json!(["start -> end"]),
+        ));
         error(&out, "schema.identifier");
     }
 }
@@ -477,7 +494,7 @@ graph:
       type: object
       additionalProperties: {type: integer}
       default: {"10": 10, "2": 2, "0": 0, "a": 3}
-  nodes: {work: {run: work}}
+  nodes: {work: {run: {executor: builtin, content: work}}}
   edges: ["start -> work", "work -> end"]
 "#,
     );
@@ -579,7 +596,9 @@ fn typespec_is_closed_recursive_and_enum_equality_is_exact() {
         json!({"type":"number","enum":[1,1.0]}),
         json!({"type":"integer","minimum":0}),
     ] {
-        let out = compile(json!({"input":{"x":t},"output":{},"run":"work"}));
+        let out = compile(
+            json!({"input":{"x":t},"output":{},"run":{"executor":"builtin","content":"work"}}),
+        );
         error(&out, "type.schema");
     }
     let numeric: TypeSpec = serde_json::from_str(
@@ -590,13 +609,13 @@ fn typespec_is_closed_recursive_and_enum_equality_is_exact() {
     assert!(!numeric.accepts(&serde_json::from_str("123456789012345678901234567891").unwrap()));
     assert!(numeric.accepts(&serde_json::from_str("10e9999").unwrap()));
     ok(&compile(
-        json!({"input":{},"output":{},"run":"work","retry":{"max_attempts":2,"backoff_ms":0}}),
+        json!({"input":{},"output":{},"run":{"executor":"builtin","content":"work"},"retry":{"max_attempts":2,"backoff_ms":0}}),
     ));
 }
 
 fn subtype(actual: Value, expected: Value, valid: bool) {
     let main = json!({"input":{"value":actual},"output":{},"graph":{"nodes":{"call":{"use":"workflow:target","with":{"input":{"p":"value"}}}},"edges":["start -> call","call -> end"]}});
-    let target = json!({"input":{"p":expected},"output":{},"run":"read variables.p"});
+    let target = json!({"input":{"p":expected},"output":{},"run":{"executor":"builtin","content":"read variables.p"}});
     let out = compile_sources(
         "main",
         [
@@ -659,17 +678,17 @@ fn subtype_variance_nullable_enum_and_closed_record_rules() {
     subtype(optional.clone(), required.clone(), false);
     subtype(required, optional, true);
     let out = compile(
-        json!({"input":{},"output":{"x":{"type":"integer"}},"graph":{"nodes":{"n":{"run":"work","output":{"x":{"type":"number"}}}},"edges":["start -> n","n -> end"]}}),
+        json!({"input":{},"output":{"x":{"type":"integer"}},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"},"output":{"x":{"type":"number"}}}},"edges":["start -> n","n -> end"]}}),
     );
     error(&out, "symbol.conflicting_type");
     no_facts(&out);
     ok(&compile(
-        json!({"input":{},"output":{"x":{"type":"string","enum":["a","b"],"description":"root"}},"graph":{"nodes":{"n":{"run":"work","output":{"x":{"type":"string","enum":["b","a"],"description":"node"}}}},"edges":["start -> n","n -> end"]}}),
+        json!({"input":{},"output":{"x":{"type":"string","enum":["a","b"],"description":"root"}},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"},"output":{"x":{"type":"string","enum":["b","a"],"description":"node"}}}},"edges":["start -> n","n -> end"]}}),
     ));
 }
 
 #[test]
-fn field_projection_and_run_capture_follow_typed_dict_boundaries() {
+fn field_projection_checks_bindings_and_leaves_run_content_opaque() {
     let person = json!({"type":"object","properties":{"name":{"type":"string"},"profile":{"type":"object","properties":{"label":{"type":"string"}}}},"required":["name"]});
     let make = |path: &str, target: Value| {
         builtin(
@@ -698,14 +717,11 @@ fn field_projection_and_run_capture_follow_typed_dict_boundaries() {
             "type.projection",
         );
     }
-    error(
-        &compile(
-            json!({"input":{"x":{"type":"string"}},"output":{},"graph":{"nodes":{"n":{"run":"read variables.x."}},"edges":["start -> n","n -> end"]}}),
-        ),
-        "symbol.capture",
-    );
+    ok(&compile(
+        json!({"input":{"x":{"type":"string"}},"output":{},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"read variables.x."}}},"edges":["start -> n","n -> end"]}}),
+    ));
     let out = compile(
-        json!({"input":{"x":{"type":"string"}},"output":{},"graph":{"nodes":{"n":{"input":["x"],"run":"read avariables.missing and variables.x."}},"edges":["start -> n","n -> end"]}}),
+        json!({"input":{"x":{"type":"string"}},"output":{},"graph":{"nodes":{"n":{"input":["x"],"run":{"executor":"builtin","content":"read avariables.missing and variables.x."}}},"edges":["start -> n","n -> end"]}}),
     );
     ok(&out);
 }
@@ -745,13 +761,15 @@ fn closure_recursive_signatures_and_explicit_call_mapping() {
         Some("call")
     );
     no_facts(&out);
-    let bad = source(json!({"input":{},"output":{"b":{"type":"any"}},"run":"work"}));
+    let bad = source(
+        json!({"input":{},"output":{"b":{"type":"any"}},"run":{"executor":"builtin","content":"work"}}),
+    );
     error(
         &compile_sources("A", [("A".into(), source(a)), ("opaque/../B".into(), bad)]),
         "type.unresolved_workflow",
     );
     let target = source(
-        json!({"input":{"p":{"type":"integer"}},"output":{"x":{"type":"integer"},"ignored":{"type":"string"}},"branches":{"yes":{"description":"ok","output":["x"]},"no":{"description":"skip","output":[]}},"run":"work"}),
+        json!({"input":{"p":{"type":"integer"}},"output":{"x":{"type":"integer"},"ignored":{"type":"string"}},"branches":{"yes":{"description":"ok","output":["x"]},"no":{"description":"skip","output":[]}},"run":{"executor":"builtin","content":"work"}}),
     );
     let main = json!({"input":{},"output":{},"graph":{"variables":{"result":{"type":"number"}},"nodes":{"call":{"use":"workflow:target","with":{"input":{"p":1},"output":{"x":"result"}}}},"edges":["start -> call","call.yes -> end","call.no -> end"]}});
     let out = compile_sources(
@@ -774,8 +792,7 @@ fn closure_recursive_signatures_and_explicit_call_mapping() {
         ("no", true, true),
     ] {
         let mut consume = main.clone();
-        consume["graph"]["nodes"]["read"] =
-            json!({"input":["result"],"run":"read variables.result"});
+        consume["graph"]["nodes"]["read"] = json!({"input":["result"],"run":{"executor":"builtin","content":"read variables.result"}});
         consume["graph"]["edges"] = json!([
             "start -> call",
             if read_branch == "yes" {
@@ -832,7 +849,7 @@ fn closure_recursive_signatures_and_explicit_call_mapping() {
 
 #[test]
 fn multiple_errors_have_deterministic_canvas_addresses() {
-    let v = json!({"input":{},"output":{},"graph":{"nodes":{"one":{"run":"","unknown":true},"two":{"input":["missing"],"run":"read variables.missing"},"inside":{"graph":{"nodes":{"bad":{"input":["other"],"run":"work"}},"edges":["start -> bad","bad -> end"]}}},"edges":["start -> two","two -> inside","inside -> end","start -> one -> end"]}});
+    let v = json!({"input":{},"output":{},"graph":{"nodes":{"one":{"run":{"executor":"builtin","content":""},"unknown":true},"two":{"input":["missing"],"run":{"executor":"builtin","content":"read variables.missing"}},"inside":{"graph":{"nodes":{"bad":{"input":["other"],"run":{"executor":"builtin","content":"work"}}},"edges":["start -> bad","bad -> end"]}}},"edges":["start -> two","two -> inside","inside -> end","start -> one -> end"]}});
     let out = compile(v.clone());
     for code in [
         "schema.run",
@@ -869,7 +886,7 @@ fn multiple_errors_have_deterministic_canvas_addresses() {
 
 #[test]
 fn json_literal_keys_never_enter_serde_number_tag_deserialization() {
-    let doc = json!({"input":{},"output":{},"graph":{"variables":{"m":{"type":"object","additionalProperties":{"type":"string"},"default":{"$serde_json::private::Number":"ordinary map value"}}},"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}});
+    let doc = json!({"input":{},"output":{},"graph":{"variables":{"m":{"type":"object","additionalProperties":{"type":"string"},"default":{"$serde_json::private::Number":"ordinary map value"}}},"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}});
     let out = compile(doc);
     ok(&out);
     let text = serde_json::to_string(&out.bundle).unwrap();
@@ -887,7 +904,7 @@ fn directly_recursive_body_is_checked_once_using_its_signature() {
 #[test]
 fn workflow_output_diagnostic_points_to_the_explicit_binding() {
     let main = json!({"input":{},"output":{"local":{"type":"integer"}},"graph":{"nodes":{"call":{"use":"workflow:target","with":{"output":{"remote":"local"}}}},"edges":["start -> call","call -> end"]}});
-    let target = json!({"input":{},"output":{"remote":{"type":"string"}},"run":"work"});
+    let target = json!({"input":{},"output":{"remote":{"type":"string"}},"run":{"executor":"builtin","content":"work"}});
     let out = compile_sources(
         "main",
         [

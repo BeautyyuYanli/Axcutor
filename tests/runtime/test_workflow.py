@@ -38,7 +38,7 @@ async def test_root_run_exact_values_branch_contract_and_minimal_input(execution
         "input": {"value": record},
         "output": {"result": record},
         "branches": {"ok": "done"},
-        "run": "work",
+        "run": {"executor": "builtin", "content": "work"},
     }
     async with execution({"work": work}) as run:
         result = await run.execute(document, {"value": inputs})
@@ -123,7 +123,7 @@ async def test_contract_retry_and_filtering_run_validation(execution):
     document = {
         "input": {},
         "output": {"n": INTEGER},
-        "run": "work",
+        "run": {"executor": "builtin", "content": "work"},
         "retry": {"max_attempts": 2, "backoff_ms": 10, "on": ["timeout", "contract"]},
     }
     async with execution({"work": work}) as run:

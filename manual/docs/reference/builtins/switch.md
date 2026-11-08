@@ -8,7 +8,7 @@
 
 | 方向 | 参数名 | 必填/可选 | 类型契约与静态约束 |
 | :--- | :--- | :--- | :--- |
-| **`with.input`** | `source` | **必填** | 绑定已定值的非空 `type: boolean`，或带非空 `enum: [<v1>, <v2>, ...]` 约束的非空 `type: string`。当为 `string` + `enum` 时，每个枚举值 `<vi>` 必须匹配合法分支标识符正则 `^[a-zA-Z_][a-zA-Z0-9_]*$` 且不属于保留字 `{"start", "end", "fail"}`，否则编译期报错。 |
+| **`with.input`** | `source` | **必填** | 绑定已定值的非空 `type: boolean`，或带非空 `enum: [<v1>, <v2>, ...]` 约束的非空 `type: string`。当为 `string` + `enum` 时，每个枚举值 `<vi>` 必须是符合[统一标识符规则](../../../spec/01-grammar-and-ast/01-document-and-node-grammar.md)的 `BranchId`，排除 `start`、`end`、`fail` 及全部 35 个 Python 硬关键字，否则编译期报错。 |
 | **`with.output`** | *无* | *禁止声明* | 仅执行控制流路由，不产出或修改任何变量。 |
 
 ### 控制流分支行为（编译期穷尽性检查）
@@ -30,7 +30,8 @@ nodes:
         source: review_result.passed
 
   # 形态 B：枚举多路穷尽路由（若 priority 的 enum 为 [low, medium, high]，暴露对应三个分支）
-  # 注意：所有 enum 元素均须为合法标识符（如 low / medium / high），不可含连字符或保留字 start / end / fail
+  # enum 元素遵循统一 BranchId 规则：可用 low / medium / high 或软关键字 match。
+  # 不可使用连字符、start / end / fail 或 Python 硬关键字（如 class）。
   route_by_priority:
     use: builtin:switch
     with:

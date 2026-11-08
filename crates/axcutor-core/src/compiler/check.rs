@@ -129,27 +129,6 @@ fn register(
     }
 }
 
-fn references(
-    refs: &[FieldPath],
-    symbols: &Symbols,
-    allowed: &[String],
-    a: &Address,
-    ds: &mut Vec<Diagnostic>,
-) {
-    for p in refs {
-        if !allowed.contains(&p.root) {
-            a.error(
-                ds,
-                "node",
-                "symbol.capture",
-                format!("run reference {} is outside the input whitelist", p.text()),
-            );
-        } else if let Err(e) = type_of(symbols, p) {
-            a.error(ds, "variable", "type.projection", e);
-        }
-    }
-}
-
 pub(super) fn root(
     root: &mut NormalizedRoot,
     a: &Address,
@@ -158,15 +137,7 @@ pub(super) fn root(
     analyses: &mut Vec<GraphAnalysis>,
 ) {
     match &mut root.body {
-        RootBody::Run {
-            references: refs, ..
-        } => references(
-            refs,
-            &root.input,
-            &root.input.keys().cloned().collect::<Vec<_>>(),
-            &a.at("run"),
-            ds,
-        ),
+        RootBody::Run { .. } => (),
         RootBody::Graph { graph: g } => graph(
             g,
             &root.input,
@@ -271,13 +242,15 @@ fn graph(
         match &mut node.body {
             NodeBody::Run {
                 input,
+                input_schema,
                 output,
                 branches,
-                references: refs,
                 ..
             } => {
                 for (i, n) in input.iter().enumerate() {
-                    if !local.contains_key(n) {
+                    if let Some(t) = local.get(n) {
+                        input_schema.insert(n.clone(), t.clone());
+                    } else {
                         at.at("input").at(&i.to_string()).error(
                             ds,
                             "variable",
@@ -286,7 +259,6 @@ fn graph(
                         );
                     }
                 }
-                references(refs, &local, input, &at.at("run"), ds);
                 single = output.clone();
                 normal_ports = contract_ports(output.keys().cloned().collect(), branches, None);
             }

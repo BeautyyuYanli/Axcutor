@@ -196,10 +196,10 @@ graph:
           import json
           raw = json.loads(input.order_payload)
           return Output(
-              order_info={
-                  "order_id": str(raw["order_id"]),
-                  "subtotal": float(raw["subtotal"]),
-              }
+              order_info=Output_order_info(
+                  order_id=str(raw["order_id"]),
+                  subtotal=float(raw["subtotal"]),
+              )
           )
 
     # 步骤 2：读取中间结构体 order_info 与顶层输入 tax_rate，产出顶层输出所需的 total_amount

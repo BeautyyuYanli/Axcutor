@@ -221,7 +221,7 @@ class AxcutorInterpreterWorkflow:
         if not isinstance(queues, dict) or any(
             not isinstance(k, str) or not isinstance(v, str) or not v for k, v in queues.items()
         ):
-            raise ValueError("task_queues must map run specs to nonempty task queues")
+            raise ValueError("task_queues must map executor names to nonempty task queues")
         threshold = result["child_workflow_history_events"]
         if threshold is not None and (type(threshold) is not int or threshold <= 0):
             raise ValueError("child_workflow_history_events must be a positive integer")
@@ -589,6 +589,7 @@ class AxcutorInterpreterWorkflow:
             )
         request = {
             "run_spec": body["run"],
+            "input_schema": body["input_schema"],
             "input_snapshot": snapshot,
             "output_schema": body["output"],
             "branches_contract": body["branches"],
@@ -600,7 +601,7 @@ class AxcutorInterpreterWorkflow:
                 "execute_run",
                 dumps(request),
                 result_type=str,
-                task_queue=self._options["task_queues"].get(body["run"]),
+                task_queue=self._options["task_queues"].get(body["run"]["executor"]),
                 start_to_close_timeout=timedelta(milliseconds=timeout),
                 heartbeat_timeout=timedelta(milliseconds=self._options["heartbeat_timeout_ms"]),
                 retry_policy=policy,

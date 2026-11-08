@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for format in ["json", "yaml"] {
         for arrays in [127, 128] {
             let text = format!(
-                r#"{{"input":{{}},"output":{{}},"run":"work","extra":{}0{}}}"#,
+                r#"{{"input":{{}},"output":{{}},"run":{{"executor":"builtin","content":"work"}},"extra":{}0{}}}"#,
                 "[".repeat(arrays),
                 "]".repeat(arrays)
             );
@@ -26,11 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 t = json!({"type":"array","items":t});
             }
             for iterated in [false, true] {
-                let mut doc = json!({"input":{"x":t},"output":{},"graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}});
+                let mut doc = json!({"input":{"x":t},"output":{},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}});
                 if iterated {
                     doc["graph"]["variables"] =
                         json!({"result":{"type":"array","items":{"type":"integer"}}});
-                    doc["graph"]["nodes"]["n"] = json!({"run":"work","for_each":{"source":"x","item":"item"},"output":{"result":{"type":"integer"}}});
+                    doc["graph"]["nodes"]["n"] = json!({"run":{"executor":"builtin","content":"work"},"for_each":{"source":"x","item":"item"},"output":{"result":{"type":"integer"}}});
                 }
                 cases.push(json!({"entry":"main","sources":{"main":{"format":format,"text":doc.to_string()}}}));
             }
@@ -40,8 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "$serde_json::private::Number",
         "$serde_json::private::RawValue",
     ] {
-        let bad =
-            json!({"input":{"x":{"type":"number","enum":[{marker:"1"}]}},"output":{},"run":"work"});
+        let bad = json!({"input":{"x":{"type":"number","enum":[{marker:"1"}]}},"output":{},"run":{"executor":"builtin","content":"work"}});
         for format in ["json", "yaml"] {
             cases.push(
                 json!({"entry":"main","sources":{"main":{"format":format,"text":bad.to_string()}}}),
@@ -50,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let marker_case = cases.len();
     let mut marker_doc: Value = serde_json::from_str(
-        r#"{"input":{"x":{"type":"integer","enum":[1]},"precise":{"type":"number","enum":[123456789012345678901234567890,1.000000000000000000000000001,1e10000]}},"output":{},"graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}}"#,
+        r#"{"input":{"x":{"type":"integer","enum":[1]},"precise":{"type":"number","enum":[123456789012345678901234567890,1.000000000000000000000000001,1e10000]}},"output":{},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}}"#,
     )?;
     marker_doc["graph"]["variables"] = json!({"marker_map":{"type":"object","additionalProperties":{"type":"string"},"default":{"$serde_json::private::Number":"1","$serde_json::private::RawValue":"1"}}});
     cases.push(

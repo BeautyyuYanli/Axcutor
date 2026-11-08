@@ -67,7 +67,12 @@ async def test_host_activity_deadline_is_finite_and_not_retried_when_timeout_exc
         await asyncio.Event().wait()
 
     modifiers = {"retry": retry} if retry else {}
-    document = {"input": {}, "output": {}, "run": "work", **modifiers}
+    document = {
+        "input": {},
+        "output": {},
+        "run": {"executor": "builtin", "content": "work"},
+        **modifiers,
+    }
     async with execution({"work": work}) as run:
         assert (await run.failed(document, options={"activity_timeout_ms": 60})).type == "timeout"
     assert len(calls) == 1
@@ -86,7 +91,7 @@ async def test_native_activity_timeout_retry_and_nonretryable_execution(executio
     document = {
         "input": {},
         "output": {"value": INTEGER},
-        "run": "work",
+        "run": {"executor": "builtin", "content": "work"},
         "timeout_ms": 60,
         "retry": {"max_attempts": 2, "backoff_ms": 10, "on": ["timeout"]},
     }
@@ -125,7 +130,8 @@ async def test_real_activity_environment_local_watchdog_owns_cleanup_and_late_re
     environment = ActivityEnvironment()
     environment.on_heartbeat = lambda *details: beats.append(details)
     request = {
-        "run_spec": "work",
+        "run_spec": {"executor": "work", "content": "unused"},
+        "input_schema": {},
         "input_snapshot": {},
         "output_schema": {"value": INTEGER},
         "branches_contract": {},
@@ -153,7 +159,8 @@ async def test_activity_distinguishes_invalid_business_json_from_broken_host_sch
         return {"output": {}}
 
     request = {
-        "run_spec": "work",
+        "run_spec": {"executor": "work", "content": "unused"},
+        "input_schema": {},
         "input_snapshot": {},
         "output_schema": {},
         "branches_contract": {},
@@ -233,7 +240,11 @@ async def test_call_success_preserves_values_and_runs_child_only_at_history_boun
     async def work(request, signal):
         return {"output": {"value": request["input_snapshot"]["n"]}}
 
-    callee = {"input": {"n": INTEGER}, "output": {"value": INTEGER}, "run": "work"}
+    callee = {
+        "input": {"n": INTEGER},
+        "output": {"value": INTEGER},
+        "run": {"executor": "builtin", "content": "work"},
+    }
     document = graph(
         {"call": call("callee", {"n": "n"}, {"value": "answer"})},
         ["start -> call", "call -> end"],
@@ -277,7 +288,11 @@ async def test_child_selectors_survive_boundary_parent_owns_retry_and_catch(exec
             max_steps=1,
         )
     else:
-        callee = {"input": {}, "output": {"value": INTEGER}, "run": "work"}
+        callee = {
+            "input": {},
+            "output": {"value": INTEGER},
+            "run": {"executor": "builtin", "content": "work"},
+        }
     document = graph(
         {
             "call": call(
@@ -317,7 +332,7 @@ async def test_child_timeout_cancellation_waits_for_descendant_cleanup(execution
         assert cleaned.is_set()
         return {"output": {}}
 
-    callee = {"input": {}, "output": {}, "run": "work"}
+    callee = {"input": {}, "output": {}, "run": {"executor": "builtin", "content": "work"}}
     document = graph(
         {
             "call": call("callee", timeout_ms=150, catch={"timed": ["timeout"]}),
@@ -338,7 +353,7 @@ async def test_child_timeout_cancellation_waits_for_descendant_cleanup(execution
 
 async def test_child_depth_panic_bypasses_catch_and_dsl_retry(execution):
     middle = graph({"next": call("leaf")}, ["start -> next", "next -> end"])
-    leaf = {"input": {}, "output": {}, "run": "unused"}
+    leaf = {"input": {}, "output": {}, "run": {"executor": "builtin", "content": "unused"}}
     document = graph(
         {
             "call": call(

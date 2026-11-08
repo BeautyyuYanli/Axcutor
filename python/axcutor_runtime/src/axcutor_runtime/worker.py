@@ -27,9 +27,12 @@ def workflow_runner() -> SandboxedWorkflowRunner:
 
 
 def create_worker(
-    client: Client, task_queue: str, executors: Mapping[str, Executor], **kwargs: Any
+    client: Client,
+    task_queue: str,
+    executors: Mapping[str, Executor] | None = None,
+    **kwargs: Any,
 ) -> Worker:
-    """Register the interpreter and standard execute_run Activity on one queue."""
+    """Register the interpreter and executor dispatcher, including builtin Python."""
     activities = RunActivities(executors)
     return Worker(
         client,

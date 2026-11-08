@@ -6,8 +6,9 @@ use support::*;
 
 #[test]
 fn call_arguments_and_iteration_sources_require_assigned_roots() {
-    let target =
-        source(json!({"input":{"p":{"type":"integer"}},"output":{},"run":"read variables.p"}));
+    let target = source(
+        json!({"input":{"p":{"type":"integer"}},"output":{},"run":{"executor":"builtin","content":"read variables.p"}}),
+    );
     for (node, source_type, default, output_type, path) in [
         (
             assign(json!("source"), "x"),
@@ -24,7 +25,7 @@ fn call_arguments_and_iteration_sources_require_assigned_roots() {
             "/graph/nodes/n/with/input/p",
         ),
         (
-            json!({"run":"work","for_each":{"source":"source","item":"item"},"output":{"x":{"type":"integer"}}}),
+            json!({"run":{"executor":"builtin","content":"work"},"for_each":{"source":"source","item":"item"},"output":{"x":{"type":"integer"}}}),
             json!({"type":"array","items":{"type":"integer"}}),
             json!([1]),
             json!({"type":"array","items":{"type":"integer"}}),
@@ -57,8 +58,8 @@ fn call_arguments_and_iteration_sources_require_assigned_roots() {
 #[test]
 fn loop_greatest_fixed_point_preserves_entry_facts_without_inventing_first_iteration_values() {
     let doc = json!({"input":{"flag":{"type":"boolean"}},"output":{"x":{"type":"integer"}},"graph":{"variables":{"x":{"type":"integer","default":0},"late":{"type":"string"}},"nodes":{
-        "test":{"input":["x","flag"],"branches":{"again":"continue","done":"stop"},"run":"test variables.x"},
-        "body":{"input":["x"],"output":{"x":{"type":"integer"},"late":{"type":"string"}},"run":"work"}
+        "test":{"input":["x","flag"],"branches":{"again":"continue","done":"stop"},"run":{"executor":"builtin","content":"test variables.x"}},
+        "body":{"input":["x"],"output":{"x":{"type":"integer"},"late":{"type":"string"}},"run":{"executor":"builtin","content":"work"}}
     },"edges":["start -> test","test.again -> body","body -> test","test.done -> end"]}});
     let out = compile(doc.clone());
     ok(&out);
@@ -76,8 +77,8 @@ fn loop_greatest_fixed_point_preserves_entry_facts_without_inventing_first_itera
 #[test]
 fn branch_subsets_meet_at_joins_and_only_special_branches_kill_old_values() {
     let mut doc = json!({"input":{},"output":{},"graph":{"variables":{"x":{"type":"string"}},"nodes":{
-        "choose":{"output":{"x":{"type":"string"}},"branches":{"yes":"write","no":{"description":"skip","output":[]}},"run":"choose"},
-        "read":{"input":["x"],"run":"read variables.x"}
+        "choose":{"output":{"x":{"type":"string"}},"branches":{"yes":"write","no":{"description":"skip","output":[]}},"run":{"executor":"builtin","content":"choose"}},
+        "read":{"input":["x"],"run":{"executor":"builtin","content":"read variables.x"}}
     },"edges":["start -> choose","choose.yes -> read","choose.no -> read","read -> end"]}});
     error(&compile(doc.clone()), "assignment.read");
     doc["graph"]["variables"]["x"]["default"] = json!("old");
@@ -115,7 +116,7 @@ fn branch_subsets_meet_at_joins_and_only_special_branches_kill_old_values() {
                 "empty",
             ),
         };
-        let doc = json!({"input":{"maybe":{"type":["integer","null"]},"array":{"type":"array","items":{"type":"integer"}},"map":{"type":"object","additionalProperties":{"type":"integer"}}},"output":{},"graph":{"variables":{"x":{"type":"integer","default":42},"rest":{"type":"array","items":{"type":"integer"}}},"nodes":{"step":{"use":format!("builtin:{op}"),"with":{"input":input,"output":output}},"read":{"input":["x"],"run":"read variables.x"}},"edges":["start -> step",format!("step.{success} -> end"),format!("step.{failure} -> read"),"read -> end"]}});
+        let doc = json!({"input":{"maybe":{"type":["integer","null"]},"array":{"type":"array","items":{"type":"integer"}},"map":{"type":"object","additionalProperties":{"type":"integer"}}},"output":{},"graph":{"variables":{"x":{"type":"integer","default":42},"rest":{"type":"array","items":{"type":"integer"}}},"nodes":{"step":{"use":format!("builtin:{op}"),"with":{"input":input,"output":output}},"read":{"input":["x"],"run":{"executor":"builtin","content":"read variables.x"}}},"edges":["start -> step",format!("step.{success} -> end"),format!("step.{failure} -> read"),"read -> end"]}});
         let out = compile(doc);
         error(&out, "assignment.read");
         no_facts(&out);
@@ -128,7 +129,7 @@ fn branch_subsets_meet_at_joins_and_only_special_branches_kill_old_values() {
 fn shift_empty_neither_assigns_nor_erases_rest() {
     let mut doc = json!({"input":{"array":{"type":"array","items":{"type":"integer"}}},"output":{},"graph":{"variables":{"x":{"type":"integer"},"rest":{"type":"array","items":{"type":"integer"}}},"nodes":{
         "step":{"use":"builtin:array_shift","with":{"input":{"source":"array"},"output":{"item":"x","rest":"rest"}}},
-        "read":{"input":["rest"],"run":"read variables.rest"}
+        "read":{"input":["rest"],"run":{"executor":"builtin","content":"read variables.rest"}}
     },"edges":["start -> step","step.some -> end","step.empty -> read","read -> end"]}});
     error(&compile(doc.clone()), "assignment.read");
     doc["graph"]["variables"]["rest"]["default"] = json!([]);
@@ -137,7 +138,7 @@ fn shift_empty_neither_assigns_nor_erases_rest() {
 
 #[test]
 fn catch_preserves_old_values_but_never_promises_new_outputs() {
-    let mut doc = json!({"input":{"x":{"type":"string"}},"output":{"x":{"type":"string"}},"graph":{"nodes":{"n":{"output":{"x":{"type":"string"}},"catch":{"err":"*"},"run":"work"}},"edges":["start -> n","n -> end","n.err -> end"]}});
+    let mut doc = json!({"input":{"x":{"type":"string"}},"output":{"x":{"type":"string"}},"graph":{"nodes":{"n":{"output":{"x":{"type":"string"}},"catch":{"err":"*"},"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end","n.err -> end"]}});
     let out = compile(doc.clone());
     ok(&out);
     let p = derive_node_ports(&out.analysis[0], "n");
@@ -154,9 +155,9 @@ fn catch_preserves_old_values_but_never_promises_new_outputs() {
 fn fork_uses_same_snapshot_then_unions_outputs_at_join() {
     let mut doc = graph(
         json!({
-            "a":{"output":{"x":{"type":"string"}},"run":"produce"},
-            "b":{"output":{"y":{"type":"integer"}},"run":"produce"},
-            "join":{"input":["x","y"],"run":"consume variables.x and variables.y"}
+            "a":{"output":{"x":{"type":"string"}},"run":{"executor":"builtin","content":"produce"}},
+            "b":{"output":{"y":{"type":"integer"}},"run":{"executor":"builtin","content":"produce"}},
+            "join":{"input":["x","y"],"run":{"executor":"builtin","content":"consume variables.x and variables.y"}}
         }),
         json!(["start -> [a,b] -> join", "join -> end"]),
     );
@@ -175,14 +176,14 @@ fn fork_uses_same_snapshot_then_unions_outputs_at_join() {
     no_facts(&out);
     let branch = json!({"input":{"maybe":{"type":["integer","null"]}},"output":{},"graph":{"variables":{"x":{"type":"integer","default":1}},"nodes":{
         "un":{"use":"builtin:unwrap","with":{"input":{"source":"maybe"},"output":{"value":"x"}}},
-        "a":{"input":["x"],"run":"work"},"b":{"run":"work"}
+        "a":{"input":["x"],"run":{"executor":"builtin","content":"work"}},"b":{"run":{"executor":"builtin","content":"work"}}
     },"edges":["start -> un","un.some -> end","un.none -> [a,b] -> end"]}});
     error(&compile(branch), "assignment.read");
 }
 
 #[test]
 fn concurrent_write_checks_only_parent_boundary_and_worker_exclusivity() {
-    let node = |field: &str| json!({"output":{field:{"type":"string"}},"graph":{"variables":{"private":{"type":"integer","default":0}},"nodes":{"n":{"run":"work","output":{field:{"type":"string"}}}},"edges":["start -> n","n -> end"]}});
+    let node = |field: &str| json!({"output":{field:{"type":"string"}},"graph":{"variables":{"private":{"type":"integer","default":0}},"nodes":{"n":{"run":{"executor":"builtin","content":"work"},"output":{field:{"type":"string"}}}},"edges":["start -> n","n -> end"]}});
     let doc = graph(
         json!({"a":node("x"),"b":node("y")}),
         json!(["start -> [a,b] -> end"]),
@@ -200,14 +201,14 @@ fn concurrent_write_checks_only_parent_boundary_and_worker_exclusivity() {
         json!(["start -> [a,b] -> c", "c -> [a,d] -> end"]),
     ] {
         let out = compile(graph(
-            json!({"a":{"run":"a"},"b":{"run":"b"},"c":{"run":"c"},"d":{"run":"d"}}),
+            json!({"a":{"run":{"executor":"builtin","content":"a"}},"b":{"run":{"executor":"builtin","content":"b"}},"c":{"run":{"executor":"builtin","content":"c"}},"d":{"run":{"executor":"builtin","content":"d"}}}),
             edges,
         ));
         error(&out, "topology.worker_exclusive");
         no_facts(&out);
     }
     let out = compile(graph(
-        json!({"a":{"run":"a","catch":{"err":"*"}},"b":{"run":"b"}}),
+        json!({"a":{"run":{"executor":"builtin","content":"a"},"catch":{"err":"*"}},"b":{"run":{"executor":"builtin","content":"b"}}}),
         json!(["start -> [a,b] -> end"]),
     ));
     error(&out, "topology.worker_ports");
@@ -218,43 +219,49 @@ fn topology_requires_complete_ports_reachability_and_escapable_cycles() {
     let cases = [
         (
             graph(
-                json!({"n":{"run":"work"}}),
+                json!({"n":{"run":{"executor":"builtin","content":"work"}}}),
                 json!(["start -> n", "start -> end", "n -> end"]),
             ),
             "topology.duplicate_source",
         ),
         (
-            graph(json!({"n":{"run":"work"}}), json!(["start -> n"])),
+            graph(
+                json!({"n":{"run":{"executor":"builtin","content":"work"}}}),
+                json!(["start -> n"]),
+            ),
             "topology.missing_route",
         ),
         (
             graph(
-                json!({"n":{"run":"work"}}),
+                json!({"n":{"run":{"executor":"builtin","content":"work"}}}),
                 json!(["start -> missing", "n -> end"]),
             ),
             "topology.unknown_node",
         ),
         (
             graph(
-                json!({"n":{"run":"work"}}),
+                json!({"n":{"run":{"executor":"builtin","content":"work"}}}),
                 json!(["start -> end", "n -> end"]),
             ),
             "topology.unreachable",
         ),
         (
-            graph(json!({"n":{"run":"work"}}), json!(["start -> n", "n -> n"])),
+            graph(
+                json!({"n":{"run":{"executor":"builtin","content":"work"}}}),
+                json!(["start -> n", "n -> n"]),
+            ),
             "topology.no_exit",
         ),
         (
             graph(
-                json!({"n":{"run":"work"}}),
+                json!({"n":{"run":{"executor":"builtin","content":"work"}}}),
                 json!(["start -> n", "n -> fail"]),
             ),
             "topology.no_normal_exit",
         ),
         (
             graph(
-                json!({"n":{"run":"work"}}),
+                json!({"n":{"run":{"executor":"builtin","content":"work"}}}),
                 json!(["start -> n", "n -> end.unknown"]),
             ),
             "topology.end_branch",
@@ -265,7 +272,7 @@ fn topology_requires_complete_ports_reachability_and_escapable_cycles() {
         error(&out, code);
         no_facts(&out);
     }
-    let doc = json!({"input":{},"output":{},"branches":{"yes":"ok"},"graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}});
+    let doc = json!({"input":{},"output":{},"branches":{"yes":"ok"},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}});
     error(&compile(doc), "topology.end_branch");
 }
 
@@ -281,9 +288,9 @@ fn iteration(inline: bool, map: bool) -> Value {
         iter["key"] = json!("key");
     }
     let node = if inline {
-        json!({"for_each":iter,"output":{"results":single},"branches":{"keep":"yes","drop":{"description":"skip","output":[]}},"graph":{"nodes":{"test":{"input":["item"],"output":{"results":single},"branches":{"keep":"yes","drop":{"description":"skip","output":[]}},"run":"read variables.item"}},"edges":["start -> test","test.keep -> end.keep","test.drop -> end.drop"]}})
+        json!({"for_each":iter,"output":{"results":single},"branches":{"keep":"yes","drop":{"description":"skip","output":[]}},"graph":{"nodes":{"test":{"input":["item"],"output":{"results":single},"branches":{"keep":"yes","drop":{"description":"skip","output":[]}},"run":{"executor":"builtin","content":"read variables.item"}}},"edges":["start -> test","test.keep -> end.keep","test.drop -> end.drop"]}})
     } else {
-        json!({"for_each":iter,"input":["item","index"],"output":{"results":single},"branches":{"keep":"yes","drop":{"description":"skip","output":[]}},"catch":{"err":"*"},"run":"read variables.item"})
+        json!({"for_each":iter,"input":["item","index"],"output":{"results":single},"branches":{"keep":"yes","drop":{"description":"skip","output":[]}},"catch":{"err":"*"},"run":{"executor":"builtin","content":"read variables.item"}})
     };
     json!({"input":{"items":collection},"output":{"results":collection},"graph":{"nodes":{"each":node},"edges":["start -> each","each -> end"]}})
 }
@@ -325,7 +332,7 @@ fn foreach_action_inline_and_call_have_single_outputs_and_aggregate_boundaries()
     main["output"]["results"]["additionalProperties"] =
         json!({"type":"array","items":{"type":"string"}});
     let target = source(
-        json!({"input":{"p":{"type":"string"}},"output":{"out":{"type":"array","items":{"type":"string"}}},"branches":{"some":"keep","empty":{"description":"skip","output":[]}},"run":"work"}),
+        json!({"input":{"p":{"type":"string"}},"output":{"out":{"type":"array","items":{"type":"string"}}},"branches":{"some":"keep","empty":{"description":"skip","output":[]}},"run":{"executor":"builtin","content":"work"}}),
     );
     let out = compile_sources(
         "main",
@@ -344,7 +351,7 @@ fn foreach_rejects_missing_lift_targets_capture_collisions_and_wrong_sources() {
     error(&compile(doc), "symbol.undeclared_output");
     let mut doc = iteration(false, false);
     doc["graph"]["nodes"]["each"]["input"] = json!(["index"]);
-    error(&compile(doc), "symbol.capture");
+    ok(&compile(doc));
     let mut doc = iteration(true, false);
     doc["graph"]["nodes"]["each"]["input"] = json!(["item"]);
     error(&compile(doc), "symbol.injected_collision");
@@ -378,7 +385,7 @@ fn foreach_rejects_missing_lift_targets_capture_collisions_and_wrong_sources() {
 fn inline_capture_isolation_and_independent_partial_analysis() {
     let mut doc = graph(
         json!({
-            "bad":{"input":["missing"],"run":"work"},
+            "bad":{"input":["missing"],"run":{"executor":"builtin","content":"work"}},
             "inside":{"output":{"x":{"type":"string"}},"graph":{"nodes":{"n":assign(json!({"value":"ready"}),"x")},"edges":["start -> n","n -> end"]}}
         }),
         json!(["start -> bad", "bad -> inside", "inside -> end"]),
@@ -398,7 +405,7 @@ fn inline_capture_isolation_and_independent_partial_analysis() {
 
 #[test]
 fn completion_enumerates_legal_paths_and_uses_same_subtype_filter() {
-    let doc = json!({"input":{"user":{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"},"profile":{"type":"object","properties":{"bio":{"type":"string"}}},"optional":{"type":"object","properties":{"secret":{"type":"string"}}}},"required":["name","age","profile"]},"map":{"type":"object","additionalProperties":{"type":"integer"}},"array":{"type":"array","items":{"type":"integer"}}},"output":{},"graph":{"variables":{"unbound":{"type":"string"}},"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}});
+    let doc = json!({"input":{"user":{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"},"profile":{"type":"object","properties":{"bio":{"type":"string"}}},"optional":{"type":"object","properties":{"secret":{"type":"string"}}}},"required":["name","age","profile"]},"map":{"type":"object","additionalProperties":{"type":"integer"}},"array":{"type":"array","items":{"type":"integer"}}},"output":{},"graph":{"variables":{"unbound":{"type":"string"}},"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}});
     let out = compile(doc);
     ok(&out);
     let analysis = &out.analysis[0];
@@ -453,14 +460,14 @@ fn compiled_source_depth_boundary_round_trips_through_canvas_json() {
         }
         for iterated in [false, true] {
             let mut doc = graph(
-                json!({"n":{"run":"work"}}),
+                json!({"n":{"run":{"executor":"builtin","content":"work"}}}),
                 json!(["start -> n", "n -> end"]),
             );
             doc["input"] = json!({"x":t});
             if iterated {
                 doc["graph"]["variables"] =
                     json!({"result":{"type":"array","items":{"type":"integer"}}});
-                doc["graph"]["nodes"]["n"] = json!({"run":"work","for_each":{"source":"x","item":"item"},"output":{"result":{"type":"integer"}}});
+                doc["graph"]["nodes"]["n"] = json!({"run":{"executor":"builtin","content":"work"},"for_each":{"source":"x","item":"item"},"output":{"result":{"type":"integer"}}});
             }
             let out = compile(doc);
             if arrays == 126 {
@@ -497,7 +504,7 @@ fn compiled_source_depth_boundary_round_trips_through_canvas_json() {
 
 #[test]
 fn marker_objects_are_rejected_in_every_query_typespec_position() {
-    let doc = json!({"input":{"x":{"type":"integer","enum":[1]}},"output":{},"graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}});
+    let doc = json!({"input":{"x":{"type":"integer","enum":[1]}},"output":{},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}});
     let out = compile(doc.clone());
     ok(&out);
     let analysis = serde_json::to_value(&out.analysis[0]).unwrap();
@@ -573,7 +580,7 @@ fn marker_objects_are_rejected_in_every_query_typespec_position() {
 #[test]
 fn canvas_json_arguments_are_bounded_and_preserve_numbers_and_ordinary_keys() {
     let out = json_text(
-        r#"{"input":{"x":{"type":"number","enum":[123456789012345678901234567890,1.000000000000000000000000001,1e10000]}},"output":{},"graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}}"#,
+        r#"{"input":{"x":{"type":"number","enum":[123456789012345678901234567890,1.000000000000000000000000001,1e10000]}},"output":{},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}}"#,
     );
     ok(&out);
     let mut analysis = out.analysis[0].clone();
@@ -649,12 +656,12 @@ fn canvas_json_arguments_are_bounded_and_preserve_numbers_and_ordinary_keys() {
 #[test]
 fn invalid_callee_bodies_cannot_justify_caller_assignment_facts() {
     let main = graph(
-        json!({"call":{"use":"workflow:bad","with":{"output":{"x":"x"}}},"independent":{"graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}}}),
+        json!({"call":{"use":"workflow:bad","with":{"output":{"x":"x"}}},"independent":{"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}}}),
         json!(["start -> call", "call -> independent", "independent -> end"]),
     );
     let mut main = main;
     main["output"] = json!({"x":{"type":"integer"}});
-    let bad = json!({"input":{},"output":{"x":{"type":"integer"}},"graph":{"nodes":{"n":{"run":"work"}},"edges":["start -> n","n -> end"]}});
+    let bad = json!({"input":{},"output":{"x":{"type":"integer"}},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}});
     let out = compile_sources(
         "main",
         [("main".into(), source(main)), ("bad".into(), source(bad))],
@@ -667,7 +674,7 @@ fn invalid_callee_bodies_cannot_justify_caller_assignment_facts() {
 #[test]
 fn exit_diagnostic_names_the_route_that_lacks_the_output() {
     let out = compile(
-        json!({"input":{},"output":{"x":{"type":"string"}},"graph":{"nodes":{"n":{"run":"work","output":{"x":{"type":"string"}},"branches":{"yes":"write","no":{"description":"skip","output":[]}}}},"edges":["start -> n","n.yes -> end","n.no -> end"]}}),
+        json!({"input":{},"output":{"x":{"type":"string"}},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"},"output":{"x":{"type":"string"}},"branches":{"yes":"write","no":{"description":"skip","output":[]}}}},"edges":["start -> n","n.yes -> end","n.no -> end"]}}),
     );
     error(&out, "assignment.exit");
     let exits: Vec<_> = out

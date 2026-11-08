@@ -22,7 +22,7 @@ impl FieldPath {
         let mut parts = text.split('.');
         let root = parts.next()?;
         let fields: Vec<_> = parts.map(str::to_owned).collect();
-        (identifier(root) && fields.iter().all(|f| identifier(f))).then(|| Self {
+        (control_id(root) && fields.iter().all(|f| control_id(f))).then(|| Self {
             root: root.into(),
             fields,
         })
@@ -43,7 +43,82 @@ pub fn identifier(s: &str) -> bool {
 }
 
 pub fn control_id(s: &str) -> bool {
-    identifier(s) && !matches!(s, "start" | "end" | "fail")
+    identifier(s)
+        && !matches!(
+            s,
+            "start"
+                | "end"
+                | "fail"
+                | "False"
+                | "None"
+                | "True"
+                | "and"
+                | "as"
+                | "assert"
+                | "async"
+                | "await"
+                | "break"
+                | "class"
+                | "continue"
+                | "def"
+                | "del"
+                | "elif"
+                | "else"
+                | "except"
+                | "finally"
+                | "for"
+                | "from"
+                | "global"
+                | "if"
+                | "import"
+                | "in"
+                | "is"
+                | "lambda"
+                | "nonlocal"
+                | "not"
+                | "or"
+                | "pass"
+                | "raise"
+                | "return"
+                | "try"
+                | "while"
+                | "with"
+                | "yield"
+        )
+}
+
+/// Builtin is closed; extensions retain opaque, ordered JSON configuration.
+/// The executor tag is an Identifier, not a restricted graph symbol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunSpec {
+    Builtin {
+        content: String,
+    },
+    Extension {
+        executor: String,
+        /// Executor-specific fields, excluding the discriminator itself.
+        config: Ordered<Value>,
+    },
+}
+
+impl Serialize for RunSpec {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        match self {
+            Self::Builtin { content } => {
+                map.serialize_entry("executor", "builtin")?;
+                map.serialize_entry("content", content)?;
+            }
+            Self::Extension { executor, config } => {
+                map.serialize_entry("executor", executor)?;
+                for (key, value) in config {
+                    map.serialize_entry(key, value)?;
+                }
+            }
+        }
+        map.end()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -159,10 +234,11 @@ pub enum Builtin {
 pub enum NodeBody {
     Run {
         input: Vec<String>,
+        /// Restricted scope in input declaration order, including explicit iteration captures.
+        input_schema: Symbols,
         output: Symbols,
         branches: Ordered<BranchContract>,
-        run: String,
-        references: Vec<FieldPath>,
+        run: RunSpec,
     },
     Graph {
         input: Vec<String>,
@@ -281,8 +357,8 @@ pub struct NormalizedGraph {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RootBody {
     Run {
-        run: String,
-        references: Vec<FieldPath>,
+        run: RunSpec,
+        input_schema: Symbols,
         timeout_ms: Option<Number>,
         retry: Option<Retry>,
     },

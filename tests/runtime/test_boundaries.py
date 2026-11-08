@@ -17,7 +17,11 @@ async def test_invalid_root_input_is_terminal_before_business_dispatch(execution
         seen.append(request)
         return {"output": {}}
 
-    document = {"input": {"n": INTEGER}, "output": {}, "run": "work"}
+    document = {
+        "input": {"n": INTEGER},
+        "output": {},
+        "run": {"executor": "builtin", "content": "work"},
+    }
     async with execution({"work": work}) as run:
         for inputs in ({}, {"n": True}, {"n": 1.0}, {"n": 1, "extra": 2}):
             assert (await run.failed(document, inputs)).type == "EngineError"
@@ -93,11 +97,14 @@ async def test_workflow_revalidates_remote_activity_response_and_uses_route(
     async with execution({}) as run:
         async with Worker(server.client, task_queue=run.queue + "-remote", activities=[remote]):
             result = await run.execute(
-                document, options={"task_queues": {"remote": run.queue + "-remote"}}
+                document, options={"task_queues": {"builtin": run.queue + "-remote"}}
             )
         assert len(seen) == expected_calls
         assert result["output"] == {"value": expected_value}
-    assert all(request["run_spec"] == "remote" for request in seen)
+    assert all(
+        request["run_spec"] == {"executor": "builtin", "content": "remote"} for request in seen
+    )
+    assert all(request["input_schema"] == {} for request in seen)
 
 
 async def test_query_tree_is_independent_and_iteration_siblings_keep_depth(execution):
@@ -170,7 +177,7 @@ async def test_float_lexical_category_and_extreme_numbers_survive_real_history(e
     echo_document = {
         "input": {"huge": INTEGER, "exponent": N},
         "output": {"huge": INTEGER, "exponent": N},
-        "run": "echo",
+        "run": {"executor": "builtin", "content": "echo"},
     }
     async with execution({"echo": echo}) as run:
         result = await run.execute(echo_document, extreme)

@@ -64,10 +64,19 @@ class Execution:
 @pytest.fixture
 def execution(server):
     @asynccontextmanager
-    async def run(executors):
+    async def run(executors=None):
         queue = str(uuid4())
         state = Execution(server, queue)
-        async with create_worker(server.client, queue, executors):
+        # These lifecycle tests inject a single executor backend with several
+        # scripted payloads. Builtin conformance tests use the real default.
+        registry = None
+        if executors:
+
+            async def dispatch(request, signal):
+                return await executors[request["run_spec"]["content"]](request, signal)
+
+            registry = {"builtin": dispatch}
+        async with create_worker(server.client, queue, registry):
             try:
                 yield state
             finally:

@@ -131,7 +131,9 @@ analyze_feedbacks:
       if "spam" in input.fb:
           return Branch.spam()
       if "URGENT" in input.fb:
-          return Branch.urgent(urgent_tickets={"id": "T-1", "reason": input.fb})
+          return Branch.urgent(
+              urgent_tickets=Output_urgent_tickets(id="T-1", reason=input.fb)
+          )
       return Branch.normal(normal_summaries=input.fb)
 ```
 

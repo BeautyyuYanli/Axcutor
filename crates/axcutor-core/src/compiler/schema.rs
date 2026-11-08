@@ -2,9 +2,7 @@
 //! not stop traversal. Partial ASTs remain private and never become a bundle.
 use super::*;
 use num_bigint::BigInt;
-use regex::Regex;
 use serde_json::{Map, Number};
-use std::sync::LazyLock;
 
 type Ds = Vec<Diagnostic>;
 
@@ -26,12 +24,8 @@ fn closed(m: &Map<String, Value>, allowed: &[&str], a: &Address, ds: &mut Ds) {
         );
     }
 }
-fn name(s: &str, restricted: bool, a: &Address, ds: &mut Ds) -> bool {
-    let valid = if restricted {
-        control_id(s)
-    } else {
-        identifier(s)
-    };
+fn name(s: &str, a: &Address, ds: &mut Ds) -> bool {
+    let valid = control_id(s);
     if !valid {
         a.error(
             ds,
@@ -60,7 +54,7 @@ fn strings(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Vec<String> {
     for (i, v) in items.iter().enumerate() {
         let at = a.at(&i.to_string());
         if let Some(s) = string(Some(v), &at, ds) {
-            if !name(&s, false, &at, ds) {
+            if !name(&s, &at, ds) {
                 continue;
             }
             if result.contains(&s) {
@@ -120,7 +114,7 @@ fn types(v: Option<&Value>, required: bool, a: &Address, ds: &mut Ds) -> Symbols
     let mut result = Symbols::new();
     for (n, t) in m {
         let at = a.at(n);
-        let valid = name(n, false, &at, ds);
+        let valid = name(n, &at, ds);
         match TypeSpec::parse(t) {
             Ok(t) if valid => {
                 result.insert(n.clone(), t);
@@ -147,7 +141,7 @@ fn branches(
     };
     for (b, v) in m {
         let at = a.at(b);
-        let valid = name(b, true, &at, ds);
+        let valid = name(b, &at, ds);
         let spec = match v {
             Value::String(d) => Some(BranchContract {
                 description: d.clone(),
@@ -258,7 +252,7 @@ pub(super) fn root(
             .and_then(|v| integer(Some(v), 1, None, &a.at("timeout_ms"), ds));
         let retry = retry(m.get("retry"), true, &a.at("retry"), ds);
         run.map(|run| RootBody::Run {
-            references: references(&run),
+            input_schema: input.clone(),
             run,
             timeout_ms,
             retry,
@@ -278,22 +272,36 @@ pub(super) fn root(
     )
 }
 
-fn run(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<String> {
-    let s = string(v, a, ds)?;
-    if s.trim().is_empty() {
-        a.error(ds, "node", "schema.run", "run must be nonempty");
-        None
-    } else {
-        Some(s)
+fn run(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<RunSpec> {
+    let m = object(v?, a, ds)?;
+    let executor = string(m.get("executor"), &a.at("executor"), ds)?;
+    if !identifier(&executor) {
+        a.at("executor").error(
+            ds,
+            "node",
+            "schema.executor",
+            "executor must be an Identifier",
+        );
+        return None;
     }
-}
-fn references(run: &str) -> Vec<FieldPath> {
-    static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\bvariables\.([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)").unwrap()
-    });
-    RE.captures_iter(run)
-        .filter_map(|c| FieldPath::parse(&c[1]))
-        .collect()
+    if executor != "builtin" {
+        return Some(RunSpec::Extension {
+            executor,
+            config: m
+                .iter()
+                .filter(|(key, _)| key.as_str() != "executor")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        });
+    }
+    closed(m, &["executor", "content"], a, ds);
+    let content = string(m.get("content"), &a.at("content"), ds)?;
+    if content.trim().is_empty() {
+        a.at("content")
+            .error(ds, "node", "schema.run", "content must be nonempty");
+        return None;
+    }
+    Some(RunSpec::Builtin { content })
 }
 
 fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
@@ -306,7 +314,7 @@ fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
         if let Some(m) = object(v, &a.at("variables"), ds) {
             for (n, v) in m {
                 let at = a.at("variables").at(n);
-                let valid = name(n, false, &at, ds);
+                let valid = name(n, &at, ds);
                 if let Some(fields) = object(v, &at, ds) {
                     let mut t = fields.clone();
                     let initial = t
@@ -328,7 +336,7 @@ fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
         Some(ns) if !ns.is_empty() => {
             for (id, raw) in ns {
                 let at = a.node(id);
-                let valid = name(id, true, &at, ds);
+                let valid = name(id, &at, ds);
                 let node = node(raw, &at, ds);
                 if valid {
                     if let Some(node) = node {
@@ -470,9 +478,9 @@ fn node(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedNode> {
         } else {
             run(m.get("run"), &a.at("run"), ds).map(|run| NodeBody::Run {
                 input,
+                input_schema: Symbols::new(),
                 output,
                 branches,
-                references: references(&run),
                 run,
             })
         }
@@ -519,7 +527,7 @@ fn bindings(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Bindings {
         if let Some(m) = object(v, &a.at("input"), ds) {
             for (k, v) in m {
                 let at = a.at("input").at(k);
-                name(k, false, &at, ds);
+                name(k, &at, ds);
                 let arg = match v {
                     Value::String(s) => FieldPath::parse(s).map(|path| ArgValue::Path { path }),
                     Value::Object(m) if m.len() == 1 && m.contains_key("value") => {
@@ -548,9 +556,9 @@ fn bindings(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Bindings {
         if let Some(m) = object(v, &a.at("output"), ds) {
             for (k, v) in m {
                 let at = a.at("output").at(k);
-                name(k, false, &at, ds);
+                name(k, &at, ds);
                 if let Some(n) = string(Some(v), &at, ds) {
-                    if name(&n, false, &at, ds) {
+                    if name(&n, &at, ds) {
                         if b.output.values().any(|v| v == &n) {
                             at.error(
                                 ds,
@@ -591,7 +599,7 @@ fn for_each(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<ForEach> {
         ("index", index.as_ref()),
     ] {
         if let Some(n) = n {
-            name(n, false, &a.at(label), ds);
+            name(n, &a.at(label), ds);
             if seen.contains(&n) {
                 a.at(label).error(
                     ds,
@@ -674,7 +682,7 @@ fn catches(v: Option<&Value>, atomic: bool, a: &Address, ds: &mut Ds) -> Ordered
     let mut used = vec![];
     for (b, v) in m {
         let at = a.at(b);
-        name(b, true, &at, ds);
+        name(b, &at, ds);
         if v.as_str() == Some("*") {
             if wildcard.is_some() {
                 at.error(

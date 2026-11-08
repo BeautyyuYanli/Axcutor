@@ -1,5 +1,5 @@
 //! Closed TypeSpec algebra, subtype relation and target-directed literal validation.
-use super::{Ordered, Symbols, identifier};
+use super::{Ordered, Symbols, control_id};
 use num_bigint::BigInt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use serde_json::{Value, json, value::RawValue};
@@ -129,7 +129,7 @@ impl TypeSpec {
                     .ok_or("properties must be a nonempty object")?;
                 let mut properties = Ordered::new();
                 for (k, val) in props {
-                    if !identifier(k) {
+                    if !control_id(k) {
                         return Err(format!("invalid property {k}"));
                     }
                     properties.insert(

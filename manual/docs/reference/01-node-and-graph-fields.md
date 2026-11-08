@@ -91,8 +91,17 @@ graph:
 
 | 字段 | 必填/可选 | 格式 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `executor` | **必填** | `builtin`（或宿主注册的扩展执行器名） | 执行器类型鉴别键。 |
+| `executor` | **必填** | `Identifier` | 执行器类型鉴别键：`builtin` 使用下述闭合配置，其他合法标识符对应宿主注册的扩展执行器，其特定配置字段保留并交给对应后端。此处使用通用标识符，不排除 Python 关键字。 |
 | `content` | **必填**（当 `executor: builtin` 时） | 非空多行 Python 代码字符串 | 作为 `async def execute(input: Input) -> ReturnType:` 的函数体执行。通过只读冻结模型 `input.<var>` 读取输入快照（其中 `type: number` 自动映射为原生 `float`）；无分支节点返回 `Output(...)`，有分支节点返回 `Branch.<branch_id>(...)`。 |
+
+结构体输出必须显式构造生成的 `Output_<path>` 模型。非必填属性可以省略；只有属性类型可空时才允许显式传入 `None`：
+
+```python
+# 假设 user.nickname 非必填且不可空，user.note 非必填且可空。
+return Output(user=Output_user(id=1, note=None))  # 输出省略 nickname，保留 note: null。
+```
+
+Python Worker 默认提供 `builtin`；`options.task_queues` 按执行器名路由。需要导出独立 Python 源码进行类型检查时，可调用 `axcutor_runtime.builtin.synthesize_module(input_schema, output_schema, branches_contract, content)`，其结果包含 `source` 与 `line_offset`。生成源码使用 Python 3.11 支持的 `TypeAlias` 表达返回联合类型；数值枚举由严格数值注解与枚举校验器共同约束，因为 Python `Literal` 不支持小数字面量。超过原生有限 `float` 范围的 `number` 输入在模型边界产生 `contract` 异常。
 
 ### 2. `with`（用于 `use` 节点）
 
