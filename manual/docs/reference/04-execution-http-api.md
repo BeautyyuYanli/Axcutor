@@ -22,17 +22,17 @@ Content-Type: application/json
 | 字段 | 类型 | 规则 |
 | --- | --- | --- |
 | `execution_id` | string，可省略 | 非空执行 ID；省略时生成 UUID。保留期内相同 ID 返回 `409`，不复用已有执行。 |
-| `entry` | string | 入口在 `sources` 中的相对 POSIX 路径，不包含 `.`、`..` 路径段。 |
-| `sources` | object | 路径到 `{ "format": "yaml" 或 "json", "text": "源码" }` 的映射；应提供全部传递引用。 |
+| `entry` | string | 入口工作流标识：已挂载的公开工作流包路径（`PackagePath`，如 `"billing.charge"`）或独立匿名入口标识 `"__main__"`。 |
+| `sources` | object | 工作流标识（`PackagePath` 或 `"__main__"`）到 `{ "format": "yaml" 或 "json", "text": "源码" }` 的映射；应提供全部传递引用的工作流定义。 |
 | `input` | object，可省略 | 默认 `{}`；字段集合和类型必须符合入口输入契约。 |
 
 局部字段示例：
 
 ```json
-{"entry":"main.yaml","sources":{"main.yaml":{"format":"yaml","text":"..."}},"input":{"n":7}}
+{"entry":"__main__","sources":{"__main__":{"format":"yaml","text":"..."}},"input":{"n":7}}
 ```
 
-`text` 应为完整合法工作流，示例中的 `...` 只表示源码位置。路径按 source ID 精确匹配，`use: workflow:billing/verify.yaml` 引用 `sources["billing/verify.yaml"]`，不相对于调用文档解析。未被入口闭包引用的文档不参与编译。
+`text` 应为完整合法工作流，示例中的 `...` 只表示源码位置。工作流标识按点分包路径（`PackagePath`）精确匹配，`use: workflow:billing.verify` 引用 `sources["billing.verify"]`，并在编译期校验 `_` 前缀私有包可见性边界（如 `"__main__"` 不可调用私有子包 `billing._internal`，也不可使用 `executor: module`）。未被入口闭包引用的工作流不参与编译。
 
 成功返回 `202 Accepted`，附带资源路径 `Location: /v1/executions/{execution_id}` 和初始 `Execution`。短工作流可能在响应前完成，响应可直接包含终态。提交会通过有期限的活跃查询确认 Worker 能响应；无响应时返回 `503`。后端已接受的执行不会因查询超时被自动撤销。调用方可指定 ID，并在收到不确定的 `503` 后查询该 ID。
 
@@ -76,7 +76,7 @@ POST /v1/executions/order-001:cancel
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `kind` | string | `function`、`block`、`iteration`。 |
-| `address` | string | 根为入口路径；后代为调用路径，可包含迭代 `[index]`。 |
+| `address` | string | 根为入口工作流标识；后代为调用路径，可包含迭代 `[index]`。 |
 | `cursor` | string | `start`、正在执行的节点 ID、节点出口 `id.branch`；根 run 为 `run`。 |
 | `call_depth` | integer | 根为 1；函数和块调用加 1，迭代帧不增加。 |
 | `steps` | integer | 当前图累计激活步数。 |
@@ -84,7 +84,7 @@ POST /v1/executions/order-001:cancel
 | `variables` | object | 当前帧中已绑定变量；未绑定变量不出现。 |
 | `children` | Frame[] | 在途函数、内联图与并发迭代的后代帧。 |
 
-例如，一个迭代下的函数地址可为 `main.yaml/batch[0]/invoke`。内部帧号、父帧号和后端子执行 ID 不进入 HTTP 资源。移交到后端子工作流的调用通过只读查询还原到同一拓扑路径；树的不同部分是在查询期间分别观察的，不承诺跨后端执行的原子内存快照。根执行在查询期间结束时，最终响应采用终态并清空帧。
+例如，一个迭代下的函数地址可为 `__main__/batch[0]/invoke`（或 `billing.charge/batch[0]/invoke`）。内部帧号、父帧号和后端子执行 ID 不进入 HTTP 资源。移交到后端子工作流的调用通过只读查询还原到同一拓扑路径；树的不同部分是在查询期间分别观察的，不承诺跨后端执行的原子内存快照。根执行在查询期间结束时，最终响应采用终态并清空帧。
 
 iteration 的 `variables` 包含父帧锁定快照中的全部已绑定变量及当前 `item`、`key`、`index` 注入项。该观察视图不扩大执行输入：执行器和内联块仍只接收其显式声明的读取集合及适用的注入项。
 
@@ -109,7 +109,7 @@ iteration 的 `variables` 包含父帧锁定快照中的全部已绑定变量及
 | HTTP 状态 | code | 场景 |
 | --- | --- | --- |
 | 400 | `invalid_json` | JSON 语法错误、重复键、非有限数值或非法 UTF-8。 |
-| 400 | `invalid_request` | 必填字段缺失、类型不符、额外字段或非法入口路径。 |
+| 400 | `invalid_request` | 必填字段缺失、类型不符、额外字段或非法入口工作流标识。 |
 | 404 | `execution_not_found` | 执行不存在或不是 Axcutor 根执行。 |
 | 409 | `execution_already_exists` | 执行 ID 冲突，包括已结束执行。 |
 | 422 | `compilation_failed` | 静态编译失败；details 为 `{ "diagnostics": Diagnostic[] }`，保持编译器诊断字段。 |

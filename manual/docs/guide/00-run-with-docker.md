@@ -20,7 +20,7 @@ docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/
 {"branch":null,"output":{"doubled":[6,2,4],"total":12}}
 ```
 
-`main.yaml` 对 `[3,1,2]` 以并发度 2 调用 `double.yaml`，按输入顺序汇集结果，再执行 Python 汇总 Activity。每个迭代 Activity 等待 5 秒，便于观察运行状态。工作流提交后，修改源文件不会改变该次执行使用的快照。
+入口工作流对 `[3,1,2]` 以并发度 2 调用子工作流，按输入顺序汇集结果，再执行 Python 汇总 Activity。每个迭代 Activity 等待 5 秒，便于观察运行状态。工作流提交后，修改源文件不会改变该次执行使用的快照。
 
 ## 在 Web UI 查看状态
 
@@ -32,7 +32,7 @@ docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/
 - History 中的 Activity 事件展示输入快照、调度、完成结果或失败原因。
 - 示例的子工作流调用在同一个解释器内执行，因此迭代 Activity 出现在入口执行的 History 中。
 - `builtin:*` 确定性算子在 Workflow 内存中执行，不单独产生 Activity 事件。
-- 使用 `get_runtime_snapshot` Query 查看活跃栈帧、游标、步数和 `env_json`；完成后返回 `{"frames":[]}`。
+- 使用 `get_runtime_snapshot` Query 查看活跃栈帧、游标、步数和 `env_json`; 完成后返回 `{"frames":[]}`。
 
 也可直接通过 Temporal CLI 查询：
 
@@ -41,20 +41,20 @@ docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/
 docker compose exec temporal temporal workflow query --workflow-id <workflow-id> --type get_runtime_snapshot
 ```
 
-## 提交自己的 YAML/JSON 文件
+## 提交自己的工作流包或入口文件
 
-`cli` 服务默认将仓库的 `examples/` 只读挂载到 `/examples`。外部目录可额外挂载，入口文件必须位于源根目录内：
+`cli` 服务默认将仓库的 `examples/` 只读挂载到 `/examples`。外部目录可额外挂载：
 
 ```sh
 # 将本机目录挂载为 /workflows，并提交其中的入口与输入文件。
 docker compose run --rm -v "$PWD/my-workflows:/workflows:ro" cli run /workflows/main.yaml --source-root /workflows --input /workflows/input.json
 ```
 
-源根目录默认是入口文件所在目录。其下 `.yaml`、`.yml`、`.json` 文件以相对 POSIX 路径作为 source ID，保留扩展名；仅入口及其引用闭包参与编译：
+在统一工作流包模型下，宿主挂载的根包目录（如 `<source-root>/billing`）中任何包含 `__axcutor__.yaml`（或 `__axcutor__.json`）的包目录均按点分逻辑包路径（`PackagePath`）注册；独立单文件入口则以保留匿名标识 `"__main__"` 编译，仅入口及其 `use` 引用闭包参与编译：
 
 ```yaml
-# 对应 <source-root>/billing/verify.yaml，不相对于当前调用文件解析。
-use: workflow:billing/verify.yaml
+# 对应挂载根下的 billing/verify/__axcutor__.yaml 工作流包，按点分包路径引用。
+use: workflow:billing.verify
 ```
 
 输入文件必须是 JSON object，省略 `--input` 时使用 `{}`。命令在联系后端前完成静态编译和入口输入契约校验，使用运行时 JSON codec 保留数值精度和对象键序。编译、输入校验或提交失败时返回非零退出码。默认等待模式还按执行终态返回退出码：`completed` 为零，`failed` 或 `cancelled` 为非零。
@@ -78,7 +78,7 @@ docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/
 # 源码以字符串传入；只编译入口及其 use 引用闭包。
 curl -i http://localhost:8000/v1/executions \
   -H 'Content-Type: application/json' \
-  -d '{"execution_id":"http-demo","entry":"main.yaml","sources":{"main.yaml":{"format":"yaml","text":"input:\n  n: {type: integer}\noutput:\n  n: {type: integer}\nrun:\n  executor: builtin\n  content: return Output(n=input.n)\n"}},"input":{"n":7}}'
+  -d '{"execution_id":"http-demo","entry":"__main__","sources":{"__main__":{"format":"yaml","text":"input:\n  n: {type: integer}\noutput:\n  n: {type: integer}\nrun:\n  executor: builtin\n  content: return Output(n=input.n)\n"}},"input":{"n":7}}'
 
 # 查询终态输出或当前活跃帧；取消操作等待执行器协同清理。
 curl http://localhost:8000/v1/executions/http-demo
@@ -91,7 +91,7 @@ curl -X POST http://localhost:8000/v1/executions/http-demo:cancel
 
 ## Worker 生命周期与数据保存
 
-`worker` 服务持续轮询 `axcutor` task queue，解释 workflow 并执行受信任的 `run.executor: builtin` Python 代码。接到停止信号后，Worker 最多等待 20 秒让 Activity 完成，再按 Temporal 协议关闭；Compose 的停止宽限期为 30 秒。
+`worker` 服务持续轮询 `axcutor` task queue，解释 workflow 并执行受信任的 `run.executor: builtin` 与 `run.executor: module` Python 代码。接到停止信号后，Worker 最多等待 20 秒让 Activity 完成，再按 Temporal 协议关闭；Compose 的停止宽限期为 30 秒。
 
 ```sh
 # 查看基础设施和 Worker 状态。

@@ -1,6 +1,6 @@
 # 用户速查字典（User Reference）
 
-Axcutor 工作流使用声明式的 YAML 或 JSON 文档描述数据契约与控制流图。一份工作流文档本质上是一个具备显式输入输出契约的根节点（Root Node），其执行体既可以是直接挂载 `run` 的单动作节点，也可以是由 `graph` 承载的多节点控制流图。
+Axcutor 工作流使用声明式的 YAML 或 JSON 文档描述数据契约与控制流图。一份工作流包清单（`__axcutor__.yaml`）或单文件入口工作流本质上是一个具备显式输入输出契约的根节点（Root Node），其执行体既可以是直接挂载 `run` 的单动作节点，也可以是由 `graph` 承载的多节点控制流图。
 
 ::: info 实现规范参引
 若需查阅编译器符号表决议算法、全路径静态定值方程或运行时栈帧状态机等引擎底层实现细节，请参阅 [形式化规范（`spec/`）](../../spec/index.md)。
@@ -15,8 +15,8 @@ Axcutor 工作流使用声明式的 YAML 或 JSON 文档描述数据契约与控
 1. **根节点契约层（Root Node Contract）**：位于文档顶层，通过必填的 `input` 与 `output` 映射表声明整份工作流对外暴露的参数类型契约（无输入或无输出时须显式声明为空字典 `{}`），并可通过可选的 `branches` 声明根级排他控制分支及其按需交付的输出变量子集。
 2. **控制流图容器层（Graph Container）**：由顶层或内联子图节点的 `graph` 字段开启，负责维护当前图级作用域（Graph Scope）。该层可配置当前栈帧的最大执行步数 `max_steps`，并通过 `variables` 显式声明图级局部变量的 `TypeSpec` 与可选的静态初值 `default`。
 3. **图内多态子节点层（Inner Nodes）**：挂载于 `graph.nodes` 映射表下，每个子节点必须且只能选择以下三种多态形态之一：
-   - **动作节点（`run`）**：声明 `input` / `output` 变量契约，并通过结构化 `run: { executor: ..., ... }`（如内置受信任 Python 执行器 `executor: builtin`）交由对应执行器运行。
-   - **调用节点（`use`）**：调用跨文件工作流（`workflow:<path>`）或运行时内建算子（`builtin:<op>`），通过 `with.input` 与 `with.output` 显式完成跨边界的参数绑定与返回值写回。
+   - **动作节点（`run`）**：声明 `input` / `output` 变量契约，并通过结构化 `run: { executor: ..., ... }`（如内置内联 Python 执行器 `executor: builtin` 或包内模块级 Python 执行器 `executor: module`）交由对应执行器运行。
+   - **调用节点（`use`）**：调用跨包工作流（`workflow:<pkg_path>`）或运行时内建算子（`builtin:<op>`），通过 `with.input` 与 `with.output` 显式完成跨边界的参数绑定与返回值写回。
    - **内联块级子图（`graph`）**：在当前图内嵌套独立的子图作用域，按名捕获外层变量并导出子图输出。
    此外，子节点可挂载同构集合遍历（`for_each`）、单次超时（`timeout_ms`）、原地重试（`retry`）与可恢复异常捕获（`catch`）四类执行修饰符。
 4. **控制流连边层（Control Edges）**：挂载于 `graph.edges` 列表下，使用直观的箭头 DSL 串联虚拟起点 `start`、图内子节点、正常汇聚终点 `end[.branch]` 与异常中止汇点 `fail`，驱动图栈帧内的并发派发、分支路由与循环迭代。
@@ -27,10 +27,10 @@ Axcutor 工作流使用声明式的 YAML 或 JSON 文档描述数据契约与控
 
 在编写工作流文档时，各层级共享以下基础语法规则：
 
-- **标识符命名规范**：所有变量名、节点 ID、分支名及结构体字段名均须匹配正则 `^[a-zA-Z_][a-zA-Z0-9_]*$`，且不得占用控制流保留字（`start`、`end`、`fail`）或宿主代码生成保留关键字（Python `keyword.kwlist` 全部 35 个硬关键字，如 `from`、`class`、`def`、`return`、`async`、`await` 等），亦不得包含点号 `.`（点号专用于分支限定与结构体静态字段读取路径）。
+- **标识符与包段命名规范**：所有变量名、节点 ID、分支名及结构体字段名均须匹配受限标识符规则 `^[a-zA-Z_][a-zA-Z0-9_]*$`，且不得占用控制流保留字（`start`、`end`、`fail`）或宿主代码生成保留关键字（Python `keyword.kwlist` 全部 35 个硬关键字，如 `from`、`class`、`def`、`return`、`async`、`await` 等），亦不得包含点号 `.`（点号专用于工作流包路径、分支限定与结构体静态字段读取路径）。对于工作流包路径（`PackagePath`），首段根包名须以字母开头（公开段），第 2 段起以 `_` 开头的段表示归属于其紧邻父包前缀的**私有子包**（跨包越界调用触发编译期错误 `visibility.private_workflow`）。
 - **显式静态类型声明**：所有引入新变量绑定或定义数据契约的位置（包括根节点 `input` / `output`、`graph.variables` 以及 `run` / 内联 `graph` 子节点的 `output`）均须显式标注 `TypeSpec`；编译器不做隐式类型推导，也不允许通过子节点输出隐式创建未在图级符号表中声明的变量。
 - **读取与写入位置区分**：
-  - **只读输入位置**：`run` 或内联 `graph` 子节点的 `input` 声明为当前图顶层变量名列表（`[<var_name>, ...]`）；在 `executor: builtin` 的 Python 代码中，通过只读模型属性 `input.<var_name>`（及结构体嵌套属性 `input.<var_name>.<field>`）读取输入快照；`use` 节点的 `with.input` 除绑定顶层变量外，还支持传入常量字面量或结构体静态字段点号路径（`<var>.<field>...`）。
+  - **只读输入位置**：`run` 或内联 `graph` 子节点的 `input` 声明为当前图顶层变量名列表（`[<var_name>, ...]`）；在 `executor: builtin` 与 `executor: module` 的 Python 代码中，通过只读模型属性 `input.<var_name>`（及结构体嵌套属性 `input.<var_name>.<field>`）读取输入快照；`use` 节点的 `with.input` 除绑定顶层变量外，还支持传入常量字面量或结构体静态字段点号路径（`<var>.<field>...`）。
   - **写入输出位置**：子节点 `output` 与 `use` 节点的 `with.output` 仅允许绑定当前图作用域的顶层可写变量名（目标变量须属于 `graph.variables` 或根/内联子图的 `output`，严禁覆写只读的 `input` 参数或做深层字段部分覆写）。
 
 ---
@@ -68,7 +68,7 @@ graph:
   # 3. 图内多态子节点层（Inner Nodes：run / use / graph 三选一）
   # ==========================================================
   nodes:
-    # 形态 A：动作节点（run）
+    # 形态 A：动作节点（run：builtin 内联代码或 module 包内模块）
     <action_node_id>:
       for_each: { ... }                 # 可选：同构集合遍历修饰符
       timeout_ms: 5000                  # 可选：单次尝试超时上限（毫秒）
@@ -79,13 +79,13 @@ graph:
         <out_var>: <TypeSpec>
       branches: { ... }                 # 可选：排他控制分支
       run:
-        executor: builtin
+        executor: builtin               # 或 executor: module（配合 content: ".<local_path>"）
         content: |
           return Branch.<choice>(<out_var>=...)
 
-    # 形态 B：跨文件工作流或内建算子调用节点（use）
+    # 形态 B：跨包工作流或内建算子调用节点（use）
     <call_node_id>:
-      use: workflow:<path>              # 或 use: builtin:<op>
+      use: workflow:<pkg_path>          # 或 use: builtin:<op>
       with:
         input: { <param>: <binding> }   # 显式传入变量名、结构体静态字段路径或常量字面量
         output: { <field>: <var_name> } # 显式将需要的输出字段映射回当前图顶层变量（未列出的输出自动忽略）

@@ -1,6 +1,6 @@
 # 01. 文档根结构与三类节点文法规范
 
-本规范定义 Axcutor 工作流文档的源格式约束、基础词法与原语类型、顶层 AST 结构、图内三类节点（`run`、`graph`、`use`）的形态鉴别准则、分支关联输出契约（`BranchSpec`），以及控制流图容器（`GraphSpec`）与节点修饰符子结构（`ForEachSpec`、`RetrySpec`、`CatchSpec`）的形式化良构条件。
+本规范定义 Axcutor 工作流文档的源格式约束、基础词法与原语类型、工作流包点分寻址文法、顶层 AST 结构、图内三类节点（`run`、`graph`、`use`）的形态鉴别准则、分支关联输出契约（`BranchSpec`），以及控制流图容器（`GraphSpec`）与节点修饰符子结构（`ForEachSpec`、`RetrySpec`、`CatchSpec`）的形式化良构条件。
 
 ---
 
@@ -34,15 +34,29 @@
 * **受限标识符子类型（`RestrictedIdentifier`）**：排除了全局保留字集合 $\mathcal{R}$ 的合法标识符：
   $$\text{RestrictedIdentifier} = \text{NodeId} = \text{BranchId} = \text{CatchBranchId} ::= \text{Identifier} \setminus \mathcal{R}$$
   工作流中的所有用户自定义符号名——包括节点名 `NodeId`、正常分支名 `BranchId`、异常捕获分支名 `CatchBranchId`、顶层或节点的 `input` / `output` 变量名、`graph.variables` 变量名、`for_each` 的 `item` / `key` / `index` 绑定名，以及 `TypedDict`（`type: object` + `properties`）中的属性字段名——均必须属于 $\text{Identifier} \setminus \mathcal{R}$。
+* **包路径段与点分包寻址文法（`PackageSegment`、`PackagePath`、`LocalModuleSpec`、`UseTargetSpec`）**：
+  * **包路径段（`PackageSegment`）**：排除了 Python 硬关键字集合 $\mathcal{R}_{\text{py}}$ 的合法 ASCII 标识符，按是否以下划线 `_` 开头划分为公开路径段（`PublicSegment`）与内部私有路径段（`PrivateSegment`）：
+    $$\text{PackageSegment} ::= \text{Identifier} \setminus \mathcal{R}_{\text{py}}$$
+    $$\text{PublicSegment} ::= \{ s \in \text{PackageSegment} \mid \lnot \text{starts\_with}(s, \texttt{"\_"}) \}$$
+    $$\text{PrivateSegment} ::= \{ s \in \text{PackageSegment} \mid \text{starts\_with}(s, \texttt{"\_"}) \}$$
+  * **点分工作流包路径（`PackagePath`）**：每个具名工作流对应逻辑命名空间中的一个点分包路径（物理目录树中唯一对应一个包含 `__axcutor__.yaml` 的文件夹），首段（顶层挂载根包名 `RootPackageName`）必须为 `PublicSegment` 且不得为系统保留入口名 `"__main__"`：
+    $$\text{PackagePath} ::= \text{PublicSegment} \; ( \texttt{"."} \; \text{PackageSegment} )^* \quad (\text{首段 } \neq \texttt{"\_\_main\_\_"})$$
+    *(注：独立匿名入口文档使用系统保留标识 `"__main__"`，不属于可挂载或可被调用的 `PackagePath`；严禁在 `PackagePath` 中出现斜杠 `/`、相对路径段 `.` / `..`、`__axcutor__` 或 `.yaml` / `.yml` / `.json` 文件扩展名。)*
+  * **包内私有 Python 模块单点相对路径（`LocalModuleSpec`）**：用于 `executor: "module"` 绑定当前工作流包文件夹内部的 `.py` 实现模块，仅允许单点包内相对路径（禁止跨包绝对路径与 `..` 上级相对路径）：
+    $$\text{LocalModuleSpec} ::= \texttt{"."} \mid \texttt{"."} \; \text{LocalPath}, \quad \text{LocalPath} ::= \text{PackageSegment} \; ( \texttt{"."} \; \text{PackageSegment} )^*$$
+  * **调用目标规格（`UseTargetSpec`）**：`CallNode` 中 `use` 字段的值类型，仅支持跨包工作流调用（从根包起始的绝对点分包路径 `PackagePath`）或内建确定性算子调用：
+    $$\text{UseTargetSpec} ::= \texttt{"workflow:"} \; \text{PackagePath} \mid \texttt{"builtin:"} \; \text{BuiltinOp}$$
 * **数值原语类型（`PositiveInt`、`NonNegativeInt`）**：
   $$\text{PositiveInt} = \mathbb{Z}_{\ge 1} = \{n \in \mathbb{Z} \mid n \ge 1\}, \quad \text{NonNegativeInt} = \mathbb{Z}_{\ge 0} = \{n \in \mathbb{Z} \mid n \ge 0\}$$
 * **原子执行体规格（`RunSpec`）**：`run` 字段的值类型，必须是以 `executor` 字段作为唯一鉴别键（Discriminator）的带标签联合映射对象（Tagged Union Mapping），不支持裸字符串简写：
-  $$\text{RunSpec} ::= \text{BuiltinRunSpec} \mid \text{ExtensibleExecutorRunSpec}$$
+  $$\text{RunSpec} ::= \text{BuiltinRunSpec} \mid \text{ModuleRunSpec} \mid \text{ExtensibleExecutorRunSpec}$$
   $$\text{BuiltinRunSpec} ::= \{\; \texttt{executor}: \texttt{"builtin"},\; \texttt{content}: \text{NonEmptyString} \;\}$$
-  $$\text{ExtensibleExecutorRunSpec} ::= \{\; \texttt{executor}: \text{Identifier} \setminus \{\texttt{"builtin"}\},\; \dots \text{（执行器特定配置字段）} \;\}$$
+  $$\text{ModuleRunSpec} ::= \{\; \texttt{executor}: \texttt{"module"},\; \texttt{content}: \text{LocalModuleSpec} \;\}$$
+  $$\text{ExtensibleExecutorRunSpec} ::= \{\; \texttt{executor}: \text{Identifier} \setminus \{\texttt{"builtin"}, \texttt{"module"}\},\; \dots \text{（执行器特定配置字段）} \;\}$$
   其中：
   * `executor`（必填）：非空合法标识符（`Identifier`），标识目标执行器类型；
-  * 当 `executor == "builtin"` 时（`BuiltinRunSpec`）：必须且只能包含 `executor: "builtin"` 与 `content: NonEmptyString`（满足 $|\text{trim}(\text{content})| \ge 1$ 的 Python 源码文本）两个键，出现任何额外未知字段均在编译期报错。其代码生成与运行期契约详见 [`02-builtin-python-executor.md`](../05-executor-abi/02-builtin-python-executor.md)。
+  * 当 `executor == "builtin"` 时（`BuiltinRunSpec`）：必须且只能包含 `executor: "builtin"` 与 `content: NonEmptyString`（满足 $|\text{trim}(\text{content})| \ge 1$ 的 Python 源码文本）两个键，出现任何额外未知字段均在编译期报 `schema.unknown_field` 错误。其代码生成与运行期契约详见 [`02-builtin-python-executor.md`](../05-executor-abi/02-builtin-python-executor.md)。
+  * 当 `executor == "module"` 时（`ModuleRunSpec`）：必须且只能包含 `executor: "module"` 与 `content: LocalModuleSpec` 两个键（出现任何额外未知字段均报 `schema.unknown_field` 错误；若 `content` 不满足单点相对路径文法 `LocalModuleSpec`，在 `/run/content` 处报 `schema.run` 错误；若所属工作流为匿名入口 `"__main__"`，编译期报 `module.anonymous_package` 错误）。其包同构布局、契约模板 SHA 校验与运行期契约详见 [`03-module-python-executor.md`](../05-executor-abi/03-module-python-executor.md)。
 
 ---
 
@@ -72,7 +86,7 @@
 | :--- | :--- | :--- | :--- |
 | **`ActionNode`** | `run` | `input: List<RestrictedIdentifier>`<br>`output: Map<RestrictedIdentifier, TypeSpec>`<br>`branches: Map<BranchId, BranchSpec>`<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `with`, `graph`, `use` |
 | **`InlineGraphNode`** | `graph` | `input: List<RestrictedIdentifier>`<br>`output: Map<RestrictedIdentifier, TypeSpec>`<br>`branches: Map<BranchId, BranchSpec>`<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `with`, `run`, `use` |
-| **`CallNode`** | `use` | `with: WithSpec`<br>*(以下仅当 `use` 为 `workflow:<path>` 时允许，为 `builtin:<op>` 时禁止)*：<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `input`, `output`, `branches`, `run`, `graph` |
+| **`CallNode`** | `use` | `with: WithSpec`<br>*(以下仅当 `use` 为 `workflow:<pkg_path>` 时允许，为 `builtin:<op>` 时禁止)*：<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `input`, `output`, `branches`, `run`, `graph` |
 
 * **`input` 列表去重约束**：在 `ActionNode` 与 `InlineGraphNode` 中，`input` 若声明，必须为无重复元素的受限顶层变量标识符列表 `List<RestrictedIdentifier>`。
 
@@ -112,7 +126,7 @@
 
 ### 1. 集合遍历修饰符（`ForEachSpec`）
 
-当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<path>`）声明 `for_each` 时，其校验职责严格划分为 **阶段 01（AST 结构良构性）** 与 **阶段 02（静态类型与符号表检查）** 两层：
+当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<pkg_path>`）声明 `for_each` 时，其校验职责严格划分为 **阶段 01（AST 结构良构性）** 与 **阶段 02（静态类型与符号表检查）** 两层：
 
 #### (a) 阶段 01：AST 语法与结构良构条件（Phase 1 Structural Well-Formedness）
 
@@ -126,7 +140,7 @@
 * **挂载 `for_each` 节点的有效输出非空约束**：
   * 挂载了 `for_each` 的节点 $N$ 必须向外层图声明至少一个目标输出变量（即 $OutVars(N) \neq \emptyset$）：
     * 当 $N$ 为 `ActionNode` 或 `InlineGraphNode` 时：$\text{dom}(N.\text{output}) \neq \emptyset$；
-    * 当 $N$ 为 `CallNode`（`use: workflow:<path>`）时：经 $N.\text{with.output}$ 绑定的有效目标变量集合非空（$\text{values}(N.\text{with.output}) \neq \emptyset$）。
+    * 当 $N$ 为 `CallNode`（`use: workflow:<pkg_path>`）时：经 $N.\text{with.output}$ 绑定的有效目标变量集合非空（$\text{values}(N.\text{with.output}) \neq \emptyset$）。
 
 #### (b) 阶段 02：源集合静态类型与局部符号约束（Phase 2 Static Type Constraints）
 
@@ -142,11 +156,10 @@
 
 ### 2. 原地快照重试修饰符（`RetrySpec`）
 
-当 `RootRunNode`、`ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<path>`）声明 `retry` 时，其值必须为满足以下良构性公理的映射对象：
+当 `RootRunNode`、`ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<pkg_path>`）声明 `retry` 时，其值必须为满足以下良构性公理的映射对象：
 
 * **`max_attempts: PositiveInt`（必填）**：必须为 $\ge 2$ 的正整数（含首次执行在内至少允许 2 次尝试）。
-* **`backoff_ms?: NonNegativeInt`（可选，默认 `0`）**：必须为 $\ge 0$ 的非负整数。
-* **`on?: List<RecoverableSelector>`（可选，默认 `["execution", "timeout"]`）**：
+* **`backoff_ms?: NonNegativeInt`（可选，默认 `0`）**：必须为 $\ge 0$ 的非负整数。\n* **`on?: List<RecoverableSelector>`（可选，默认 `["execution", "timeout"]`）**：
   * 必须为非空且无重复元素的列表，其中每个元素必须属于可恢复异常选择器全集：
     $$\mathcal{S}_{\text{all}} = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}, \texttt{"max\_steps"}\}$$
   * **原子 `run` 节点禁止包含 `"max_steps"`**：当所属节点为 `ActionNode` 或 `RootRunNode` 时，因原子 `run` 执行体不存在图步数计数器，必须满足：
@@ -155,7 +168,7 @@
 
 ### 3. 异常捕获修饰符（`CatchSpec`）
 
-当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<path>`）声明 `catch` 时，其值必须为非空映射 `Map<CatchBranchId, List<RecoverableSelector> | "*">`，且满足以下良构性公理：
+当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<pkg_path>`）声明 `catch` 时，其值必须为非空映射 `Map<CatchBranchId, List<RecoverableSelector> | "*">`，且满足以下良构性公理：
 
 * **分支名合法性与互斥约束**：
   * 每个键 $c \in \text{dom}(N.\text{catch})$ 必须为合法 `CatchBranchId`（即属于 $\text{Identifier} \setminus \mathcal{R}$）；
@@ -163,6 +176,6 @@
 * **选择器完备与互斥约束**：
   * 定义节点 $N$ 允许捕获的选择器论域 $\mathcal{S}(N)$：
     * 若 $N$ 为 `ActionNode`（`run`）：$\mathcal{S}(N) = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}\}$（**显式列表中禁止包含 `"max_steps"`**）；
-    * 若 $N$ 为 `InlineGraphNode`（`graph`）或 `CallNode`（`use: workflow:<path>`）：$\mathcal{S}(N) = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}, \texttt{"max\_steps"}\}$。
+    * 若 $N$ 为 `InlineGraphNode`（`graph`）或 `CallNode`（`use: workflow:<pkg_path>`）：$\mathcal{S}(N) = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}, \texttt{"max\_steps"}\}$。
   * 对每个显式列表分支 $c$，其值必须为 $\mathcal{S}(N)$ 的非空无重复子集，且不同分支的显式选择器集合之间必须两两无交集；
   * 同一 `catch` 块中最多允许 **1 个**分支将值设为通配符 `"*"`，其在 AST 规范化阶段展开为剩余可恢复异常集合 $\mathcal{S}(N) \setminus \bigcup_{c' \neq c} \text{set}(N.\text{catch}[c'])$（展开后若为空集则编译期报错）。

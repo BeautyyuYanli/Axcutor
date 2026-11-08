@@ -31,7 +31,7 @@
 
 ## 二、 静态子类型偏序判定（$T_1 <: T_2$）
 
-在值流转与契约消费位置（包括 `use: workflow:<path>` 传参与返回值绑定、`builtin:*` 算子入参/出参校验及 `for_each` 一阶集合提升目标绑定），编译器采用**单向静态子类型偏序关系（$T_{\text{actual}} <: T_{\text{expected}}$）**。由于 Axcutor 栈帧与容器算子均遵循纯函数式写时复制（Copy-on-Write）不可变语义，不存在原地可变别名引用，`Array`、`OrderedMap` 与 `TypedDict` 均支持安全的结构化协变（Structural Covariance）。
+在值流转与契约消费位置（包括 `use: workflow:<pkg_path>` 传参与返回值绑定、`builtin:*` 算子入参/出参校验及 `for_each` 一阶集合提升目标绑定），编译器采用**单向静态子类型偏序关系（$T_{\text{actual}} <: T_{\text{expected}}$）**。由于 Axcutor 栈帧与容器算子均遵循纯函数式写时复制（Copy-on-Write）不可变语义，不存在原地可变别名引用，`Array`、`OrderedMap` 与 `TypedDict` 均支持安全的结构化协变（Structural Covariance）。
 
 设 $T_1, T_2$ 为满足 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 的两个良构 `TypeSpec`。定义 $T_1$ 是 $T_2$ 的子类型（记作 $T_1 <: T_2$），当且仅当递归满足以下五条公理：
 

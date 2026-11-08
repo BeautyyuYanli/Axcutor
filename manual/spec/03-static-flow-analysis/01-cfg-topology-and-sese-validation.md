@@ -1,6 +1,6 @@
 # 01. CFG 拓扑穷尽、SESE 并发限制与可达性公理
 
-本规范定义控制流图（CFG）在编译期必须通过的拓扑良构性检查（Topological Validation）以及跨文件调用图（Workflow Call Graph）的模块化校验准则。
+本规范定义控制流图（CFG）在编译期必须通过的拓扑良构性检查（Topological Validation）以及跨工作流包调用图（Workflow Package Call Graph）、显式根包挂载与 `_` 前缀私有可见性的模块化校验准则。
 
 ---
 
@@ -50,13 +50,23 @@
 
 ---
 
-## 四、 跨文件工作流调用图（Workflow Call Graph）与受护栏保护的递归
+## 四、 跨工作流包调用图（Workflow Package Call Graph）、显式根包挂载与私有可见性公理
 
-当图内 `CallNode` 通过 `use: workflow:<path>` 调用外部工作流文件时：
+当图内 `CallNode` 通过 `use: workflow:<pkg_path>` 调用工作流包时，遵循以下包命名空间、可见性与递归调用公理：
 
-1. **基于顶层签名的模块化独立校验**：
-   * 每个工作流文件在文件顶层显式声明了完备的静态函数签名 $(I_{\text{target}}, O_{\text{target}}, B_{\text{target}}) = (\text{target.input}, \text{target.output}, \text{target.branches})$；
-   * 静态检查器在校验调用节点 $N$ 时，仅依赖被调用工作流的顶层静态签名验证 `with.input`、`with.output` 及外层分支出边的合法性，无需在编译期展开被调用方的内部图体。
-2. **允许直接或间接递归调用**：
-   * 跨文件工作流调用图允许存在直接递归（如工作流 $A$ 内部某条分支通过 `use: workflow:A` 调用自身）或相互递归环路（$A \to B \to A$）；
+1. **显式无遮蔽根包挂载与唯一入口保留字（Explicit Root Mounts & Reserved `"__main__"`）**：
+   * 宿主环境通过不可变的无冲突点分包表 `packages: Map<PackagePath | "__main__", SourceDocument>` 向编译器提供工作流定义。每个具名工作流对应逻辑命名空间中的唯一点分包路径 `PackagePath`（如 `billing.charge`，物理上唯一对应包含 `__axcutor__.yaml` 的文件夹），顶层根包段 `RootPackageName` 必须为公开路径段 `PublicSegment` 且两两互异，严禁同名根包静默遮蔽（Shadowing）。
+   * `"__main__"` 为系统保留的独立匿名入口工作流标识，不可作为具名挂载包名，亦不可在 `use: workflow:...` 中被引用。
+2. **基于 `_` 前缀的编译期硬性私有可见性边界（Compile-Time Package Visibility）**：
+   * 设被调用目标工作流包路径为 $T = s_1 . s_2 . \dots . s_k \in \text{PackagePath}$（其中首段 $s_1 \in \text{PublicSegment}$）：
+     * 若 $\forall i \in \{1, \dots, k\},\; s_i \in \text{PublicSegment}$（所有路径段均不以 `_` 开头），则 $T$ 为**公开工作流包（Public Workflow Package）**，可被任意工作流及外部匿名入口 `"__main__"` 调用；
+     * 若存在某个路径段 $s_m$（$2 \le m \le k$）以 `_` 开头（$s_m \in \text{PrivateSegment}$，如 `billing._risk_score` 或 `billing.checkout._retry_step`），则 $T$ 为归属于其直接父包前缀 $P_{\text{owner}} = s_1 . \dots . s_{m-1}$ 的**内部私有工作流包（Private Workflow Package）**。
+   * **可见性判定谓词 $\text{Visible}(C, T)$**：设调用方工作流标识为 $C \in \text{PackagePath} \cup \{\texttt{"\_\_main\_\_"}\}$，$C$ 允许调用 $T$ 当且仅当对 $T$ 中每一个以 `_` 开头的私有段 $s_m$（$2 \le m \le k$，对应父包前缀 $P_{\text{owner}} = s_1 . \dots . s_{m-1}$），调用方 $C$ 均等于 $P_{\text{owner}}$ 或位于 $P_{\text{owner}}$ 的子包树内：
+     $$\text{Visible}(C, T) \iff \forall m \in \{2, \dots, k\},\; \Big( \text{starts\_with}(s_m, \texttt{"\_"}) \implies \big( C = P_{\text{owner}} \;\lor\; \text{starts\_with}(C, P_{\text{owner}} \mathbin{\Vert} \texttt{"."}) \big) \Big)$$
+   * 若 $\lnot \text{Visible}(C, T)$（例如匿名入口 $C = \texttt{"\_\_main\_\_"}$ 或外部包 $C = \texttt{"reporting.daily"}$ 调用 `workflow:billing._risk_score`），编译器在 `use` 字段处直接报告静态错误 **`visibility.private_workflow`**（且外部入口 `"__main__"` 亦禁止 directly 将私有包路径作为 `entry` 启动）。
+3. **基于顶层签名的两阶段声明式解析**：
+   * 每个工作流包在顶层显式声明了完备的静态函数签名 $(I_{\text{target}}, O_{\text{target}}, B_{\text{target}}) = (\text{target.input}, \text{target.output}, \text{target.branches})$；
+   * 静态检查器先从引用闭包中纯静态提取各包的顶层签名表（不依赖包加载顺序，亦不触发任何 Python 模块导入或顶层代码求值），在校验调用节点 $N$ 时仅依赖被调用包的顶层静态签名验证 `with.input`、`with.output` 及外层分支出边的合法性，无需在编译期展开被调用方的内部图体。
+4. **允许直接或间接递归调用**：
+   * 跨工作流包调用图允许存在直接递归（如工作流包 `math.fact` 内部某条分支通过 `use: workflow:math.fact` 调用自身）或相互递归环路（$A \to B \to A$）；
    * 运行期由 [`03-guardrails-and-step-accounting.md`](../04-runtime-execution-model/03-guardrails-and-step-accounting.md) 定义的调用栈深度护栏 $\text{MAX\_CALL\_DEPTH}$（默认 $64$）强制保证有界终止，超限时抛出不可捕获的 `StackOverflowError`。

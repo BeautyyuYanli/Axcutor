@@ -136,9 +136,9 @@ output:
 
 graph:
   nodes:
-    # 并发分支 1（use 节点）：调用外部排版子工作流，产出 formatted_doc
+    # 并发分支 1（use 节点）：调用外部排版工作流包，产出 formatted_doc
     format_document:
-      use: workflow:publishing/markdown_formatter
+      use: workflow:publishing.markdown_formatter
       with:
         input:
           content: raw_draft

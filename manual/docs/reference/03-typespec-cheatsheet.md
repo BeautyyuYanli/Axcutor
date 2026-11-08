@@ -113,7 +113,7 @@ graph:
 Axcutor 严格区分**同帧同名变量声明（双向等价 $T_1 \equiv T_2$）**与**跨变量值流转及传参（单向子类型兼容 $T_{\text{actual}} <: T_{\text{expected}}$）**：
 
 * **同帧同名显式声明（$T_1 \equiv T_2$）**：同一张图内若多处显式声明同一个变量名的 `TypeSpec`（如同时在宿主 `output` 与 `ActionNode.output` 中声明），两处声明必须完全等价。
-* **值流转与契约消费（$T_{\text{actual}} <: T_{\text{expected}}$）**：在 `use: workflow:<path>` 传参与输出接收、`builtin:*` 算子赋值/更新以及 `for_each` 一阶集合提升写入位置，均支持以下五条静态子类型兼容规则（基于纯函数式写时复制不可变内存模型，容器协变在编译期 100% 类型安全）：
+* **值流转与契约消费（$T_{\text{actual}} <: T_{\text{expected}}$）**：在 `use: workflow:<pkg_path>` 传参与输出接收、`builtin:*` 算子赋值/更新以及 `for_each` 一阶集合提升写入位置，均支持以下五条静态子类型兼容规则（基于纯函数式写时复制不可变内存模型，容器协变在编译期 100% 类型安全）：
 
 | 子类型规则 | 兼容方向（$T_{\text{sub}} <: T_{\text{sup}}$） | 典型应用场景 |
 | :--- | :--- | :--- |

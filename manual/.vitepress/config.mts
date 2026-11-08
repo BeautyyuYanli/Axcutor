@@ -47,7 +47,7 @@ export default withMermaid(
             collapsed: false,
             items: [
               { text: '01. Basics：基础概念与最小工作流', link: '/docs/guide/01-foundations/01-basics' },
-              { text: '02. Use：跨文件调用子工作流', link: '/docs/guide/01-foundations/02-use-subworkflows' },
+              { text: '02. Use：调用子工作流包与可见性', link: '/docs/guide/01-foundations/02-use-subworkflows' },
               { text: '03. Inline Graph：内联块级子图', link: '/docs/guide/01-foundations/03-inline-graphs' }
             ]
           },
@@ -202,7 +202,8 @@ export default withMermaid(
             collapsed: false,
             items: [
               { text: '01. run 业务执行器标准 ABI 契约', link: '/spec/05-executor-abi/01-run-executor-contract' },
-              { text: '02. builtin 受信任 Python 执行器规范', link: '/spec/05-executor-abi/02-builtin-python-executor' }
+              { text: '02. builtin 受信任 Python 执行器规范', link: '/spec/05-executor-abi/02-builtin-python-executor' },
+              { text: '03. module 预置 Python 模块执行器规范', link: '/spec/05-executor-abi/03-module-python-executor' }
             ]
           }
         ]

@@ -1,6 +1,6 @@
 # 01. 同构结构化并发：集合遍历（`for_each`）
 
-当需要对某个非空强类型列表（`type: array`）或非空强类型有序映射（`type: object` + `additionalProperties`）中的每个元素执行无跨元素依赖的同构处理时，可在任意节点（`run`、`use: workflow:<path>` 或内联 `graph`）上挂载 **`for_each`** 修饰符。
+当需要对某个非空强类型列表（`type: array`）或非空强类型有序映射（`type: object` + `additionalProperties`）中的每个元素执行无跨元素依赖的同构处理时，可在任意节点（`run`、`use: workflow:<pkg_path>` 或内联 `graph`）上挂载 **`for_each`** 修饰符。
 
 `for_each` 是纯粹的**输入集合切片与并发窗口修饰符**，其核心心智模型包含以下四点：
 
@@ -17,7 +17,7 @@
 
 > [!NOTE]
 > **三类节点挂载 `for_each` 时的输入与输出映射规则**：
-> * **`run`（`ActionNode`）**：节点 `input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index` 及外层变量（未列入 `input` 的变量不会进入传给业务执行器的 `input_snapshot` 及 `builtin` 的 `Input` 模型）；`output` 声明单次产出类型，在外层自动提升为对应集合。
+> * **`run`（`ActionNode`）**：节点 `input: [...]` **必须显式列出** `run` 所需读取的 `item` / `key` / `index` 及外层变量（未列入 `input` 的变量不会进入传给业务执行器的 `input_snapshot` 及 `Input` 模型）；`output` 声明单次产出类型，在外层自动提升为对应集合。
 > * **`use`（`CallNode`）**：在 `with.input` 中直接引用 `item` / `key` / `index`（或其结构体字段路径）及外层变量；在 `with.output` 中将被调用方单次产出的字段名映射至外层目标集合变量名，在外层自动提升为列表或有序映射。
 > * **内联 `graph`（`InlineGraphNode`）**：由于 `item` / `key` / `index` 已自动注入子图的初始 `Block Frame`，内联 `graph` 节点的 `input: [...]` 仅用于捕获外层普通变量，**禁止**重复列出 `item` / `key` / `index`。
 
@@ -45,13 +45,13 @@ process_list_items:
     content: |
       return Output(results=f"[{input.item_idx}] {input.current_item}")
 
-# 示例 B：在 use: workflow:<path> 节点上挂载 for_each 遍历列表
+# 示例 B：在 use: workflow:<pkg_path> 节点上挂载 for_each 遍历列表
 audit_sub_items:
   for_each:
     source: batch.items
     item: current_item
     concurrency: 4
-  use: workflow:./single-item-audit.yaml
+  use: workflow:audit.single_item
   with:
     input:
       raw_text: current_item

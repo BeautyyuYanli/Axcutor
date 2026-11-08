@@ -10,16 +10,16 @@ Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通
 
 | 异常选择器 | 触发条件 |
 | :--- | :--- |
-| **`execution`** | 1. `run` 节点的业务执行器返回执行错误（如函数抛出未捕获异常、RPC/API 调用失败、脚本非零退出）；<br>2. 内联 `graph` 或 `use` 子工作流内部走向了 `-> fail` 异常终点。 |
+| **`execution`** | 1. `run` 节点的业务执行器返回执行错误（如函数抛出未捕获异常、`executor: module` 导入业务模块触发 `ModuleNotFoundError`/`ImportError`、RPC/API 调用失败、脚本非零退出）；<br>2. 内联 `graph` 或 `use` 子工作流内部走向了 `-> fail` 异常终点。 |
 | **`timeout`** | 节点单次尝试耗时超过其配置的 `timeout_ms`。 |
-| **`contract`** | 节点执行器返回的数据结构未通过 `output` 的 `TypeSpec` 校验（如 `builtin` 执行器构造 `Output` / `Branch` 触发 `ValidationError`），或返回了非法分支对象。 |
+| **`contract`** | 节点执行器返回的数据结构未通过 `output` 的 `TypeSpec` 校验（如 `builtin`/`module` 执行器构造 `Output` / `Branch` 触发 `ValidationError`）、返回了非法分支对象，或 `executor: module` 目标模块缺失 `async def execute` 入口 / 伴生契约桩 `__axcutor_contract_sha256__` 指纹校验不匹配。 |
 | **`max_steps`** | 内联 `graph` 或 `use` 子工作流的累计调度步数超过其 `graph.max_steps` 上限（注：原子 `run` 节点与顶层 `run` 工作流不存在图步数计数器，禁止在其 `retry.on` 或 `catch` 显式列表中声明 `max_steps`）。 |
 
 ---
 
 ## 二、 使用 `catch` 将异常物化为控制分支
 
-在业务节点（`run`、内联 `graph`、`use: workflow:<path>`）上声明 `catch`，可将指定类型的异常拦截并转化为出边 `<node>.<catch_branch>`。
+在业务节点（`run`、内联 `graph`、`use: workflow:<pkg_path>`）上声明 `catch`，可将指定类型的异常拦截并转化为出边 `<node>.<catch_branch>`。
 
 ### 1. 通配符兜底与按异常类型分流
 

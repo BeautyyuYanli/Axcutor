@@ -26,7 +26,7 @@ Axcutor 将工作流的运行机制拆分为正交的两个层面——**何时�
 
 - **节点黑盒与显式读写契约**：每个节点都是独立的黑盒计算单元。节点必须通过 `input` 显式声明所需读取的变量子集，通过 `output` 声明写回变量表的字段及其 JSON Schema 类型（`TypeSpec`）；未在契约中声明的变量对节点完全不可见。
 - **不可变值语义与原子提交**：节点读取输入时获取的是变量的不可变快照；节点执行成功后，其 `output` 产出以原子方式合并回当前图栈帧的变量表。在并发分叉区间内，各并发分支的写集严格互斥，或由 `for_each` 隔离在独立的迭代子作用域并在汇聚时按序归集为列表或有序映射。
-- **作用域隔离**：跨文件调用（`use: workflow:<path>`）会创建完全隔离的函数栈帧（`Function Frame`），仅通过参数绑定（`with`）交换数据；单文件内嵌子图（`graph`）则创建块级栈帧（`Block Frame`），支持显式捕获外层变量与子图级失败写集回滚。
+- **作用域隔离**：跨包调用（`use: workflow:<pkg_path>`）会创建完全隔离的函数栈帧（`Function Frame`），仅通过参数绑定（`with`）交换数据；图内嵌子图（`graph`）则创建块级栈帧（`Block Frame`），支持显式捕获外层变量与子图级失败写集回滚。
 
 ---
 
@@ -41,7 +41,7 @@ Axcutor 将工作流的运行机制拆分为正交的两个层面——**何时�
 
 2. **运行期执行与护栏调度（Runtime Execution & Guardrails）**
    通过静态验证后，工作流引擎依据外部传入的初始参数初始化根栈帧变量表，并注入初始控制令牌：
-   - **节点调度与执行契约校验**：令牌激活节点后，引擎从变量表提取 `input` 快照，交由底层执行器（如内置受信任 Python 执行器 `executor: builtin`、外部扩展执行器或 `builtin:*` 内建确定性算子）运行，并在节点返回时严格按照其 `output` Schema 校验产出数据。
+   - **节点调度与执行契约校验**：令牌激活节点后，引擎从变量表提取 `input` 快照，交由底层执行器（如内置受信任内联 Python 执行器 `executor: builtin`、包内独立模块级 Python 执行器 `executor: module`、外部扩展执行器或 `builtin:*` 内建确定性算子）运行，并在节点返回时严格按照其 `output` Schema 校验产出数据。
    - **多级护栏与事务级容错**：运行期全程受声明式护栏保护——图层级通过 `max_steps` 限制最大推进步数以防范无限循环；节点层级通过 `timeout_ms` 与 `retry` 实现基于输入快照的幂等超时重试，并通过 `catch` 将超时或执行期异常转化为控制流恢复分支降级处理。
 
 ---
@@ -89,9 +89,9 @@ graph:
         content: |
           return Output(processed_items=input.single_item.strip().upper())
 
-    # 节点 2：跨文件调用子工作流（use + with 显式参数绑定）
+    # 节点 2：跨包调用子工作流（use + with 显式参数绑定）
     generate_audit:
-      use: workflow:compliance/build_audit_report
+      use: workflow:compliance.build_audit_report
       with:
         input:
           items: processed_items

@@ -1,6 +1,6 @@
 # 01. 图栈帧与命名空间（Stack Frames & Scoping）
 
-在组合使用跨文件子工作流（`use`）、内联子图（`graph`）与集合遍历（`for_each`）时，Axcutor 通过严格的栈帧隔离边界、显式变量表声明、宿主输入互斥规则与全路径必达定值分析，在编译期排除变量命名冲突与未初始化读取。
+在组合使用跨包子工作流（`use`）、内联子图（`graph`）与集合遍历（`for_each`）时，Axcutor 通过严格的栈帧隔离边界、显式变量表声明、宿主输入互斥规则与全路径必达定值分析，在编译期排除变量命名冲突与未初始化读取。
 
 ---
 
@@ -9,7 +9,7 @@
 运行时通过三类栈帧管理变量的生命周期与可见性（底层内存模型与形式化语义详见 [规范：`04-runtime-execution-model/01-frame-memory-model.md`](../../../spec/04-runtime-execution-model/01-frame-memory-model.md)）：
 
 1. **函数调用栈帧（`Function Frame` —— 根工作流与 `use` 调用）**：
-   * 每次通过 `use` 调用外部工作流（或 `builtin:*`）时，都会创建与调用方完全隔离的独立命名空间。
+   * 每次通过 `use` 调用外部工作流包（或 `builtin:*`）时，都会创建与调用方完全隔离的独立命名空间。
    * 被调用方不可直接读取父图的任何变量，仅接收通过 `with.input` 显式传入的值，并在退出时通过 `with.output` 显式写回父图。
 2. **块级作用域栈帧（`Block Frame` —— 内联 `graph` 节点）**：
    * 内联 `graph` 节点采用**显式按名捕获（Explicit Capture）**：仅列入内联 `graph` 节点 `input: [<var>, ...]` 的外层变量（以及挂载 `for_each` 时自动注入的 `item` / `key` / `index`）会进入子图的初始 `variables` 表。
@@ -31,7 +31,7 @@ graph:
   nodes:
     # 1. Function Frame：通过 with.input / with.output 跨命名空间显式传值
     external_step:
-      use: workflow:common/sanitize_input
+      use: workflow:common.sanitize_input
       with:
         input:
           raw: request_text
@@ -92,7 +92,7 @@ graph:
 
 ### 2. 未初始化的局部变量类型声明（省略 `default` 键）
 
-当图内某局部中间变量仅由 `builtin:*` 算子、`use: workflow:<path>` 子工作流调用或挂载了 `for_each` 的节点写入，且既不属于宿主 `input` / `output` 也不属于其他未挂载 `for_each` 的 `run` / `graph` 节点的显式 `output` 时，在 `graph.variables` 中仅声明其 `TypeSpec` 而省略 `default` 键（等价于 TypeScript / Rust 中的 `let v: T;`）：
+当图内某局部中间变量仅由 `builtin:*` 算子、`use: workflow:<pkg_path>` 子工作流调用或挂载了 `for_each` 的节点写入，且既不属于宿主 `input` / `output` 也不属于其他未挂载 `for_each` 的 `run` / `graph` 节点的显式 `output` 时，在 `graph.variables` 中仅声明其 `TypeSpec` 而省略 `default` 键（等价于 TypeScript / Rust 中的 `let v: T;`）：
 
 * 该变量在当前图变量表中获得明确的静态类型，可供 `with.output` 或挂载 `for_each` 的节点绑定写入；
 * 在图入口 `start` 处处于**未定值状态（`Unbound`）**，必须先由后续节点完成写入定值，方可被下游节点读取（详见下文第四节“编译期全路径必达定值分析”）。

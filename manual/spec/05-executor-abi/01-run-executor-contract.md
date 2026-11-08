@@ -2,7 +2,7 @@
 
 在 Axcutor 架构中，`run` 节点代表**受函数签名约束的原子业务执行单元**。工作流运行时调度器（Runtime Scheduler）与具体的业务执行器实现（Executor Implementation）解耦，通过本规范定义的标准应用数据接口（Executor ABI Contract）通信。
 
-无论是内建的进程内受信任 Python 执行器（`executor: "builtin"`，详见 [`02-builtin-python-executor.md`](./02-builtin-python-executor.md)），还是在此基础上构建或独立注册的扩展执行器（如隔离沙箱、微服务 HTTP/RPC 调用、数据库事务操作或大模型结构化输出），只要遵循本契约，即可作为 `run` 节点的执行后端。
+无论是内建的进程内受信任 Python 内联执行器（`executor: "builtin"`，详见 [`02-builtin-python-executor.md`](./02-builtin-python-executor.md)）、基于工作流包同构的模块级 Python 执行器（`executor: "module"`，详见 [`03-module-python-executor.md`](./03-module-python-executor.md)），还是在此基础上构建或独立注册的扩展执行器（如隔离沙箱、微服务 HTTP/RPC 调用、数据库事务操作或大模型结构化输出），只要遵循本契约，即可作为 `run` 节点的执行后端。
 
 ---
 
@@ -20,7 +20,7 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 
 | 字段 | 类型 | 契约说明 |
 | :--- | :--- | :--- |
-| **`run_spec`** | `RunSpec`（含鉴别键 `executor: Identifier`） | 节点声明的结构化执行体定义（如 `{ executor: "builtin", content: "..." }` 或其他扩展执行器配置对象）。 |
+| **`run_spec`** | `RunSpec`（含鉴别键 `executor: Identifier`） | 节点声明的结构化执行体定义（如 `{ executor: "builtin", content: "..." }`、`{ executor: "module", content: ".<local_path>" }` 或其他扩展执行器配置对象）。 |
 | **`input_schema`** | `Map<RestrictedIdentifier, TypeSpec>` | **输入变量的静态类型契约表**：由编译器在阶段 2 符号表解析期间从当前作用域符号表提取并导出的归一化 JSON Schema `TypeSpec` 映射（即 $\Sigma|_{N.\text{input}}$ 或 `root.input`），供执行器在边界生成强类型输入模型或执行静态/动态入参投影。 |
 | **`input_snapshot`** | `ReadOnlyMap<RestrictedIdentifier, JSONValue>` | **最小权限只读输入快照**：仅包含该节点 `input: [...]` 声明的变量（或顶层 `RootRunNode` 的 `input`）在激活时刻的**深拷贝/不可变值（Deep-Frozen / Immutable Value）**。未在 `input` 中声明的图变量不出现在此映射中；执行器在本地内存或进程内对该快照的任何就地修改（In-place Mutation）均与运行时所属栈帧的 `variables` 物理隔离，不得产生任何跨节点副作用。 |
 | **`output_schema`** | `Map<RestrictedIdentifier, TypeSpec>` | 该节点声明的完整单次输出类型契约表（归一化的 JSON Schema `TypeSpec` 映射）。 |

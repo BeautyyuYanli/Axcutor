@@ -15,7 +15,7 @@
 | 节点形态 | 鉴别字段 | 栈帧与作用域模型 | 输入与输出声明方式 |
 | :--- | :--- | :--- | :--- |
 | **动作节点** | `run` | 在当前图栈帧内直接执行 | `input: [<var>, ...]`<br>`output: { <var>: <TypeSpec> }` |
-| **跨文件调用** | `use` | **函数调用栈帧（`Function Frame`）**：跨文件命名空间完全隔离，通过 `with` 显式映射 | 契约由目标工作流或 `builtin:*` 定义，通过 `with.input` / `with.output` 显式绑定 |
+| **跨包调用** | `use` | **函数调用栈帧（`Function Frame`）**：跨工作流包命名空间完全隔离，通过 `with` 显式映射 | 契约由目标工作流包或 `builtin:*` 定义，通过 `with.input` / `with.output` 显式绑定 |
 | **内联子图** | `graph` | **块级作用域栈帧（`Block Frame`）**：单入口单出口（SESE）容器，按名显式捕获外层变量 | `input: [<var>, ...]`<br>`output: { <var>: <TypeSpec> }` |
 
 ---
@@ -81,7 +81,7 @@ nodes:
 
 ## 三、 完整示例：在主图中组合 `use` 与内联 `graph`
 
-以下完整工作流展示如何在顶层主图中先通过 `use` 调用外部风控工作流，再通过内联 `graph` 封装两步计价子流程：
+以下完整工作流展示如何在顶层主图中先通过 `use` 调用外部风控工作流包，再通过内联 `graph` 封装两步计价子流程：
 
 ```yaml
 # 1. 根节点输入契约
@@ -106,10 +106,10 @@ output:
 
 graph:
   nodes:
-    # 阶段 1：跨文件调用外部风控子工作流（Function Frame）
+    # 阶段 1：跨包调用外部风控工作流包（Function Frame）
     # 通过 with.input 传入参数，并将返回字段 score 映射为当前图变量 risk_score
     evaluate_risk:
-      use: workflow:security/check_customer_risk
+      use: workflow:security.check_customer_risk
       with:
         input:
           uid: customer_id

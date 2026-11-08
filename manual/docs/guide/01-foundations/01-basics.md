@@ -1,12 +1,12 @@
 # 01. Basics：基础概念与最小工作流
 
-Axcutor 使用 YAML 或 JSON 声明工作流的数据契约与控制流图（CFG）。本节介绍统一节点模型、根节点函数签名、`run` 节点的执行契约以及基础顺序工作流的编写方式。
+Axcutor 使用 YAML 或 JSON 声明工作流的数据契约与控制流图（CFG）。本节介绍统一节点模型、根节点函数签名、`run` 节点的执行契约（`executor: builtin` 与 `executor: module`）以及基础顺序工作流的编写方式。
 
 ---
 
 ## 一、 统一节点模型（Unified Node Model）
 
-在 Axcutor 中，一个独立的工作流文件本身即为一个根节点（Root Node），对外暴露明确的函数签名：
+在 Axcutor 中，一个独立的工作流包（包含 `__axcutor__.yaml` 的目录）或单文件入口工作流本身即为一个根节点（Root Node），对外暴露明确的函数签名：
 
 $$\text{Node} : \text{Input} \longrightarrow (\text{Branch}, \text{Output})$$
 
@@ -36,12 +36,16 @@ graph: ...
 
 > [!IMPORTANT]
 > **`run` 通过结构化 `executor` 承载受函数签名约束的业务代码。**
-> 标准内置执行器 `executor: builtin` 在宿主 Worker 进程内执行受信任的异步 Python 代码（函数体对应 `async def execute(input: Input) -> ReturnType:`），直接通过强类型只读模型 `input.<var>` 读取输入快照（其中 `type: number` 字段自动映射为 Python 原生 `float`），并通过返回 `Output(...)` 或 `Branch.<branch>(...)` 实例完成输出与控制分支路由。此外，宿主也可在 `builtin` 之上或通过独立 `executor` 接入远程沙箱、HTTP/RPC 微服务接口、数据库事务或大模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
+> Axcutor 内建提供两种同构的强类型 Python 执行器形态：
+> - **`executor: builtin`（内联 Python 执行器）**：在 YAML 的 `content` 中直接编写异步函数体（对应 `async def execute(input: Input) -> ReturnType:`），运行时在内存中动态合成强类型 `Input`、`Output` 与 `Branch` 模型并注入函数作用域，适合轻量级转换、胶水逻辑或单文件快速原型。
+> - **`executor: module`（模块级 Python 执行器）**：在具名工作流包（包含 `__axcutor__.yaml` 与 `__init__.py` 的目录）内，通过 `content: ".<local_path>"`（单步根节点还支持 `content: "."`）指向包内独立的 `.py` 源文件。每个模块导入由 `axcutor codegen` 预生成的伴生强类型契约桩文件（`*_contract.py` / `_contract.py`）并定义显式 `async def execute(input: Input) -> ReturnType:`，天然获得完整的 IDE 补全、静态类型检查（`mypy --strict` / `pyright`）、单元测试与调试器断点能力，且运行时在边界强制校验编译期契约指纹（`__axcutor_contract_sha256__`）。
+>
+> 在两种执行器中，业务代码均通过强类型只读模型 `input.<var>` 读取输入快照（其中 `type: number` 字段自动映射为 Python 原生 `float`），并通过返回 `Output(...)` 或 `Branch.<branch>(...)` 实例完成输出与控制分支路由。此外，宿主也可通过扩展 `executor` 接入远程沙箱、HTTP/RPC 微服务接口、数据库事务或大模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
 
 运行时对 `run` 节点执行两项隔离与校验保障：
 
-1. **最小权限只读注入**：仅向执行器传入节点在 `input` 中显式声明的变量只读快照（`builtin` 执行器将其封装为 `frozen=True` 的 Pydantic `Input` 实例），未声明的图变量对执行器不可见。
-2. **输出类型与分支契约校验**：执行器返回后，运行时（及 `builtin` 的 `Output` / `Branch` 构造器）校验其产出的 `output` 字段是否符合 `TypeSpec`；校验通过后才将结果原子写回所属图栈帧。
+1. **最小权限只读注入**：仅向执行器传入节点在 `input` 中显式声明的变量只读快照（`builtin` 与 `module` 执行器均将其封装为 `frozen=True` 的 Pydantic `Input` 实例），未声明的图变量对执行器不可见。
+2. **输出类型与分支契约校验**：执行器返回后，运行时（及 `Output` / `Branch` 构造器）校验其产出的 `output` 字段是否符合 `TypeSpec`；校验通过后才将结果原子写回所属图栈帧。
 
 ```yaml
 # 节点只读读取 raw_price 与 discount_rate，校验通过后原子写回 final_price
@@ -144,12 +148,12 @@ graph:
 由于图级符号表已统一维护所有变量的类型，图内 `run` 节点按以下规则声明读写集：
 
 1. **读取声明（`input: [<var_name>, ...]`）**：仅列出需要从当前图 `variables` 中读取的顶层变量名，无需重复声明 `TypeSpec`。
-2. **结构体字段访问**：若某变量为强类型结构体（`type: object` + `properties`），只需在 `input` 中列出其**根变量名**（如 `input: [order_info]`），即可在 `builtin` 节点的 Python 代码中通过强类型模型属性（如 `input.order_info.subtotal`）读取嵌套字段。
+2. **结构体字段访问**：若某变量为强类型结构体（`type: object` + `properties`），只需在 `input` 中列出其**根变量名**（如 `input: [order_info]`），即可在 `builtin` 或 `module` 节点的 Python 代码中通过强类型模型属性（如 `input.order_info.subtotal`）读取嵌套字段。
 3. **写入声明（`output: { <var_name>: <TypeSpec> }`）**：声明节点完成后向当前图 `variables` 新增或更新的变量及其类型。当控制流到达 `end` 时，运行时自动从 `variables` 中提取与顶层 `output` 同名的变量作为整个工作流的返回值。
 
 | 声明位置 | 语法形式 | 作用与约束 |
 | :--- | :--- | :--- |
-| 节点 `input` | `input: [order_info, tax_rate]` | 按变量名引用图内已有变量（只读快照）；结构体只需声明根变量名即可在 `builtin` 中通过 `input.order_info.subtotal` 访问 |
+| 节点 `input` | `input: [order_info, tax_rate]` | 按变量名引用图内已有变量（只读快照）；结构体只需声明根变量名即可在 Python 中通过 `input.order_info.subtotal` 访问 |
 | 节点 `output` | `output: { total_amount: { type: number } }` | 声明写回图内 `variables` 的变量名与 `TypeSpec`；若与已有变量同名，类型必须一致 |
 
 ---
@@ -234,4 +238,58 @@ graph:
 
 ---
 
-下一节：[02. Use：跨文件调用子工作流](./02-use-subworkflows.md)。
+## 六、 模块级 Python 执行器（`executor: module`）与契约桩代码生成
+
+当工作流以**工作流包（Workflow Package）**目录组织（即目录内包含 `__axcutor__.yaml` 与 `__init__.py`）且节点逻辑包含复杂业务、第三方库依赖或需要独立编写 `pytest` 单元测试时，可将 `executor: builtin` 演进为 `executor: module`，将业务代码拆分为同包内的独立 `.py` 文件。
+
+### 1. 包内相对模块寻址（`LocalModuleSpec`）
+
+`executor: module` 的 `content` 字段仅允许使用以单个点号 `.` 开头的**包内相对模块路径**（禁止跨包绝对导入或 `..` 越界）：
+
+* **图内子节点**：写法为 `content: ".<local_path>"`（如 `content: ".parse_order"` 或 `content: ".steps.parse_order"`），运行时结合当前工作流包 ID（如 `billing.checkout`）将其解析为绝对模块路径 `billing.checkout.parse_order`。
+* **顶层单步 `run` 根节点**：除 `content: ".<local_path>"` 外，还支持 `content: "."` 直接指向当前工作流包自身的 `__init__.py`（其伴生契约桩固定为同目录下的 `_contract.py`）。
+
+> [!NOTE]
+> 未挂载进工作流包命名空间的独立单文件入口工作流（编译期赋予匿名身份 `"__main__"`）只能使用 `executor: builtin` 或 `use: workflow:<pkg_path>`；若在 `"__main__"` 中声明 `executor: module`，编译器将报错 `module.anonymous_package`。
+
+```yaml
+# 位于工作流包 billing/checkout/__axcutor__.yaml 内的节点片段
+parse_order:
+  input: [order_payload]
+  output:
+    order_info:
+      type: object
+      properties:
+        order_id: { type: string }
+        subtotal: { type: number }
+      required: [order_id, subtotal]
+  run:
+    executor: module
+    content: ".parse_order"
+```
+
+### 2. 伴生契约桩（`*_contract.py`）与实现模块编写
+
+运行 `axcutor codegen` 后，工具链会根据 `__axcutor__.yaml` 中各 `executor: module` 节点的静态契约，在目标 `.py` 模块同级目录自动生成只读伴生契约桩 `<module>_contract.py`（内含 `Input`、`Output`、`Branch`、`ReturnType` 及编译期契约指纹 `__axcutor_contract_sha256__`）。业务开发者只需在 `<module>.py` 中导入契约并实现 `async def execute(input: Input) -> ReturnType:`：
+
+```python
+# billing/checkout/parse_order.py
+import json
+from .parse_order_contract import Input, Output, Output_order_info, ReturnType
+
+
+async def execute(input: Input) -> ReturnType:
+    raw = json.loads(input.order_payload)
+    return Output(
+        order_info=Output_order_info(
+            order_id=str(raw["order_id"]),
+            subtotal=float(raw["subtotal"]),
+        )
+    )
+```
+
+运行时在首次执行该节点时，会自动提取 `mod.Input.__module__` 对应的契约模块并比对 `__axcutor_contract_sha256__` 指纹；若 YAML 契约已变更但未重新生成契约桩，或 `execute` 签名不合规，运行时将直接抛出可由 `catch` 捕获的 `contract` 异常。
+
+---
+
+下一节：[02. Use：工作流包与跨包调用](./02-use-subworkflows.md)。
