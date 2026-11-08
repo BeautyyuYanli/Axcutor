@@ -27,7 +27,7 @@
    $$Def_{\text{out}}(e) = Def_{\text{in}}(N) \cup OutVars(N)$$
    其中无论节点 $N$ 是否挂载 `for_each`，其向所属外层图写入的顶层目标变量集合 $OutVars(N)$ 统一定义为：
    * 当 $N$ 为 `ActionNode` 或 `InlineGraphNode` 时：$OutVars(N) = \text{dom}(N.\text{output})$；
-   * 当 $N$ 为 `CallNode` 时：$OutVars(N) = \text{values}(N.\text{with.output})$（直接取当前节点 AST 中的目标变量集合，无需跨文件查询被调用工作流签名）。
+   * 当 $N$ 为 `CallNode` 时：$OutVars(N) = \text{values}(N.\text{with.output})$（直接取当前节点 AST 中的目标变量集合，无需跨包查询被调用工作流签名）。
 3. **未挂载 `for_each` 的节点 $N$ 的正常业务分支出边 $e_b = (N.b \to \text{target})$**：
    通用分支边定值传递方程为先从入口定值集中移除反定值杀死集（Kill Set）$KillVars(N, b)$，再并入分支 $b$ 契约承诺产出的输出变量子集 $OutVars(N, b)$：
    $$Def_{\text{out}}(e_b) = (Def_{\text{in}}(N) \setminus KillVars(N, b)) \cup OutVars(N, b)$$
@@ -78,7 +78,7 @@ $$Def_{\text{in}}(X) = \bigcap_{e \in \text{InEdges}(X)} Def_{\text{out}}(e)$$
 * 若 $N$ 为 `InlineGraphNode`（内联 `graph`）：
   $$Use(N) = \text{set}(N.\text{input}) \cup \{\text{RootVar}(N.\text{for\_each.source}) \text{ (若有)}\}$$
 * 若 $N$ 为 `CallNode`（`use`）：
-  * 令 $R_{\text{with}}$ 为当前节点 AST 的 $N.\text{with.input}$ 中所有显式声明的变量/路径引用的根变量集合（单文件即可直接计算，无需跨文件查询被调用工作流签名）；
+  * 令 $R_{\text{with}}$ 为当前节点 AST 的 $N.\text{with.input}$ 中所有显式声明的变量/路径引用的根变量集合（单文件即可直接计算，无需跨包查询被调用工作流签名）；
   * 未挂载 `for_each` 时：$Use(N) = R_{\text{with}}$；
   * 挂载 `for_each` 时：$Use(N) = (R_{\text{with}} \setminus \text{Injected}(N.\text{for\_each})) \cup \{\text{RootVar}(N.\text{for\_each.source})\}$。
 

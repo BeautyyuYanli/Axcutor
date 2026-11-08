@@ -1,7 +1,8 @@
 """Host-side commands for a resident Worker and file-based Workflow submission.
 
-Source IDs are POSIX paths relative to source-root, including file extensions.
-All sources are snapshotted before submission; Workers never read workflow files.
+Named workflows are directories mounted under explicit public logical roots.
+Standalone documents use __main__. Module implementations are preinstalled on
+Workers and never transferred in submission snapshots.
 Temporal owns execution history and results after the submitting process exits.
 """
 
@@ -15,6 +16,8 @@ from pathlib import Path
 
 import uvicorn
 from axcutor_runtime.codec import dumps, loads
+from axcutor_runtime.contracts import generate_contracts
+from axcutor_runtime.packages import PackageMount, load_packages
 from axcutor_runtime.worker import create_worker
 from temporalio.client import Client
 
@@ -22,28 +25,22 @@ from .http import create_app
 from .service import ExecutionService
 
 
-def load_sources(
-    entry: Path, source_root: Path | None = None
-) -> tuple[str, dict[str, dict[str, str]]]:
-    """Snapshot YAML/JSON files under one root, using exact relative source IDs."""
-    entry = entry.resolve(strict=True)
-    root = (source_root or entry.parent).resolve(strict=True)
-    entry_id = entry.relative_to(root).as_posix()
-    formats = {".yaml": "yaml", ".yml": "yaml", ".json": "json"}
-    if entry.suffix not in formats:
-        raise ValueError("workflow files must use .yaml, .yml or .json")
-    sources = {
-        path.relative_to(root).as_posix(): {
-            "format": formats[path.suffix],
-            "text": path.read_text(encoding="utf-8"),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.suffix in formats
-    }
-    return entry_id, sources
+def _pairs(values: list[str]) -> list[tuple[str, str]]:
+    """Parse before constructing a map so repeated root names remain errors."""
+    pairs = []
+    names = set()
+    for value in values:
+        name, separator, target = value.partition("=")
+        if not separator or not name or not target or name in names:
+            raise ValueError("mounts require unique ROOT=TARGET arguments")
+        names.add(name)
+        pairs.append((name, target))
+    return pairs
 
 
-async def _worker(client: Client, task_queue: str) -> None:
+async def _worker(
+    client: Client, task_queue: str, module_mounts: dict[str, str] | None = None
+) -> None:
     """Drain Activities on SIGINT/SIGTERM before the container's stop deadline."""
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -51,7 +48,10 @@ async def _worker(client: Client, task_queue: str) -> None:
         loop.add_signal_handler(signum, stopped.set)
     try:
         async with create_worker(
-            client, task_queue, graceful_shutdown_timeout=timedelta(seconds=20)
+            client,
+            task_queue,
+            module_mounts=module_mounts,
+            graceful_shutdown_timeout=timedelta(seconds=20),
         ):
             logging.info("Worker polling namespace=%s task_queue=%s", client.namespace, task_queue)
             await stopped.wait()
@@ -61,6 +61,13 @@ async def _worker(client: Client, task_queue: str) -> None:
 
 
 async def _run(args: argparse.Namespace) -> None:
+    if args.command in ("run", "contracts"):
+        mounts = [PackageMount(name, Path(path)) for name, path in _pairs(args.mount)]
+        entry, packages = load_packages(args.workflow, mounts)
+        if args.command == "contracts":
+            for path in generate_contracts(entry, packages, mounts, check=args.check):
+                print(path)
+            return
     # Controllers stay lazy so preflight precedes backend contact. The SDK
     # requires Workers to receive an eagerly connected client.
     client = await Client.connect(
@@ -68,11 +75,10 @@ async def _run(args: argparse.Namespace) -> None:
     )
     service = ExecutionService(client, args.task_queue)
     if args.command == "run":
-        entry, sources = load_sources(args.workflow, args.source_root)
         inputs = loads(args.input.read_text(encoding="utf-8")) if args.input else {}
         if not isinstance(inputs, dict):
             raise ValueError("workflow input must be a JSON object")
-        execution = await service.submit(entry, sources, inputs, args.id)
+        execution = await service.submit(entry, packages, inputs, args.id)
         print(dumps(execution), flush=True)
         if not args.no_wait:
             execution = await service.wait(execution["execution_id"])
@@ -80,7 +86,8 @@ async def _run(args: argparse.Namespace) -> None:
             if execution["status"] != "completed":
                 raise SystemExit(1)
     elif args.command == "worker":
-        await _worker(client, args.task_queue)
+        mapping = dict(_pairs(args.module_mount)) if args.module_mount else None
+        await _worker(client, args.task_queue, mapping)
     elif args.command == "serve":
         await uvicorn.Server(
             uvicorn.Config(create_app(service), host=args.host, port=args.port)
@@ -95,15 +102,24 @@ def main() -> None:
     connection.add_argument("--address", default=os.getenv("TEMPORAL_ADDRESS", "localhost:7233"))
     connection.add_argument("--namespace", default=os.getenv("TEMPORAL_NAMESPACE", "default"))
     connection.add_argument("--task-queue", default=os.getenv("AXCUTOR_TASK_QUEUE", "axcutor"))
-    commands.add_parser("worker", parents=[connection], help="poll for Workflows and Activities")
+    worker = commands.add_parser(
+        "worker", parents=[connection], help="poll for Workflows and Activities"
+    )
+    worker.add_argument(
+        "--module-mount", action="append", default=[], metavar="ROOT=PYTHON_PACKAGE"
+    )
     run = commands.add_parser("run", parents=[connection], help="compile and execute a workflow")
     run.add_argument("workflow", type=Path)
-    run.add_argument(
-        "--source-root", type=Path, help="source ID root (default: workflow directory)"
-    )
+    run.add_argument("--mount", action="append", default=[], metavar="ROOT=DIRECTORY")
     run.add_argument("--input", type=Path, help="input JSON file (default: {})")
     run.add_argument("--id", help="Workflow ID (default: a new UUID)")
     run.add_argument("--no-wait", action="store_true", help="exit after submission")
+    contracts = commands.add_parser("contracts", help="generate module contracts without imports")
+    contracts.add_argument("workflow", type=Path)
+    contracts.add_argument("--mount", action="append", default=[], metavar="ROOT=DIRECTORY")
+    contracts.add_argument(
+        "--check", action="store_true", help="fail on missing or stale contracts"
+    )
     serve = commands.add_parser("serve", parents=[connection], help="serve the HTTP execution API")
     serve.add_argument("--host", default="127.0.0.1", help="HTTP bind address")
     serve.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")

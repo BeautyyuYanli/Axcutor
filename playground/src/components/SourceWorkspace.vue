@@ -4,7 +4,7 @@ import type { Diagnostic, SourceDocument, SourceFormat } from '../types/compiler
 import type { JsonText } from '../utils/losslessJson';
 
 const props = defineProps<{
-  sources: Record<string, SourceDocument>;
+  packages: Record<string, SourceDocument>;
   entry: string;
   selectedFile: string;
   inputRawText: string;
@@ -19,7 +19,7 @@ const emit = defineEmits<{
 const newPath = ref('');
 const newFormat = ref<SourceFormat>('yaml');
 const message = ref('');
-const document = computed(() => props.sources[props.selectedFile]);
+const document = computed(() => props.packages[props.selectedFile]);
 const contract = computed(() => {
   const path = ['bundle', 'workflows', props.entry, 'input'];
   return [...(props.compilerRaw?.at(path)?.entries?.keys() ?? [])].map(name => ({
@@ -27,7 +27,7 @@ const contract = computed(() => {
   }));
 });
 function add() {
-  if (Object.hasOwn(props.sources, newPath.value)) { message.value = 'File already exists'; return; }
+  if (Object.hasOwn(props.packages, newPath.value)) { message.value = 'Package already exists'; return; }
   emit('add', newPath.value, newFormat.value);
   newPath.value = '';
   message.value = '';
@@ -36,22 +36,22 @@ function add() {
 
 <template>
   <section aria-label="Source workspace">
-    <h2>Sources</h2>
+    <h2>Packages</h2>
     <button type="button" @click="emit('reset')">Load default example</button>
     <label>Entry
       <select aria-label="Entry" :value="entry" @change="emit('entry', ($event.target as HTMLSelectElement).value)">
-        <option v-for="(_, path) in sources" :key="path" :value="path">{{ path }}</option>
+        <option v-for="(_, path) in packages" :key="path" :value="path">{{ path }}</option>
       </select>
     </label>
     <nav aria-label="Source files">
-      <button v-for="(_, path) in sources" :key="path" type="button" :aria-pressed="path === selectedFile" @click="emit('file', String(path))">
+      <button v-for="(_, path) in packages" :key="path" type="button" :aria-pressed="path === selectedFile" @click="emit('file', String(path))">
         {{ path }} ({{ diagnostics.filter(item => item.workflow_id === path).length }})
       </button>
     </nav>
     <form @submit.prevent="add">
-      <label>New file path <input v-model="newPath" required /></label>
+      <label>New package name <input v-model="newPath" placeholder="billing.charge or __main__" required /></label>
       <label>New file format <select v-model="newFormat" aria-label="New file format"><option>yaml</option><option>json</option></select></label>
-      <button type="submit">Add file</button>
+      <button type="submit">Add package</button>
     </form>
     <p v-if="message" role="alert">{{ message }}</p>
     <template v-if="document">
@@ -60,11 +60,11 @@ function add() {
           <option>yaml</option><option>json</option>
         </select>
       </label>
-      <button type="button" @click="emit('remove', selectedFile)">Delete file</button>
+      <button type="button" @click="emit('remove', selectedFile)">Delete package</button>
       <label :for="'source-text'">{{ selectedFile }}</label>
       <textarea id="source-text" :value="document.text" rows="26" spellcheck="false" @input="emit('text', selectedFile, ($event.target as HTMLTextAreaElement).value)" />
     </template>
-    <p v-else>No source files. Add a file or load the example.</p>
+    <p v-else>No workflow packages. Add a package or load the example.</p>
     <details v-if="compilerRaw?.at(['bundle', 'workflows', entry])">
       <summary>Entry input contract ({{ contract.length }} fields)</summary>
       <table>

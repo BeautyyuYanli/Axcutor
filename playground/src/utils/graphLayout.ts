@@ -1,5 +1,5 @@
 /** Convert only checked Rust topology. Runtime addresses are resolved against
- * the submitted bundle, starting from its exact entry (which can contain '/').
+ * the submitted bundle, starting from its dotted package or anonymous entry.
  * Iteration frames stay in the caller scope; a function/block at the same
  * address then enters the node body. Never guess scope from call_depth.
  */

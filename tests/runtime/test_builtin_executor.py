@@ -619,7 +619,7 @@ def test_keyword_list_matches_public_compiler_restrictions():
                 dumps(
                     {
                         "entry": "main",
-                        "sources": {"main": {"format": "json", "text": dumps(source)}},
+                        "packages": {"main": {"format": "json", "text": dumps(source)}},
                     }
                 )
             )

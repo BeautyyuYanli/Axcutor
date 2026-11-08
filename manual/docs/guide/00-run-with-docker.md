@@ -11,7 +11,7 @@
 docker compose up -d --build
 
 # 提交端读取源文件、编译完整依赖闭包，再将快照提交给 Temporal。
-docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/inputs/demo.json
+docker compose run --rm cli run /examples/workflows/demo/main --mount demo=/examples/workflows/demo --input /examples/inputs/demo.json
 ```
 
 命令首先输出初始 `Execution`，随后等待并输出终态 `Execution`，两者都包含 `execution_id`。终态对象的 `result` 为：
@@ -20,7 +20,7 @@ docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/
 {"branch":null,"output":{"doubled":[6,2,4],"total":12}}
 ```
 
-入口工作流对 `[3,1,2]` 以并发度 2 调用子工作流，按输入顺序汇集结果，再执行 Python 汇总 Activity。每个迭代 Activity 等待 5 秒，便于观察运行状态。工作流提交后，修改源文件不会改变该次执行使用的快照。
+`demo.main` 对 `[3,1,2]` 以并发度 2 调用 `demo.double`，按输入顺序汇集结果，再执行 Python 汇总 Activity。每个迭代 Activity 等待 5 秒，便于观察运行状态。工作流提交后，修改源文件不会改变该次执行使用的快照。
 
 ## 在 Web UI 查看状态
 
@@ -43,17 +43,17 @@ docker compose exec temporal temporal workflow query --workflow-id <workflow-id>
 
 ## 提交自己的工作流包或入口文件
 
-`cli` 服务默认将仓库的 `examples/` 只读挂载到 `/examples`。外部目录可额外挂载：
+`cli` 服务默认将仓库的 `examples/` 只读挂载到 `/examples`。具名工作流必须位于显式挂载包内，目录含 `__axcutor__.yaml` 与 `__init__.py`：
 
 ```sh
 # 将本机目录挂载为 /workflows，并提交其中的入口与输入文件。
-docker compose run --rm -v "$PWD/my-workflows:/workflows:ro" cli run /workflows/main.yaml --source-root /workflows --input /workflows/input.json
+docker compose run --rm -v "$PWD/my-workflows:/workflows:ro" cli run /workflows/billing/charge --mount billing=/workflows/billing --input /workflows/input.json
 ```
 
-在统一工作流包模型下，宿主挂载的根包目录（如 `<source-root>/billing`）中任何包含 `__axcutor__.yaml`（或 `__axcutor__.json`）的包目录均按点分逻辑包路径（`PackagePath`）注册；独立单文件入口则以保留匿名标识 `"__main__"` 编译，仅入口及其 `use` 引用闭包参与编译：
+`--mount ROOT=DIRECTORY` 声明公开根包，可挂载多个不同根；重复根名、重叠目录与同名包冲突会被拒绝。根下仅 `__axcutor__.yaml` 声明工作流包；仅入口及其引用闭包参与编译：
 
 ```yaml
-# 对应挂载根下的 billing/verify/__axcutor__.yaml 工作流包，按点分包路径引用。
+# 对应挂载 billing 下的 verify/__axcutor__.yaml，引用绝对点分包名。
 use: workflow:billing.verify
 ```
 
@@ -65,7 +65,7 @@ use: workflow:billing.verify
 
 ```sh
 # 每次执行默认生成新的 ID；--id 可指定便于搜索的 ID。
-docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/inputs/demo.json --id my-demo --no-wait
+docker compose run --rm cli run /examples/workflows/demo/main --mount demo=/examples/workflows/demo --input /examples/inputs/demo.json --id my-demo --no-wait
 ```
 
 `--no-wait` 只输出初始 `Execution`，退出码仅反映提交是否成功，不反映执行终态；执行结果需使用返回的 `execution_id` 另行查询。相同 ID 在 Temporal 保留执行记录期间不可重复提交，已完成的执行也会冲突。
@@ -78,7 +78,7 @@ docker compose run --rm cli run /examples/workflows/main.yaml --input /examples/
 # 源码以字符串传入；只编译入口及其 use 引用闭包。
 curl -i http://localhost:8000/v1/executions \
   -H 'Content-Type: application/json' \
-  -d '{"execution_id":"http-demo","entry":"__main__","sources":{"__main__":{"format":"yaml","text":"input:\n  n: {type: integer}\noutput:\n  n: {type: integer}\nrun:\n  executor: builtin\n  content: return Output(n=input.n)\n"}},"input":{"n":7}}'
+  -d '{"execution_id":"http-demo","entry":"__main__","packages":{"__main__":{"format":"yaml","text":"input:\n  n: {type: integer}\noutput:\n  n: {type: integer}\nrun:\n  executor: builtin\n  content: return Output(n=input.n)\n"}},"input":{"n":7}}'
 
 # 查询终态输出或当前活跃帧；取消操作等待执行器协同清理。
 curl http://localhost:8000/v1/executions/http-demo
@@ -116,10 +116,12 @@ uv sync --locked
 
 # 在独立终端持续运行 Worker，另一个终端提交工作流。
 uv run --locked axcutor worker
-uv run --locked axcutor run examples/workflows/main.yaml --input examples/inputs/demo.json
+uv run --locked axcutor run examples/workflows/demo/main --mount demo=examples/workflows/demo --input examples/inputs/demo.json
 
 # 可在另一个终端启动 HTTP 宿主，默认仅监听 127.0.0.1:8000。
 uv run --locked axcutor serve
 ```
 
 `worker`、`run` 与 `serve` 均接受 `--address`、`--namespace`、`--task-queue`，默认分别读取 `TEMPORAL_ADDRESS`、`TEMPORAL_NAMESPACE`、`AXCUTOR_TASK_QUEUE`，未配置时使用 `localhost:7233`、`default`、`axcutor`。`serve --host 0.0.0.0 --port 8000` 可调整 HTTP 监听地址与端口；HTTP 宿主不启动 Worker。
+
+独立 YAML/JSON 入口文件使用匿名标识 `__main__`，也可通过 `--mount` 引用公开包。`module` 实现与生成契约需另行安装在 Worker 环境；只挂载提交端的工作流目录不会部署 Python 模块。契约生成、Worker 根映射和私有可见性见 [包与模块指南](./01-foundations/04-packages-and-modules.md)。

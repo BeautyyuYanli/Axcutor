@@ -38,7 +38,7 @@ fn call_arguments_and_iteration_sources_require_assigned_roots() {
             if initialized {
                 doc["graph"]["variables"]["source"]["default"] = default.clone();
             }
-            let out = compile_sources(
+            let out = compile_packages(
                 "main",
                 [
                     ("main".into(), source(doc)),
@@ -334,7 +334,7 @@ fn foreach_action_inline_and_call_have_single_outputs_and_aggregate_boundaries()
     let target = source(
         json!({"input":{"p":{"type":"string"}},"output":{"out":{"type":"array","items":{"type":"string"}}},"branches":{"some":"keep","empty":{"description":"skip","output":[]}},"run":{"executor":"builtin","content":"work"}}),
     );
-    let out = compile_sources(
+    let out = compile_packages(
         "main",
         [("main".into(), source(main)), ("target".into(), target)],
     );
@@ -535,7 +535,7 @@ fn marker_objects_are_rejected_in_every_query_typespec_position() {
                     text: invalid_doc.to_string(),
                 };
                 only_error(
-                    &compile_sources("main", [("main".into(), source)]),
+                    &compile_packages("main", [("main".into(), source)]),
                     "type.schema",
                     "/input/x",
                 );
@@ -662,7 +662,7 @@ fn invalid_callee_bodies_cannot_justify_caller_assignment_facts() {
     let mut main = main;
     main["output"] = json!({"x":{"type":"integer"}});
     let bad = json!({"input":{},"output":{"x":{"type":"integer"}},"graph":{"nodes":{"n":{"run":{"executor":"builtin","content":"work"}}},"edges":["start -> n","n -> end"]}});
-    let out = compile_sources(
+    let out = compile_packages(
         "main",
         [("main".into(), source(main)), ("bad".into(), source(bad))],
     );

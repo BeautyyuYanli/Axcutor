@@ -206,12 +206,12 @@ async def test_composite_deadline_allows_timely_normal_branch_and_output(executi
         branches={"ready": "computed"},
     )
     modifiers = {"timeout_ms": 5000, "catch": {"timed": ["timeout"]}}
-    sources = {}
+    packages = {}
     if kind == "inline":
         node = inline(callee, ["n", "bonus"], **modifiers)
     else:
         node = call("callee", {"n": "n", "bonus": "bonus"}, {"value": "value"}, **modifiers)
-        sources["callee"] = {"format": "json", "text": dumps(callee)}
+        packages["callee"] = {"format": "json", "text": dumps(callee)}
     document = graph(
         {"sub": node},
         ["start -> sub", "sub.ready -> end.ok", "sub.timed -> end.timed"],
@@ -226,7 +226,7 @@ async def test_composite_deadline_allows_timely_normal_branch_and_output(executi
         handle = await run.start(
             document,
             {"n": 40, "bonus": 2},
-            sources=sources,
+            packages=packages,
             options={"child_workflow_history_events": 1} if kind == "child" else {},
         )
         assert await run.finish(handle) == {"branch": "ok", "output": {"value": 42}}
@@ -255,7 +255,7 @@ async def test_call_success_preserves_values_and_runs_child_only_at_history_boun
         handle = await run.start(
             document,
             {"n": 999999999999999999999999},
-            sources={"callee": {"format": "json", "text": dumps(callee)}},
+            packages={"callee": {"format": "json", "text": dumps(callee)}},
             options={"child_workflow_history_events": 1} if child else {},
         )
         assert (await run.finish(handle))["output"] == {"answer": 999999999999999999999999}
@@ -309,7 +309,7 @@ async def test_child_selectors_survive_boundary_parent_owns_retry_and_catch(exec
     async with execution({"work": work}) as run:
         handle = await run.start(
             document,
-            sources={"callee": {"format": "json", "text": dumps(callee)}},
+            packages={"callee": {"format": "json", "text": dumps(callee)}},
             options={"child_workflow_history_events": 1},
         )
         assert (await run.finish(handle))["output"] == {"value": 7}
@@ -343,7 +343,7 @@ async def test_child_timeout_cancellation_waits_for_descendant_cleanup(execution
     async with execution({"work": work, "check": check}) as run:
         handle = await run.start(
             document,
-            sources={"callee": {"format": "json", "text": dumps(callee)}},
+            packages={"callee": {"format": "json", "text": dumps(callee)}},
             options={"child_workflow_history_events": 1},
         )
         assert (await run.finish(handle))["output"] == {}
@@ -367,7 +367,7 @@ async def test_child_depth_panic_bypasses_catch_and_dsl_retry(execution):
     async with execution({}) as run:
         failure = await run.failed(
             document,
-            sources={
+            packages={
                 "middle": {"format": "json", "text": dumps(middle)},
                 "leaf": {"format": "json", "text": dumps(leaf)},
             },

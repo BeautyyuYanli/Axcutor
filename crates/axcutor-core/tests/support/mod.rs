@@ -3,7 +3,7 @@ use axcutor_core::{ast::*, *};
 use serde_json::{Value, json};
 
 pub fn compile(v: Value) -> CompileOutput {
-    compile_sources(
+    compile_packages(
         "main",
         [(
             "main".into(),
@@ -15,7 +15,7 @@ pub fn compile(v: Value) -> CompileOutput {
     )
 }
 pub fn yaml(text: &str) -> CompileOutput {
-    compile_sources(
+    compile_packages(
         "main",
         [(
             "main".into(),
@@ -27,7 +27,7 @@ pub fn yaml(text: &str) -> CompileOutput {
     )
 }
 pub fn json_text(text: &str) -> CompileOutput {
-    compile_sources(
+    compile_packages(
         "main",
         [(
             "main".into(),
@@ -38,13 +38,13 @@ pub fn json_text(text: &str) -> CompileOutput {
         )],
     )
 }
-pub fn compile_sources(
+pub fn compile_packages(
     entry: &str,
-    sources: impl IntoIterator<Item = (String, SourceDocument)>,
+    packages: impl IntoIterator<Item = (String, SourceDocument)>,
 ) -> CompileOutput {
     compile_workflow(CompileRequest {
         entry: entry.into(),
-        sources: sources.into_iter().collect(),
+        packages: packages.into_iter().collect(),
     })
 }
 pub fn source(v: Value) -> SourceDocument {

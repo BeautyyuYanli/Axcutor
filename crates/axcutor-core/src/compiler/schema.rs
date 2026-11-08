@@ -252,6 +252,7 @@ pub(super) fn root(
             .and_then(|v| integer(Some(v), 1, None, &a.at("timeout_ms"), ds));
         let retry = retry(m.get("retry"), true, &a.at("retry"), ds);
         run.map(|run| RootBody::Run {
+            workflow_id: a.workflow.clone(),
             input_schema: input.clone(),
             run,
             timeout_ms,
@@ -284,7 +285,7 @@ fn run(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<RunSpec> {
         );
         return None;
     }
-    if executor != "builtin" {
+    if executor != "builtin" && executor != "module" {
         return Some(RunSpec::Extension {
             executor,
             config: m
@@ -301,7 +302,28 @@ fn run(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<RunSpec> {
             .error(ds, "node", "schema.run", "content must be nonempty");
         return None;
     }
-    Some(RunSpec::Builtin { content })
+    if executor == "module" {
+        if !local_module_spec(&content) {
+            a.at("content").error(
+                ds,
+                "node",
+                "schema.run",
+                "module requires . or .<LocalPath>",
+            );
+            return None;
+        }
+        if a.workflow == "__main__" {
+            a.error(
+                ds,
+                "node",
+                "module.anonymous_package",
+                "anonymous entry has no Python package",
+            );
+        }
+        Some(RunSpec::Module { content })
+    } else {
+        Some(RunSpec::Builtin { content })
+    }
 }
 
 fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
@@ -412,6 +434,15 @@ fn node(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedNode> {
             .and_then(|s| s.strip_prefix("workflow:"))
             .filter(|s| !s.is_empty())
         {
+            if !package_path(id) {
+                a.at("use").error(
+                    ds,
+                    "node",
+                    "schema.workflow_ref",
+                    "workflow requires an absolute dotted package path",
+                );
+                return None;
+            }
             closed(
                 m,
                 &["use", "with", "for_each", "timeout_ms", "retry", "catch"],
@@ -477,6 +508,7 @@ fn node(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedNode> {
             })
         } else {
             run(m.get("run"), &a.at("run"), ds).map(|run| NodeBody::Run {
+                workflow_id: a.workflow.clone(),
                 input,
                 input_schema: Symbols::new(),
                 output,

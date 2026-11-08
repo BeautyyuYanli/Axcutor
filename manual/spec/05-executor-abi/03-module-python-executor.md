@@ -14,12 +14,19 @@
    * **包内私有性**：工作流包文件夹内部的 `.py` 实现文件与 `*_contract.py` 契约模板严格归属于该工作流包私有，不构成独立的 Axcutor 工作流，不可被 `use: workflow:...` 跨包寻址。
    * **仅允许单点包内相对路径（`LocalModuleSpec`）**：`run.content` 必须为 `"."` 或 `".<LocalPath>"`（禁止跨包绝对路径，禁止 `..` 上级相对路径）。
    * **匿名入口工作流（`__main__`）隔离约束**：当工作流为未挂载在任何具名 Python 包下的匿名入口文档（$\text{workflow\_id} = \texttt{"\_\_main\_\_"}$）时，因不存在对应的宿主物理 Python 包上下文，编译期静态禁止使用 `executor: "module"`（报 `module.anonymous_package` 错误）。
+   * **闭合执行体**：`RunSpec::Module {content}` 只允许 `executor` 和 `content` 两个键；额外字段产生 `schema.unknown_field`，非法局部路径在 `/run/content` 产生 `schema.run`。匿名入口中任意嵌套层级均禁止 `module`。
+3. **编译请求与静态包加载**：
+   * 编译请求为闭合对象 `{entry, packages}`，其中 `packages` 是点分包名到 `SourceDocument {format, text}` 的有序映射，完全替代 `sources`；映射重复键在解析时拒绝。入口为各段均公开的包或 `__main__`。
+   * 宿主以显式根挂载构建快照，拒绝重复根、重叠物理树和同名包定义。编译器仅解析入口依赖闭包，先收集顶层签名，再检查实现；循环引用不依赖声明顺序，且不触发 Python 导入。
+   * 规范化原子根和图内 `run` 节点保存所属 `workflow_id`，内联图与迭代不会改变归属。解释器将该字段传给 Activity，业务模块只在 Activity 内加载。包名与逐层私有可见性详见 [文档文法](../01-grammar-and-ast/01-document-and-node-grammar.md) 和 [跨包调用规则](../03-static-flow-analysis/01-cfg-topology-and-sese-validation.md)。
 
 ---
 
 ## 二、 `__axcutor__.yaml` 工作流包同构目录结构与路径映射规则
 
 设当前工作流包在挂载命名空间中的逻辑点分包路径为 $\text{workflow\_pkg}$（例如 `"order_flow"` 或 `"billing.order_flow"`），对应宿主源码根目录下的物理文件夹路径为 `<workflow_dir>/`。`run.content` 的合法形态与同级契约模板文件、业务实现文件及运行期 `importlib.import_module` 目标模块名的映射关系如下表所示：
+
+下表采用逻辑根与 Python 根同名的默认映射。Worker 也可固定映射 `billing` 到 `company.billing`，此时 `billing.charge + .verify` 加载 `company.billing.charge.verify`。显式映射为封闭表，不能由提交请求注入或修改；缺少根映射产生 `execution` 错误。
 
 | `run.content`（`LocalModuleSpec`） | 相对契约模板文件路径（相对于 `<workflow_dir>/`） | 相对业务实现文件路径（相对于 `<workflow_dir>/`） | 解析后的目标 Python 模块名 |
 | :--- | :--- | :--- | :--- |
@@ -77,6 +84,8 @@
 2. **显式导出列表 `__all__`**：
    * 无分支节点（`branches_contract == {}`）：`__all__ = ["Input", "Output", "ReturnType", ...]`（包含所有生成的嵌套结构体模型类名 `Input_<path>` 与 `Output_<path>`）；
    * 多分支节点（`branches_contract != {}`）：`__all__ = ["Input", "Branch", "ReturnType", ...]`（包含所有生成的嵌套结构体模型类名 `Input_<path>` 与 `Output_<path>`）。
+3. **文件规划与检查入口**：
+   `axcutor contracts` 依据挂载的物理目录生成同级模板；`--check` 只检查缺失或过期模板。两种模式均在写入前完成全部规划，拒绝模板覆盖实现文件、与已有 Python 包目录同名，以及同一实际实现文件承担不同契约。`.` 与 `.__init__` 指向同一实现文件，也须满足契约一致性。只有生成模式在全部检查通过后写入；生成过程不导入业务模块。
 
 ---
 
@@ -112,10 +121,12 @@ async def execute(input: Input) -> ReturnType:
 
 在运行期加载目标业务模块 `mod` 后，`module` 执行器通过以下反射协议定位其绑定的契约模板模块并校验 SHA：
 
+实现的 `Input` 必须是模板导出的原始 `Input` 类，`Output` 或 `Branch` 必须为同一模板导出的对象；仅有相同 SHA 不足以允许混用模板。所有输出变体必须属于该模板的严格模型。
+
 1. 读取业务模块顶层属性 `input_cls = getattr(mod, "Input", None)`，校验 `input_cls` 为合法的契约模型类；
 2. 核对输出模型同源性：
    * 若当前节点为无分支节点（`branches_contract == {}`）：读取 `output_cls = getattr(mod, "Output", None)`，校验其存在且 `output_cls.__module__ == input_cls.__module__`；
-   * 若当前节点为多分支节点（`branches_contract != {}`）：读取 `branch_ns = getattr(mod, "Branch", None)`，校验其存在且 `branch_ns.__module__ == input_cls.__module__`；
+   * 若当前节点为多分支节点（`branches_contract != {}`）：读取 `branch_ns = getattr(mod, "Branch", None)`，校验其存在且类的模块来源与 `input_cls.__module__` 一致；读取来源时绕过分支命名空间属性钩子，以支持合法分支名 `__module__`；
 3. 从 `sys.modules.get(input_cls.__module__)` 取得已加载的契约模板模块对象 `contract_mod`，读取其顶层常量 `actual_sha = getattr(contract_mod, "__axcutor_contract_sha256__", None)`。
 
 ---
@@ -125,15 +136,16 @@ async def execute(input: Input) -> ReturnType:
 当运行时激活 `run: { executor: "module", content: <LocalModuleSpec> }` 的单次尝试时，请求载荷除包含 [`01-run-executor-contract.md`](./01-run-executor-contract.md) 定义的标准字段外，还携带当前节点所属的工作流包路径 `workflow_id`（即 $\text{workflow\_pkg}$）。`module` 执行器按以下顺序执行并映射结果：
 
 1. **包内相对路径解析与模块导入**：
-   * 根据所属工作流包路径 `workflow_pkg` 与单点相对路径 `content` 解析目标模块：
-     * 当 `content == "."` 时，目标模块名为 `workflow_pkg`，调用 `importlib.import_module(workflow_pkg)`；
-     * 当 `content == ".<rel_path>"` 时，目标模块名为 `f"{workflow_pkg}{content}"`，调用 `importlib.import_module(content, package=workflow_pkg)`；
+   * 先按 Worker 固定根映射将逻辑 `workflow_pkg` 转为 Python 包名 `python_pkg`，再结合单点相对路径 `content` 解析目标模块：
+     * 当 `content == "."` 时，目标模块名为 `python_pkg`；
+     * 当 `content == ".<rel_path>"` 时，目标模块名为 `f"{python_pkg}{content}"`；
+     * 导入前检查各路径组成部分的包／文件布局；`.` 的目标为包，局部实现的末段为文件模块，同名 Python 包目录与 `.py` 文件并存时拒绝加载；
    * 若模块导入期间抛出 `ModuleNotFoundError`、`ImportError`、`SyntaxError` 或其他顶层初始化异常，捕获并映射为标准可恢复异常 **`execution`**；
    * 检查 `getattr(mod, "execute", None)` 是否存在且满足 `inspect.iscoroutinefunction(mod.execute)`；若缺失 `execute` 或 `execute` 不是异步协程函数，立即抛出 `ContractError`，映射为标准可恢复异常 **`contract`**。
 2. **契约模板 SHA 一致性校验（Schema Drift Check）**：
    * 根据当前请求的 `(input_schema, output_schema, branches_contract)` 计算期望指纹 `expected_sha = compute_contract_sha256(input_schema, output_schema, branches_contract)`；
    * 按第四节反查机制通过 `mod.Input.__module__` 定位 `contract_mod`（同时验证 `mod.Output` 或 `mod.Branch` 与 `mod.Input` 归属于同一契约模块）并提取 `actual_sha = getattr(contract_mod, "__axcutor_contract_sha256__", None)`；
-   * 若 `mod` 未导入合法的契约模型类、`mod.Output` / `mod.Branch` 模块来源不一致、无法读取字符串类型的 `actual_sha`，或 `actual_sha != expected_sha`，立即抛出 `ContractError(f"module {target_module!r} contract SHA mismatch: expected {expected_sha}, got {actual_sha}")`，映射为标准可恢复异常 **`contract`**。
+   * 若 `mod` 未导入合法的契约模型类，或 `mod.Output` / `mod.Branch` 与 `mod.Input` 来源不一致，立即抛出说明契约来源错误的 `ContractError`；若无法读取 SHA 或 `actual_sha != expected_sha`，抛出包含预期与实际 SHA 的 `ContractError`。两类错误均映射为标准可恢复异常 **`contract`**。
 3. **只读输入快照构造与协程求值**：
    * 调用 `contract_mod.Input.model_validate(deepcopy(input_snapshot))` 构造冻结的只读 `input_model`（自动将传输层 `Decimal` 转换为原生 `float`）；若输入边界转换失败，抛出 `ContractError`（映射为 **`contract`** 异常）；
    * 在事件循环中启动 `asyncio.create_task(mod.execute(input_model))` 并监听 `abort_signal`；一旦取消信号触发，立即向任务注入 `asyncio.CancelledError` 并等待其排空退出。
@@ -145,3 +157,7 @@ async def execute(input: Input) -> ReturnType:
      上述情形统一捕获并映射为标准可恢复异常 **`contract`**；
    * **业务与运行时故障映射为 `execution` 异常**：
      * `mod.execute(input_model)` 执行期间抛出的除上述契约违约与 `CancelledError` 以外的任何未捕获异常，直接保留 Python 物理 `.py` 文件路径与真实源码行号堆栈，映射为标准可恢复异常 **`execution`**。
+
+输入与嵌套模型冻结，列表与映射保留 Python 容器语义；修改这些容器不会影响原输入快照。使用 Pydantic 构造旁路产生的非法输出仍由 Rust 边界拒绝；无关业务模型的 Pydantic 校验异常保持 `execution` 分类。
+
+`builtin` 与 `module` 共用单次 Python 调用生命周期：构造隔离输入、竞速业务任务与取消信号、核验并导出输出，所有退出路径均取消并排空所拥有任务。源码合成或模块加载、契约来源检查与各自的错误位置诊断保留在执行器入口。外层 Activity 管理心跳、deadline 与最终 Rust 校验，超时和取消优先于迟到返回值。Python 导入缓存属于宿主进程；工作流快照只固定 DSL，不固定或携带 Python 实现版本。

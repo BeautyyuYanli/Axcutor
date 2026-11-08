@@ -30,10 +30,12 @@ def create_worker(
     client: Client,
     task_queue: str,
     executors: Mapping[str, Executor] | None = None,
+    *,
+    module_mounts: Mapping[str, str] | None = None,
     **kwargs: Any,
 ) -> Worker:
-    """Register the interpreter and executor dispatcher, including builtin Python."""
-    activities = RunActivities(executors)
+    """Register both Python executors; copy mount configuration outside replay."""
+    activities = RunActivities(executors, module_mounts=module_mounts)
     return Worker(
         client,
         task_queue=task_queue,

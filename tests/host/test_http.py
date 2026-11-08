@@ -27,8 +27,8 @@ def request_body(*, inputs=None):
         outputs={"value": INTEGER},
     )
     return {
-        "entry": "main.yaml",
-        "sources": {"main.yaml": {"format": "json", "text": dumps(doc)}},
+        "entry": "demo.main",
+        "packages": {"demo.main": {"format": "json", "text": dumps(doc)}},
         "input": {"n": 7} if inputs is None else inputs,
     }
 
@@ -124,17 +124,21 @@ async def test_invalid_json_is_strict_and_precedes_backend(text):
         1,
         {},
         {"entry": "main"},
-        {"entry": "main", "sources": []},
-        {"entry": 1, "sources": {}},
-        {"entry": "/main", "sources": {}},
-        {"entry": "../main", "sources": {}},
-        {"entry": "main", "sources": {}, "input": None},
-        {"entry": "main", "sources": {}, "execution_id": None},
-        {"entry": "main", "sources": {}, "execution_id": ""},
-        {"entry": "main", "sources": {}, "unknown": 1},
-        {"entry": "main", "sources": {"main": {"format": "xml", "text": ""}}},
-        {"entry": "main", "sources": {"main": {"format": [], "text": ""}}},
-        {"entry": "main", "sources": {"main": {"format": "yaml", "text": 1}}},
+        {"entry": "main", "packages": []},
+        {"entry": 1, "packages": {}},
+        {"entry": "/main", "packages": {}},
+        {"entry": "../main", "packages": {}},
+        {"entry": "main", "packages": {}, "input": None},
+        {"entry": "main", "packages": {}, "execution_id": None},
+        {"entry": "main", "packages": {}, "execution_id": ""},
+        {"entry": "main", "packages": {}, "unknown": 1},
+        {"entry": "main", "packages": {"main": {"format": "xml", "text": ""}}},
+        {"entry": "main", "packages": {"main": {"format": [], "text": ""}}},
+        {"entry": "main", "packages": {"main": {"format": "yaml", "text": 1}}},
+        {"entry": "main", "sources": {}},
+        {"entry": "old.yaml", "packages": {}},
+        {"entry": "billing._private", "packages": {}},
+        {"entry": "__main__", "packages": {"bad/path": {"format": "yaml", "text": ""}}},
     ],
 )
 async def test_invalid_request_shapes_are_rejected_without_backend(body):
@@ -149,7 +153,7 @@ async def test_compilation_input_and_backend_errors_use_distinct_contracts():
     backend = await Client.connect("127.0.0.1:1", lazy=True)
     async with client_for(backend) as client:
         body = request_body()
-        body["sources"]["main.yaml"]["text"] = "input: {}\noutput: {}\ngraph: {}"
+        body["packages"]["demo.main"]["text"] = "input: {}\noutput: {}\ngraph: {}"
         error = assert_error(
             await client.post("/v1/executions", content=dumps(body)), 422, "compilation_failed"
         )
@@ -210,7 +214,7 @@ async def test_live_routes_conflicts_cancellation_and_terminal_idempotency(serve
 
     body = request_body()
     body["execution_id"] = execution_id
-    body["sources"]["main.yaml"]["text"] = dumps(
+    body["packages"]["demo.main"]["text"] = dumps(
         {
             "input": {"n": INTEGER},
             "output": {},
@@ -282,8 +286,8 @@ async def test_http_roundtrip_preserves_large_integer_decimal_and_map_order(serv
         "map": {"b": 2, "a": 1},
     }
     body = {
-        "entry": "main.yaml",
-        "sources": {"main.yaml": {"format": "json", "text": dumps(doc)}},
+        "entry": "demo.main",
+        "packages": {"demo.main": {"format": "json", "text": dumps(doc)}},
         "input": {"value": value},
     }
     async with create_worker(server.client, queue):

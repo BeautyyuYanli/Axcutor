@@ -10,8 +10,14 @@ export type SourceDocument = {
 };
 
 export type SubmitExecutionRequest = {
+    /**
+     * __main__ or a public absolute dotted package path.
+     */
     entry: string;
-    sources: {
+    /**
+     * Dotted package names to workflow documents; no Python files or Worker mount configuration.
+     */
+    packages: {
         [key: string]: SourceDocument;
     };
     /**

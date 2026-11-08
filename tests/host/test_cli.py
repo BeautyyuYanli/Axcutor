@@ -11,9 +11,9 @@ from uuid import uuid4
 import httpx
 import pytest
 from axcutor_host import ExecutionService
-from axcutor_host.cli import load_sources
 from axcutor_runtime import compile_bundle
 from axcutor_runtime.codec import dumps, loads
+from axcutor_runtime.packages import PackageMount, load_packages
 from axcutor_runtime.worker import create_worker
 from helpers import INTEGER, call, graph
 from temporalio.client import WorkflowFailureError
@@ -49,7 +49,9 @@ async def test_cli_runs_source_snapshot_and_emits_exact_result(server, tmp_path,
     async with create_worker(server.client, queue):
         code, stdout, stderr = await invoke(
             "run",
-            EXAMPLES / "main.yaml",
+            EXAMPLES / "demo/main",
+            "--mount",
+            f"demo={EXAMPLES / 'demo'}",
             "--input",
             input_file,
             "--address",
@@ -76,6 +78,54 @@ async def test_cli_runs_source_snapshot_and_emits_exact_result(server, tmp_path,
             assert lines[1]["result"] == expected
 
 
+async def test_cli_module_uses_preinstalled_package_and_generated_contract(
+    server, tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(EXAMPLES))
+    queue = str(uuid4())
+    input_file = tmp_path / "input.json"
+    input_file.write_text(dumps({"value": 7}))
+    code, _, stderr = await invoke(
+        "contracts",
+        EXAMPLES / "demo/module_double",
+        "--mount",
+        f"demo={EXAMPLES / 'demo'}",
+        "--check",
+    )
+    assert code == 0, stderr
+    async with create_worker(server.client, queue, module_mounts={"demo": "demo"}):
+        code, stdout, stderr = await invoke(
+            "run",
+            EXAMPLES / "demo/module_double",
+            "--mount",
+            f"demo={EXAMPLES / 'demo'}",
+            "--input",
+            input_file,
+            "--address",
+            server.client.service_client.config.target_host,
+            "--task-queue",
+            queue,
+        )
+    assert code == 0, stderr
+    assert loads(stdout.splitlines()[-1])["result"] == {"branch": None, "output": {"value": 14}}
+
+
+async def test_cli_rejects_duplicate_root_mounts_before_backend(tmp_path):
+    root = EXAMPLES / "demo"
+    code, stdout, stderr = await invoke(
+        "run",
+        root / "main",
+        "--mount",
+        f"demo={root}",
+        "--mount",
+        f"demo={root}",
+        "--address",
+        "127.0.0.1:1",
+    )
+    assert code == 1 and not stdout
+    assert "unique ROOT=TARGET" in stderr
+
+
 async def test_cli_rejects_invalid_source_before_connecting(tmp_path):
     source = tmp_path / "invalid.yaml"
     source.write_text("input: {}\noutput: {}\ngraph: {}\n")
@@ -85,29 +135,35 @@ async def test_cli_rejects_invalid_source_before_connecting(tmp_path):
     assert "CompilationError" in stderr
 
 
-def test_file_sources_use_explicit_root_and_only_compile_reachable_documents(tmp_path):
-    nested = tmp_path / "nested"
-    nested.mkdir()
-    entry = nested / "main.json"
+def test_file_packages_use_explicit_mounts_and_only_compile_reachable_documents(tmp_path):
+    root = tmp_path / "demo"
+    nested = root / "nested"
+    child = root / "child"
+    nested.mkdir(parents=True)
+    child.mkdir()
+    for directory in [root, nested, child]:
+        (directory / "__init__.py").write_text("raise RuntimeError('must not import')\n")
+    entry = nested / "__axcutor__.yaml"
     entry.write_text(
         dumps(
             graph(
-                {"child": call("child.yml", outputs={"value": "value"})},
+                {"child": call("demo.child", outputs={"value": "value"})},
                 ["start -> child", "child -> end"],
                 outputs={"value": INTEGER},
             )
         )
     )
-    (tmp_path / "child.yml").write_text(
+    (child / "__axcutor__.yaml").write_text(
         "input: {}\noutput:\n  value: {type: integer}\n"
         "run:\n  executor: builtin\n  content: return Output(value=7)\n"
     )
-    (tmp_path / "unused.json").write_text("not a workflow")
-    bundle = loads(compile_bundle(*load_sources(entry, tmp_path)))
-    assert bundle["entry"] == "nested/main.json"
-    assert set(bundle["workflows"]) == {"nested/main.json", "child.yml"}
+    (root / "unused.json").write_text("not a workflow")
+    mounts = [PackageMount("demo", root)]
+    bundle = loads(compile_bundle(*load_packages(entry, mounts)))
+    assert bundle["entry"] == "demo.nested"
+    assert set(bundle["workflows"]) == {"demo.nested", "demo.child"}
     with pytest.raises(ValueError):
-        load_sources(tmp_path / "child.yml", nested)
+        load_packages(entry)
 
 
 async def test_cli_rejects_invalid_input_before_connecting(tmp_path):
@@ -179,12 +235,12 @@ async def test_worker_process_polls_and_handles_sigterm(server):
         host = ExecutionService(server.client, queue)
         text = "input: {}\noutput: {}\nrun:\n  executor: builtin\n  content: return Output()\n"
         source = {
-            "main.yaml": {
+            "demo.main": {
                 "format": "yaml",
                 "text": text,
             },
         }
-        first = await host.submit("main.yaml", source)
+        first = await host.submit("demo.main", source)
         final = await host.wait(first["execution_id"])
         assert final["status"] == "completed", final
 

@@ -51,30 +51,30 @@ try {
   await expect(page.getByRole('table', { name: 'Available variables and field projections' })).toContainText('item');
   await graph.getByRole('button', { name: 'Open workflow' }).click();
   await expect(graph.locator('.vue-flow__node')).toHaveCount(3);
-  await expect(page.getByLabel('Workflow', { exact: true })).toHaveValue('double.yaml');
+  await expect(page.getByLabel('Workflow', { exact: true })).toHaveValue('demo.double');
 
-  // File creation/deletion and diagnostics navigate the actual editable closure.
-  await page.getByLabel('New file path', { exact: true }).fill('nested/new.json');
+  // Package creation/deletion and diagnostics navigate the editable closure.
+  await page.getByLabel('New package name', { exact: true }).fill('nested.new');
   await page.getByLabel('New file format', { exact: true }).selectOption('json');
-  await page.getByRole('button', { name: 'Add file', exact: true }).click();
-  await page.getByLabel('Entry', { exact: true }).selectOption('nested/new.json');
+  await page.getByRole('button', { name: 'Add package', exact: true }).click();
+  await page.getByLabel('Entry', { exact: true }).selectOption('nested.new');
   await page.locator('#source-text').fill('{"input":{},"output":{},"run":{"executor":"builtin","content":"return Output()"}}');
   await expect(run).toBeEnabled();
   await expect(graph.locator('.vue-flow__node')).toHaveCount(3);
   await page.locator('#source-text').fill('{"input":{},"output":{},"graph":{}}');
   await expect(run).toBeDisabled();
   const files = page.getByRole('navigation', { name: 'Source files', exact: true });
-  const mainFile = files.getByRole('button', { name: /^main\.yaml \(/ });
-  const newFile = files.getByRole('button', { name: /^nested\/new\.json \(/ });
+  const mainFile = files.getByRole('button', { name: /^demo\.main \(/ });
+  const newFile = files.getByRole('button', { name: /^nested\.new \(/ });
   await mainFile.click();
   await expect(mainFile).toHaveAttribute('aria-pressed', 'true');
   await expect(newFile).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('#source-text')).toHaveValue(mainSourceText);
-  await page.getByRole('region', { name: 'Diagnostics', exact: true }).getByRole('button', { name: /^nested\/new\.json\b/ }).first().click();
+  await page.getByRole('region', { name: 'Diagnostics', exact: true }).getByRole('button', { name: /^nested\.new\b/ }).first().click();
   await expect(newFile).toHaveAttribute('aria-pressed', 'true');
   await expect(mainFile).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('#source-text')).toHaveValue('{"input":{},"output":{},"graph":{}}');
-  await page.getByRole('button', { name: 'Delete file', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete package', exact: true }).click();
   await page.getByRole('button', { name: 'Load default example', exact: true }).click();
   await input.fill('{"items":[3,1,2],"delay_seconds":1}');
 
@@ -84,13 +84,13 @@ try {
   await expect(graph.locator('[data-node-kind="workflow"][data-active="true"]')).toHaveCount(1);
   await expect(graph).toContainText('running: [0], [1]');
   await graph.locator('.vue-flow__node[data-id="double"]').getByRole('button', { name: 'double', exact: true }).click();
-  await expect(status.getByRole('button', { name: 'function / main.yaml / double', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(status.getByRole('button', { name: 'function / demo.main / double', exact: true })).toHaveAttribute('aria-pressed', 'true');
   // An editor error must not change the submitted frame's graph interpretation.
   await page.locator('#source-text').fill('{}');
-  const childFrame = status.getByRole('button', { name: /function \/ main\.yaml\/double\[0\] \/ run/ });
+  const childFrame = status.getByRole('button', { name: /function \/ demo\.main\/double\[0\] \/ run/ });
   await expect(childFrame).toBeVisible();
   await childFrame.click();
-  await expect(page.getByLabel('Workflow', { exact: true })).toHaveValue('double.yaml');
+  await expect(page.getByLabel('Workflow', { exact: true })).toHaveValue('demo.double');
   await expect(graph.locator('[data-node-kind="run"][data-active="true"]')).toHaveCount(1);
   await expect(status).toHaveAttribute('data-status', 'completed', { timeout: 15000 });
   await expect(status.getByRole('region', { name: 'Execution result' })).toContainText('"total": 12');

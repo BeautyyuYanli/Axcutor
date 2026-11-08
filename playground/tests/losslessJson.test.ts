@@ -5,9 +5,9 @@ describe('lossless JSON boundary', () => {
   const value = '{"integer":1234567890123456789012345678901234567890,"decimal":1.00000000000000000001,"exponent":1e10000,"ordered":{"2":2,"1":1,"z":3},"escaped":"a\\\"b\\\\c\\n"}';
 
   it('splices strict input without evaluating numbers or reordering keys', () => {
-    const raw = serializeSubmitBody({ entry: 'main.yaml', sources: { 'main.yaml': { format: 'yaml', text: 'run: {}' } } }, `\n${value}\n`);
+    const raw = serializeSubmitBody({ entry: 'demo.main', packages: { 'demo.main': { format: 'yaml', text: 'run: {}' } } }, `\n${value}\n`);
     expect(new JsonText(raw).raw(['input'])).toBe(value);
-    expect(serializeSubmitBody({ entry: 'x', sources: {} }, ' ')).toContain('"input":{}');
+    expect(serializeSubmitBody({ entry: 'x', packages: {} }, ' ')).toContain('"input":{}');
   });
 
   it('formats only whitespace and indexes nested frame trees by tree path', () => {
@@ -25,6 +25,6 @@ describe('lossless JSON boundary', () => {
   });
 
   it.each(['null', '[]', '1.0', 'true'])('rejects a non-object submission input %s', raw => {
-    expect(() => serializeSubmitBody({ entry: 'x', sources: {} }, raw)).toThrow('Input must be a JSON object');
+    expect(() => serializeSubmitBody({ entry: 'x', packages: {} }, raw)).toThrow('Input must be a JSON object');
   });
 });

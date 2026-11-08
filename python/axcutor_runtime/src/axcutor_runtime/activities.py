@@ -48,10 +48,20 @@ Executor = Callable[[JsonObject, AbortSignal], Awaitable[JsonObject]]
 class RunActivities:
     """A worker-local, fixed registry; never imported by the interpreter Workflow."""
 
-    def __init__(self, executors: Mapping[str, Executor] | None = None) -> None:
+    def __init__(
+        self,
+        executors: Mapping[str, Executor] | None = None,
+        *,
+        module_mounts: Mapping[str, str] | None = None,
+    ) -> None:
         from .builtin import execute_builtin
+        from .module import module_executor
 
-        self._executors = {"builtin": execute_builtin, **(executors or {})}
+        self._executors = {
+            "builtin": execute_builtin,
+            "module": module_executor(module_mounts),
+            **(executors or {}),
+        }
         for name, function in self._executors.items():
             if not name or not inspect.iscoroutinefunction(function):
                 raise TypeError("executors must map executor names to async Python functions")

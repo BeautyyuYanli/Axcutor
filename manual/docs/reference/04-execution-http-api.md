@@ -22,17 +22,19 @@ Content-Type: application/json
 | 字段 | 类型 | 规则 |
 | --- | --- | --- |
 | `execution_id` | string，可省略 | 非空执行 ID；省略时生成 UUID。保留期内相同 ID 返回 `409`，不复用已有执行。 |
-| `entry` | string | 入口工作流标识：已挂载的公开工作流包路径（`PackagePath`，如 `"billing.charge"`）或独立匿名入口标识 `"__main__"`。 |
-| `sources` | object | 工作流标识（`PackagePath` 或 `"__main__"`）到 `{ "format": "yaml" 或 "json", "text": "源码" }` 的映射；应提供全部传递引用的工作流定义。 |
+| `entry` | string | `__main__` 或 `packages` 中各段均公开的绝对点分包名，如 `billing.charge`。 |
+| `packages` | object | 点分包名到 `{ "format": "yaml" 或 "json", "text": "源码" }` 的映射；应提供全部传递引用。 |
 | `input` | object，可省略 | 默认 `{}`；字段集合和类型必须符合入口输入契约。 |
 
 局部字段示例：
 
 ```json
-{"entry":"__main__","sources":{"__main__":{"format":"yaml","text":"..."}},"input":{"n":7}}
+{"entry":"__main__","packages":{"__main__":{"format":"yaml","text":"..."}},"input":{"n":7}}
 ```
 
-`text` 应为完整合法工作流，示例中的 `...` 只表示源码位置。工作流标识按点分包路径（`PackagePath`）精确匹配，`use: workflow:billing.verify` 引用 `sources["billing.verify"]`，并在编译期校验 `_` 前缀私有包可见性边界（如 `"__main__"` 不可调用私有子包 `billing._internal`，也不可使用 `executor: module`）。未被入口闭包引用的工作流不参与编译。
+`text` 应为完整合法工作流，示例中的 `...` 只表示源码位置。`use: workflow:billing.verify` 精确引用 `packages["billing.verify"]`；禁止文件路径、扩展名、相对引用与 `workflow:__main__`。根包必须公开，每个私有段都限制调用方位于其父包子树。未被入口闭包引用的文档不参与编译，但所有包名均检查合法性，重复 JSON 键会被拒绝。
+
+具名包中的 `module` 节点绑定 Worker 已安装的 Python 实现；请求不包含 Python 文件或 Worker 挂载配置。匿名 `__main__` 不能直接使用 `module`，可调用公开具名包。执行的工作流快照不会随源码文件更新，Python 依赖部署由宿主管理，见 [包与模块指南](../guide/01-foundations/04-packages-and-modules.md)。
 
 成功返回 `202 Accepted`，附带资源路径 `Location: /v1/executions/{execution_id}` 和初始 `Execution`。短工作流可能在响应前完成，响应可直接包含终态。提交会通过有期限的活跃查询确认 Worker 能响应；无响应时返回 `503`。后端已接受的执行不会因查询超时被自动撤销。调用方可指定 ID，并在收到不确定的 `503` 后查询该 ID。
 

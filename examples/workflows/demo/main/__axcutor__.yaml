@@ -9,8 +9,8 @@ output:
 graph:
   nodes:
     double:
-      # Source IDs include the extension and are relative to the source root.
-      use: workflow:double.yaml
+      # Calls always use absolute logical package names.
+      use: workflow:demo.double
       with:
         input:
           value: item

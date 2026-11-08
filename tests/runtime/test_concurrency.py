@@ -37,7 +37,7 @@ async def test_for_each_ordered_slots_skips_and_injected_scopes(execution, kind,
     if ordered_map:
         each["key"] = "key"
         captures.append("key")
-    sources = {}
+    packages = {}
     if kind == "run":
         node = action(
             "work", captures, {"results": INTEGER}, for_each=each, catch={"skip": ["execution"]}
@@ -60,7 +60,7 @@ async def test_for_each_ordered_slots_skips_and_injected_scopes(execution, kind,
                 "none": {"description": "missing", "output": []},
             },
         )
-        sources = {"callee": {"format": "json", "text": dumps(inner)}}
+        packages = {"callee": {"format": "json", "text": dumps(inner)}}
         node = call("callee", {"i": "item"}, {"value": "results"}, for_each=each)
         expected = {"0": 8} if ordered_map else [8]
     else:
@@ -71,7 +71,7 @@ async def test_for_each_ordered_slots_skips_and_injected_scopes(execution, kind,
             outputs={"value": INTEGER},
         )
         if kind == "call":
-            sources = {"callee": {"format": "json", "text": dumps(inner)}}
+            packages = {"callee": {"format": "json", "text": dumps(inner)}}
             node = call("callee", {"x": "item"}, {"value": "results"}, for_each=each)
         else:
             inner = graph(
@@ -90,7 +90,7 @@ async def test_for_each_ordered_slots_skips_and_injected_scopes(execution, kind,
         max_steps=3,
     )
     async with execution({"work": work}) as run:
-        result = await run.execute(document, {"items": sample}, sources=sources)
+        result = await run.execute(document, {"items": sample}, packages=packages)
         assert result["output"]["results"] == expected
         if ordered_map:
             assert list(result["output"]["results"]) == list(expected)
@@ -101,7 +101,7 @@ async def test_for_each_ordered_slots_skips_and_injected_scopes(execution, kind,
         empty_document["graph"]["nodes"]["after"] = assign("results", "results")
         empty_document["graph"]["edges"] = ["start -> map", "map -> after", "after -> end"]
         empty_document["graph"]["max_steps"] = 1
-        assert (await run.execute(empty_document, {"items": empty}, sources=sources))["output"][
+        assert (await run.execute(empty_document, {"items": empty}, packages=packages))["output"][
             "results"
         ] == empty
     assert active == 0

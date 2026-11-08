@@ -48,7 +48,8 @@ export default withMermaid(
             items: [
               { text: '01. Basics：基础概念与最小工作流', link: '/docs/guide/01-foundations/01-basics' },
               { text: '02. Use：调用子工作流包与可见性', link: '/docs/guide/01-foundations/02-use-subworkflows' },
-              { text: '03. Inline Graph：内联块级子图', link: '/docs/guide/01-foundations/03-inline-graphs' }
+              { text: '03. Inline Graph：内联块级子图', link: '/docs/guide/01-foundations/03-inline-graphs' },
+              { text: '04. 包挂载与 Python 模块', link: '/docs/guide/01-foundations/04-packages-and-modules' }
             ]
           },
           {

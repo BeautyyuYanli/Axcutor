@@ -619,6 +619,7 @@ class AxcutorInterpreterWorkflow:
                 ],
             )
         request = {
+            "workflow_id": body["workflow_id"],
             "run_spec": body["run"],
             "input_schema": body["input_schema"],
             "input_snapshot": snapshot,

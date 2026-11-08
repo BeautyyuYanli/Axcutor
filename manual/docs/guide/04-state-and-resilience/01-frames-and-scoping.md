@@ -92,7 +92,7 @@ graph:
 
 ### 2. 未初始化的局部变量类型声明（省略 `default` 键）
 
-当图内某局部中间变量仅由 `builtin:*` 算子、`use: workflow:<pkg_path>` 子工作流调用或挂载了 `for_each` 的节点写入，且既不属于宿主 `input` / `output` 也不属于其他未挂载 `for_each` 的 `run` / `graph` 节点的显式 `output` 时，在 `graph.variables` 中仅声明其 `TypeSpec` 而省略 `default` 键（等价于 TypeScript / Rust 中的 `let v: T;`）：
+当图内某局部中间变量仅由 `builtin:*` 算子、`use: workflow:<PackagePath>` 子工作流调用或挂载了 `for_each` 的节点写入，且既不属于宿主 `input` / `output` 也不属于其他未挂载 `for_each` 的 `run` / `graph` 节点的显式 `output` 时，在 `graph.variables` 中仅声明其 `TypeSpec` 而省略 `default` 键（等价于 TypeScript / Rust 中的 `let v: T;`）：
 
 * 该变量在当前图变量表中获得明确的静态类型，可供 `with.output` 或挂载 `for_each` 的节点绑定写入；
 * 在图入口 `start` 处处于**未定值状态（`Unbound`）**，必须先由后续节点完成写入定值，方可被下游节点读取（详见下文第四节“编译期全路径必达定值分析”）。

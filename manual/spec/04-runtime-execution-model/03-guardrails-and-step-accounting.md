@@ -9,7 +9,7 @@
 每个激活的图栈帧 $F_G$（含根图、`use` 调用的子工作流图、每次激活的内联 `graph` 子图）维护一个局部变量 $\text{steps}(F_G)$，初始值为 $0$，上限为 $G.\text{max\_steps}$（未显式声明时默认值为 $1000$）。
 
 1. **增量计步公式**：
-   * **激活未挂载 `for_each` 的单个节点 $N$（含 `run`、内联 `graph`、`use: workflow:<pkg_path>` 以及 `use: builtin:<op>` 内建算子节点）**：
+   * **激活未挂载 `for_each` 的单个节点 $N$（含 `run`、内联 `graph`、`use: workflow:<PackagePath>` 以及 `use: builtin:<op>` 内建算子节点）**：
      在启动 $N$ 之前，执行 $\text{steps}(F_G) \leftarrow \text{steps}(F_G) + 1$。
      *(注：每次激活 `use: builtin:<op>` 节点同样计 $1$ 步，确保由纯 `builtin:*` 节点构成的循环同样受 `max_steps` 护栏保护，其运行期求值语义详见 [`05-builtin-operational-semantics.md`](./05-builtin-operational-semantics.md)；节点 $N$ 内部的 `retry` 重试不额外增加所属图 $F_G$ 的 $\text{steps}$；若 $N$ 是内联 `graph` 或 `use` 节点，$N$ 在父图 $F_G$ 中仅计 $1$ 步，而 $N$ 内部展开的子图栈帧 $F_{\text{sub}}$ 独立从 $0$ 开始计量其自身的 $\text{steps}(F_{\text{sub}})$。)*
    * **激活 Fork-Join 并发组 `[W_1, ..., W_k]`**：
@@ -31,7 +31,7 @@
 运行时为每一条执行路径维护调用栈深度 $d$（上限为引擎配置参数 $\text{MAX\_CALL\_DEPTH}$，默认 $64$）：
 
 * 根工作流启动时：$d = 1$；
-* 沿当前执行路径每进入一层 `FunctionFrame`（`use: workflow:<pkg_path>`）或 `BlockFrame`（内联 `graph`），子栈帧的深度为：
+* 沿当前执行路径每进入一层 `FunctionFrame`（`use: workflow:<PackagePath>`）或 `BlockFrame`（内联 `graph`），子栈帧的深度为：
   $$d_{\text{child}} = d_{\text{parent}} + 1$$
 * 当 $d_{\text{child}} > \text{MAX\_CALL\_DEPTH}$ 时，立即抛出不可捕获的引擎级致命终止 **`StackOverflowError`**。
 * **并发分叉独立性**：当在深度为 $d$ 的父帧中分叉启动并发组 `[W_1, ..., W_k]` 或并发 `for_each` 的多个迭代时，每个并发子分支均以 $d$ 为基数各自独立计算 $d + 1$，兄弟分支之间不横向累加。

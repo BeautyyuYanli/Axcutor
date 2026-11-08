@@ -30,10 +30,10 @@ def test_native_kernel_text_and_decimal_round_trip():
 
 
 def test_compile_failure_retains_original_diagnostics():
-    sources = {"main": {"format": "yaml", "text": "input: {}\noutput: {}\ngraph: {}"}}
-    expected_json = axcutor_core.compile_workflow(dumps({"entry": "main", "sources": sources}))
+    packages = {"main": {"format": "yaml", "text": "input: {}\noutput: {}\ngraph: {}"}}
+    expected_json = axcutor_core.compile_workflow(dumps({"entry": "main", "packages": packages}))
     with pytest.raises(CompilationError) as failure:
-        compile_bundle("main", sources)
+        compile_bundle("main", packages)
     assert failure.value.result_json == expected_json
     assert failure.value.diagnostics == loads(expected_json)["diagnostics"]
     assert failure.value.diagnostics

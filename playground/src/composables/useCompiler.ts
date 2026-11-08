@@ -9,7 +9,7 @@ import { JsonText } from '../utils/losslessJson';
 
 let initialization: Promise<unknown> | undefined;
 
-export function useCompiler(entry: Ref<string>, sources: Ref<Record<string, SourceDocument>>) {
+export function useCompiler(entry: Ref<string>, packages: Ref<Record<string, SourceDocument>>) {
   const ready = ref(false);
   const error = ref<string | null>(null);
   const compileOutput = shallowRef<CompileOutput | null>(null);
@@ -19,7 +19,7 @@ export function useCompiler(entry: Ref<string>, sources: Ref<Record<string, Sour
   const compile = () => {
     if (!ready.value) return;
     try {
-      const raw = compile_workflow(JSON.stringify({ entry: entry.value, sources: sources.value }));
+      const raw = compile_workflow(JSON.stringify({ entry: entry.value, packages: packages.value }));
       rawOutput.value = new JsonText(raw);
       compileOutput.value = JSON.parse(raw) as CompileOutput;
       error.value = null;
@@ -38,7 +38,7 @@ export function useCompiler(entry: Ref<string>, sources: Ref<Record<string, Sour
       compile();
     } catch (cause) { error.value = `WASM initialization failed: ${String(cause)}`; }
   });
-  watch([entry, sources], compile, { deep: true });
+  watch([entry, packages], compile, { deep: true });
 
   function availableVariables(analysisJson: string, nodeId: string, expected: string): {
     candidate: VariableCandidate; typespecRaw: string;

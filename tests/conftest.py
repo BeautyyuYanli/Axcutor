@@ -26,9 +26,9 @@ class Execution:
         self.server, self.queue = server, queue
         self.handles = []
 
-    async def start(self, document, inputs=None, *, sources=None, options=None):
+    async def start(self, document, inputs=None, *, packages=None, options=None):
         source_map = {"main": {"format": "json", "text": dumps(document)}}
-        source_map.update(sources or {})
+        source_map.update(packages or {})
         request = {
             "bundle_json": compile_bundle("main", source_map),
             "input_json": dumps({} if inputs is None else inputs),

@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 #[serde(deny_unknown_fields)]
 pub struct CompileRequest {
     pub entry: String,
-    pub sources: Ordered<SourceDocument>,
+    pub packages: Ordered<SourceDocument>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -173,6 +173,24 @@ struct Document {
 /// before implementation checking. Recursive calls never expand another graph body.
 pub fn compile_workflow(request: CompileRequest) -> CompileOutput {
     let mut diagnostics = vec![];
+    for id in request.packages.keys() {
+        if id != "__main__" && !package_path(id) {
+            Address::root(id).error(
+                &mut diagnostics,
+                "document",
+                "schema.package_path",
+                "packages must use absolute dotted paths with public roots",
+            );
+        }
+    }
+    if request.entry != "__main__" && !public_package_path(&request.entry) {
+        Address::root(&request.entry).error(
+            &mut diagnostics,
+            "document",
+            "schema.entry",
+            "entry must be __main__ or a public absolute package path",
+        );
+    }
     let mut documents: Ordered<Document> = Ordered::new();
     let mut pending = VecDeque::from([request.entry.clone()]);
     let mut discovered = std::collections::HashSet::new();
@@ -181,22 +199,16 @@ pub fn compile_workflow(request: CompileRequest) -> CompileOutput {
             continue;
         }
         let a = Address::root(&id);
-        if id.is_empty() {
-            a.error(
-                &mut diagnostics,
-                "document",
-                "schema.resource_id",
-                "workflow identifiers must be nonempty",
-            );
+        if id != "__main__" && !package_path(&id) {
             continue;
         }
-        let Some(source) = request.sources.get(&id) else {
+        let Some(source) = request.packages.get(&id) else {
             if id == request.entry {
                 a.error(
                     &mut diagnostics,
                     "document",
-                    "schema.missing_source",
-                    "entry source is missing",
+                    "schema.missing_package",
+                    "entry package is missing",
                 );
             }
             continue;
@@ -417,7 +429,8 @@ pub fn derive_node_ports(analysis: &GraphAnalysis, node_id: &str) -> Vec<NodePor
 
 /// Malformed envelopes are host argument errors. Source/DSL errors are results.
 pub fn compile_workflow_json(text: &str) -> Result<String, String> {
-    let request: CompileRequest = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    // Reject duplicate package keys before serde's map can overwrite a mount.
+    let request: CompileRequest = json_argument(text, parse::MAX_MODEL_DEPTH)?;
     serde_json::to_string(&compile_workflow(request)).map_err(|e| e.to_string())
 }
 

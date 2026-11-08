@@ -2,7 +2,9 @@
 
 在 Axcutor 中，可复用的工作流以**工作流包（Workflow Package）**为单位组织，任何工作流包均可作为子节点被其他工作流通过点分包路径调用。
 
-当图内节点声明 `use: workflow:<pkg_path>`（或调用内建算子 `use: builtin:<op>`）时，运行时为其创建隔离的函数调用栈帧（`Function Frame`）。被调用方拥有独立的 `input`、`output` 与 `branches` 命名空间，无法隐式读取调用方图中的变量，仅通过 `with` 进行按值传参与返回值映射。编译器基于各工作流包顶层声明的静态签名（`input`、`output`、`branches`）独立完成类型、可见性与定值校验（支持跨包直接或间接递归调用，运行期受调用栈深度上限保护）。
+物理布局、显式根挂载与 Python 实现部署见 [04. 包挂载与 Python 模块](./04-packages-and-modules.md)。入口只能选择各段均公开的包或 `__main__`；私有包只供满足其可见性边界的工作流内部调用。
+
+当图内节点声明 `use: workflow:<PackagePath>`（或调用内建算子 `use: builtin:<op>`）时，运行时为其创建隔离的函数调用栈帧（`Function Frame`）。被调用方拥有独立的 `input`、`output` 与 `branches` 命名空间，无法隐式读取调用方图中的变量，仅通过 `with` 进行按值传参与返回值映射。编译器基于各工作流包顶层声明的静态签名（`input`、`output`、`branches`）独立完成类型、可见性与定值校验（支持跨包直接或间接递归调用，运行期受调用栈深度上限保护）。
 
 ---
 
@@ -48,7 +50,7 @@ workflows/
 
 ### 1. 显式入参绑定、按需输出接收与子类型兼容
 
-对于 `use: workflow:<pkg_path>` 节点，参数绑定遵循显式边界与单向子类型兼容原则：
+对于 `use: workflow:<PackagePath>` 节点，参数绑定遵循显式边界与单向子类型兼容原则：
 
 * **`with.input` 必填参数显式绑定与入参子类型兼容**：被调用子工作流顶层声明的每一个 `input` 参数，均必须在 `with.input` 中显式写出（若调用方变量与参数同名，显式写作 `<param>: <param>`；仅当被调用工作流 `input: {}` 为空时可省略 `with.input`）。传入实参的类型只需是目标输入参数声明类型的**子类型**——例如可将非空 `string` 传给子工作流的可选参数 `[string, "null"]`、将 `integer` 传给 `number` 参数、将带 `enum` 的分类字符串传给普通 `string` 参数，或将 `Array<integer>` 协变传给 `Array<number>`（详见 [TypeSpec 速查表：静态子类型与容器协变](../../reference/03-typespec-cheatsheet.md)）。
 * **`with.output` 按需映射与出参子类型兼容**：在 `with.output` 中仅需列出调用方需要接收的输出字段 `<target_field>: <local_var>`（其中 `<local_var>` 为合法顶层标识符，禁止设为 `null`）。子工作流输出字段的类型只需是当前图中目标接收变量声明类型的**子类型**，即允许父图使用更宽泛的变量类型（如可空类型、父枚举或 `number`）接收子工作流产出的精确类型。未在 `with.output` 中列出的其余子工作流输出字段默认自动忽略，既不注入调用方符号表，也不会在被调用工作流升级新增输出字段时污染或冲突调用方命名空间。
@@ -133,7 +135,7 @@ nodes:
         clean_text: normalized_body
 ```
 
-> **提示**：`use: workflow:<pkg_path>` 节点同样支持挂载 `for_each` 进行批量调用，详见 [01. For-Each：静态集合并发映射](../03-concurrency/01-for-each.md)。
+> **提示**：`use: workflow:<PackagePath>` 节点同样支持挂载 `for_each` 进行批量调用，详见 [01. For-Each：静态集合并发映射](../03-concurrency/01-for-each.md)。
 
 ---
 

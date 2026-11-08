@@ -1,4 +1,4 @@
-"""Compile complete manual examples and type-check their exported builtin modules."""
+"""Compile manual examples and type-check generated builtin/module contracts."""
 
 import re
 import subprocess
@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import axcutor_core
-from axcutor_runtime.builtin import synthesize_module
+from axcutor_runtime.builtin import synthesize_contract_module, synthesize_module
 from axcutor_runtime.codec import dumps, loads
 
 
@@ -16,14 +16,19 @@ def test_complete_manual_examples_generate_standalone_typed_python(tmp_path):
     def export(root, address):
         body = root["body"]
         if body["kind"] == "run":
-            unit = synthesize_module(
+            schemas = (
                 body["input_schema"],
                 root.get("output", body.get("output", {})),
                 root.get("branches", body.get("branches", {})),
-                body["run"]["content"],
             )
+            if body["run"]["executor"] == "module":
+                source = synthesize_contract_module(*schemas)
+            elif body["run"]["executor"] == "builtin":
+                source = synthesize_module(*schemas, body["run"]["content"]).source
+            else:
+                return
             filename = tmp_path / (re.sub(r"[^a-zA-Z0-9_]", "_", address) + ".py")
-            filename.write_text(unit.source)
+            filename.write_text(source)
             files.append(str(filename))
         if body["kind"] == "graph":
             for name, node in body["graph"]["nodes"].items():
@@ -37,7 +42,7 @@ def test_complete_manual_examples_generate_standalone_typed_python(tmp_path):
                     dumps(
                         {
                             "entry": "main",
-                            "sources": {"main": {"format": "yaml", "text": block}},
+                            "packages": {"main": {"format": "yaml", "text": block}},
                         }
                     )
                 )

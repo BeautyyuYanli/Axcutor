@@ -38,7 +38,7 @@ graph: ...
 > **`run` 通过结构化 `executor` 承载受函数签名约束的业务代码。**
 > Axcutor 内建提供两种同构的强类型 Python 执行器形态：
 > - **`executor: builtin`（内联 Python 执行器）**：在 YAML 的 `content` 中直接编写异步函数体（对应 `async def execute(input: Input) -> ReturnType:`），运行时在内存中动态合成强类型 `Input`、`Output` 与 `Branch` 模型并注入函数作用域，适合轻量级转换、胶水逻辑或单文件快速原型。
-> - **`executor: module`（模块级 Python 执行器）**：在具名工作流包（包含 `__axcutor__.yaml` 与 `__init__.py` 的目录）内，通过 `content: ".<local_path>"`（单步根节点还支持 `content: "."`）指向包内独立的 `.py` 源文件。每个模块导入由 `axcutor codegen` 预生成的伴生强类型契约桩文件（`*_contract.py` / `_contract.py`）并定义显式 `async def execute(input: Input) -> ReturnType:`，天然获得完整的 IDE 补全、静态类型检查（`mypy --strict` / `pyright`）、单元测试与调试器断点能力，且运行时在边界强制校验编译期契约指纹（`__axcutor_contract_sha256__`）。
+> - **`executor: module`（模块级 Python 执行器）**：在具名工作流包（包含 `__axcutor__.yaml` 与 `__init__.py` 的目录）内，通过 `content: "."` 或 `content: ".<local_path>"` 指向包的 `__init__.py` 或独立 `.py` 源文件。每个模块导入由 `axcutor contracts` 预生成的伴生强类型契约桩文件（`*_contract.py` / `_contract.py`）并定义显式 `async def execute(input: Input) -> ReturnType:`，天然获得完整的 IDE 补全、静态类型检查（`mypy --strict` / `pyright`）、单元测试与调试器断点能力，且运行时在边界强制校验编译期契约指纹（`__axcutor_contract_sha256__`）。
 >
 > 在两种执行器中，业务代码均通过强类型只读模型 `input.<var>` 读取输入快照（其中 `type: number` 字段自动映射为 Python 原生 `float`），并通过返回 `Output(...)` 或 `Branch.<branch>(...)` 实例完成输出与控制分支路由。此外，宿主也可通过扩展 `executor` 接入远程沙箱、HTTP/RPC 微服务接口、数据库事务或大模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
 
@@ -246,11 +246,11 @@ graph:
 
 `executor: module` 的 `content` 字段仅允许使用以单个点号 `.` 开头的**包内相对模块路径**（禁止跨包绝对导入或 `..` 越界）：
 
-* **图内子节点**：写法为 `content: ".<local_path>"`（如 `content: ".parse_order"` 或 `content: ".steps.parse_order"`），运行时结合当前工作流包 ID（如 `billing.checkout`）将其解析为绝对模块路径 `billing.checkout.parse_order`。
-* **顶层单步 `run` 根节点**：除 `content: ".<local_path>"` 外，还支持 `content: "."` 直接指向当前工作流包自身的 `__init__.py`（其伴生契约桩固定为同目录下的 `_contract.py`）。
+* **局部模块**：写法为 `content: ".<local_path>"`（如 `content: ".parse_order"` 或 `content: ".steps.parse_order"`），运行时结合当前工作流包 ID（如 `billing.checkout`）与 Worker 根映射解析目标。默认同名映射下，`.parse_order` 对应 `billing.checkout.parse_order`。
+* **当前包**：顶层 `run` 和图内节点均可使用 `content: "."`，直接指向当前工作流包自身的 `__init__.py`（其伴生契约桩固定为同目录下的 `_contract.py`）。
 
 > [!NOTE]
-> 未挂载进工作流包命名空间的独立单文件入口工作流（编译期赋予匿名身份 `"__main__"`）只能使用 `executor: builtin` 或 `use: workflow:<pkg_path>`；若在 `"__main__"` 中声明 `executor: module`，编译器将报错 `module.anonymous_package`。
+> 未挂载进工作流包命名空间的独立单文件入口工作流（编译期赋予匿名身份 `"__main__"`）不能直接使用 `executor: module`，否则编译器报错 `module.anonymous_package`。匿名入口仍可使用 `builtin`、扩展执行器及内联图，或调用公开工作流包。
 
 ```yaml
 # 位于工作流包 billing/checkout/__axcutor__.yaml 内的节点片段
@@ -270,7 +270,7 @@ parse_order:
 
 ### 2. 伴生契约桩（`*_contract.py`）与实现模块编写
 
-运行 `axcutor codegen` 后，工具链会根据 `__axcutor__.yaml` 中各 `executor: module` 节点的静态契约，在目标 `.py` 模块同级目录自动生成只读伴生契约桩 `<module>_contract.py`（内含 `Input`、`Output`、`Branch`、`ReturnType` 及编译期契约指纹 `__axcutor_contract_sha256__`）。业务开发者只需在 `<module>.py` 中导入契约并实现 `async def execute(input: Input) -> ReturnType:`：
+运行 `axcutor contracts workflows/billing/checkout --mount billing=workflows/billing` 后，工具链会根据 `__axcutor__.yaml` 中可达 `module` 节点的静态契约，在目标 `.py` 模块同级目录生成伴生契约桩 `<module>_contract.py`。模板导出 `Input`、`Output` 或 `Branch`、`ReturnType` 及嵌套模型，并包含模块级契约指纹 `__axcutor_contract_sha256__`。业务开发者在 `<module>.py` 中导入契约并实现 `async def execute(input: Input) -> ReturnType:`：
 
 ```python
 # billing/checkout/parse_order.py
@@ -279,7 +279,9 @@ from .parse_order_contract import Input, Output, Output_order_info, ReturnType
 
 
 async def execute(input: Input) -> ReturnType:
+    # 业务解析与生成契约分开维护。
     raw = json.loads(input.order_payload)
+    # 嵌套输出结构体须显式使用生成模型。
     return Output(
         order_info=Output_order_info(
             order_id=str(raw["order_id"]),
@@ -288,7 +290,7 @@ async def execute(input: Input) -> ReturnType:
     )
 ```
 
-运行时在首次执行该节点时，会自动提取 `mod.Input.__module__` 对应的契约模块并比对 `__axcutor_contract_sha256__` 指纹；若 YAML 契约已变更但未重新生成契约桩，或 `execute` 签名不合规，运行时将直接抛出可由 `catch` 捕获的 `contract` 异常。
+运行时在每次尝试执行节点前，提取 `mod.Input.__module__` 对应的契约模块并比对 `__axcutor_contract_sha256__` 指纹；若 YAML 契约已变更但未重新生成契约桩、异步入口缺失或契约类型来源不合规，运行时抛出可由 `catch` 捕获的 `contract` 异常。挂载、契约检查与部署边界见 [04. 包挂载与 Python 模块](./04-packages-and-modules.md)。
 
 ---
 

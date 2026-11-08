@@ -1,6 +1,6 @@
 # 01. 同构结构化并发：集合遍历（`for_each`）
 
-当需要对某个非空强类型列表（`type: array`）或非空强类型有序映射（`type: object` + `additionalProperties`）中的每个元素执行无跨元素依赖的同构处理时，可在任意节点（`run`、`use: workflow:<pkg_path>` 或内联 `graph`）上挂载 **`for_each`** 修饰符。
+当需要对某个非空强类型列表（`type: array`）或非空强类型有序映射（`type: object` + `additionalProperties`）中的每个元素执行无跨元素依赖的同构处理时，可在任意节点（`run`、`use: workflow:<PackagePath>` 或内联 `graph`）上挂载 **`for_each`** 修饰符。
 
 `for_each` 是纯粹的**输入集合切片与并发窗口修饰符**，其核心心智模型包含以下四点：
 
@@ -45,7 +45,7 @@ process_list_items:
     content: |
       return Output(results=f"[{input.item_idx}] {input.current_item}")
 
-# 示例 B：在 use: workflow:<pkg_path> 节点上挂载 for_each 遍历列表
+# 示例 B：在 use: workflow:<PackagePath> 节点上挂载 for_each 遍历列表
 audit_sub_items:
   for_each:
     source: batch.items

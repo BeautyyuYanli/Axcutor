@@ -86,7 +86,7 @@
 | :--- | :--- | :--- | :--- |
 | **`ActionNode`** | `run` | `input: List<RestrictedIdentifier>`<br>`output: Map<RestrictedIdentifier, TypeSpec>`<br>`branches: Map<BranchId, BranchSpec>`<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `with`, `graph`, `use` |
 | **`InlineGraphNode`** | `graph` | `input: List<RestrictedIdentifier>`<br>`output: Map<RestrictedIdentifier, TypeSpec>`<br>`branches: Map<BranchId, BranchSpec>`<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `with`, `run`, `use` |
-| **`CallNode`** | `use` | `with: WithSpec`<br>*(以下仅当 `use` 为 `workflow:<pkg_path>` 时允许，为 `builtin:<op>` 时禁止)*：<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `input`, `output`, `branches`, `run`, `graph` |
+| **`CallNode`** | `use` | `with: WithSpec`<br>*(以下仅当 `use` 为 `workflow:<PackagePath>` 时允许，为 `builtin:<op>` 时禁止)*：<br>`for_each: ForEachSpec`<br>`timeout_ms: PositiveInt`<br>`retry: RetrySpec`<br>`catch: CatchSpec` | `input`, `output`, `branches`, `run`, `graph` |
 
 * **`input` 列表去重约束**：在 `ActionNode` 与 `InlineGraphNode` 中，`input` 若声明，必须为无重复元素的受限顶层变量标识符列表 `List<RestrictedIdentifier>`。
 
@@ -126,7 +126,7 @@
 
 ### 1. 集合遍历修饰符（`ForEachSpec`）
 
-当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<pkg_path>`）声明 `for_each` 时，其校验职责严格划分为 **阶段 01（AST 结构良构性）** 与 **阶段 02（静态类型与符号表检查）** 两层：
+当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<PackagePath>`）声明 `for_each` 时，其校验职责严格划分为 **阶段 01（AST 结构良构性）** 与 **阶段 02（静态类型与符号表检查）** 两层：
 
 #### (a) 阶段 01：AST 语法与结构良构条件（Phase 1 Structural Well-Formedness）
 
@@ -140,7 +140,7 @@
 * **挂载 `for_each` 节点的有效输出非空约束**：
   * 挂载了 `for_each` 的节点 $N$ 必须向外层图声明至少一个目标输出变量（即 $OutVars(N) \neq \emptyset$）：
     * 当 $N$ 为 `ActionNode` 或 `InlineGraphNode` 时：$\text{dom}(N.\text{output}) \neq \emptyset$；
-    * 当 $N$ 为 `CallNode`（`use: workflow:<pkg_path>`）时：经 $N.\text{with.output}$ 绑定的有效目标变量集合非空（$\text{values}(N.\text{with.output}) \neq \emptyset$）。
+    * 当 $N$ 为 `CallNode`（`use: workflow:<PackagePath>`）时：经 $N.\text{with.output}$ 绑定的有效目标变量集合非空（$\text{values}(N.\text{with.output}) \neq \emptyset$）。
 
 #### (b) 阶段 02：源集合静态类型与局部符号约束（Phase 2 Static Type Constraints）
 
@@ -156,10 +156,11 @@
 
 ### 2. 原地快照重试修饰符（`RetrySpec`）
 
-当 `RootRunNode`、`ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<pkg_path>`）声明 `retry` 时，其值必须为满足以下良构性公理的映射对象：
+当 `RootRunNode`、`ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<PackagePath>`）声明 `retry` 时，其值必须为满足以下良构性公理的映射对象：
 
 * **`max_attempts: PositiveInt`（必填）**：必须为 $\ge 2$ 的正整数（含首次执行在内至少允许 2 次尝试）。
-* **`backoff_ms?: NonNegativeInt`（可选，默认 `0`）**：必须为 $\ge 0$ 的非负整数。\n* **`on?: List<RecoverableSelector>`（可选，默认 `["execution", "timeout"]`）**：
+* **`backoff_ms?: NonNegativeInt`（可选，默认 `0`）**：必须为 $\ge 0$ 的非负整数。
+* **`on?: List<RecoverableSelector>`（可选，默认 `["execution", "timeout"]`）**：
   * 必须为非空且无重复元素的列表，其中每个元素必须属于可恢复异常选择器全集：
     $$\mathcal{S}_{\text{all}} = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}, \texttt{"max\_steps"}\}$$
   * **原子 `run` 节点禁止包含 `"max_steps"`**：当所属节点为 `ActionNode` 或 `RootRunNode` 时，因原子 `run` 执行体不存在图步数计数器，必须满足：
@@ -168,7 +169,7 @@
 
 ### 3. 异常捕获修饰符（`CatchSpec`）
 
-当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<pkg_path>`）声明 `catch` 时，其值必须为非空映射 `Map<CatchBranchId, List<RecoverableSelector> | "*">`，且满足以下良构性公理：
+当 `ActionNode`、`InlineGraphNode` 或 `CallNode`（仅限 `use: workflow:<PackagePath>`）声明 `catch` 时，其值必须为非空映射 `Map<CatchBranchId, List<RecoverableSelector> | "*">`，且满足以下良构性公理：
 
 * **分支名合法性与互斥约束**：
   * 每个键 $c \in \text{dom}(N.\text{catch})$ 必须为合法 `CatchBranchId`（即属于 $\text{Identifier} \setminus \mathcal{R}$）；
@@ -176,6 +177,6 @@
 * **选择器完备与互斥约束**：
   * 定义节点 $N$ 允许捕获的选择器论域 $\mathcal{S}(N)$：
     * 若 $N$ 为 `ActionNode`（`run`）：$\mathcal{S}(N) = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}\}$（**显式列表中禁止包含 `"max_steps"`**）；
-    * 若 $N$ 为 `InlineGraphNode`（`graph`）或 `CallNode`（`use: workflow:<pkg_path>`）：$\mathcal{S}(N) = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}, \texttt{"max\_steps"}\}$。
+    * 若 $N$ 为 `InlineGraphNode`（`graph`）或 `CallNode`（`use: workflow:<PackagePath>`）：$\mathcal{S}(N) = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}, \texttt{"max\_steps"}\}$。
   * 对每个显式列表分支 $c$，其值必须为 $\mathcal{S}(N)$ 的非空无重复子集，且不同分支的显式选择器集合之间必须两两无交集；
   * 同一 `catch` 块中最多允许 **1 个**分支将值设为通配符 `"*"`，其在 AST 规范化阶段展开为剩余可恢复异常集合 $\mathcal{S}(N) \setminus \bigcup_{c' \neq c} \text{set}(N.\text{catch}[c'])$（展开后若为空集则编译期报错）。

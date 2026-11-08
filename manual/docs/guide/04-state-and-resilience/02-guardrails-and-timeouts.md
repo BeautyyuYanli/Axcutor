@@ -12,12 +12,12 @@
 
 | 调度的图内元素 | 消耗步数 |
 | :--- | :--- |
-| 普通单次节点（`run`、`use: workflow:<pkg_path>`、`use: builtin:<op>` 或内联 `graph` 本身） | 每次激活计 **`1` 步** |
+| 普通单次节点（`run`、`use: workflow:<PackagePath>`、`use: builtin:<op>` 或内联 `graph` 本身） | 每次激活计 **`1` 步** |
 | Fork-Join 并发组（`-> [a, b, c] ->`） | 按组内并发激活的节点数量计步（例如 3 个分支计 **`3` 步**） |
 | 挂载 `for_each` 的节点 | 按实际启动的元素迭代个数逐个累加步数（例如遍历 10 个元素计 **`10` 步**；空集合计 `0` 步） |
 
 * **与节点原地重试（`retry`）的关系**：节点内部的 `retry` 原地重试属于同一次节点调度（或单个 `for_each` 元素的同一次迭代），**不会额外增加**所属图的 `max_steps` 步数计数。
-* **与子图 / 子工作流的关系**：内联 `graph` 或 `use: workflow:<pkg_path>` 子工作流在父图中仅按一次节点激活计 **`1` 步**；其内部调度的节点步数在子栈帧中独立计量，受该子图自身的 `max_steps` 约束。
+* **与子图 / 子工作流的关系**：内联 `graph` 或 `use: workflow:<PackagePath>` 子工作流在父图中仅按一次节点激活计 **`1` 步**；其内部调度的节点步数在子栈帧中独立计量，受该子图自身的 `max_steps` 约束。
 
 ### 2. 超限并发协同取消、回滚与异常捕获
 
@@ -57,7 +57,7 @@ edges:
 
 为防止工作流直接递归（`A -> use A`）或相互递归（`A -> use B -> use A`）导致调用栈溢出，运行时按调用链路径追踪栈深度：
 
-* **深度增减规则**：根图深度为 `1`；每进入一层 `use: workflow:<pkg_path>`（`Function Frame`）或内联 `graph`（`Block Frame`），当前路径调用深度 `+1`，退出时 `-1`。
+* **深度增减规则**：根图深度为 `1`；每进入一层 `use: workflow:<PackagePath>`（`Function Frame`）或内联 `graph`（`Block Frame`），当前路径调用深度 `+1`，退出时 `-1`。
 * **并发分支独立计算**：Fork-Join 并发分支或 `for_each` 并发迭代各自沿其父节点深度独立向下累加，兄弟分支之间不横向叠加。
 * **超限行为**：当任意调用路径深度超过引擎上限（默认 **`64`**）时，立即触发不可捕获的致命错误 `StackOverflowError` 并终止工作流。
 
@@ -65,7 +65,7 @@ edges:
 
 ## 三、 节点级单次超时与原地快照重试（`timeout_ms` & `retry`）
 
-在任何业务节点（`run`、内联 `graph`、`use: workflow:<pkg_path>`）上均可声明 `timeout_ms` 与 `retry`（注：零开销确定性算子 `use: builtin:*` 不支持 `timeout_ms` 与 `retry`）。
+在任何业务节点（`run`、内联 `graph`、`use: workflow:<PackagePath>`）上均可声明 `timeout_ms` 与 `retry`（注：零开销确定性算子 `use: builtin:*` 不支持 `timeout_ms` 与 `retry`）。
 
 ### 1. 单节点超时与重试配置
 

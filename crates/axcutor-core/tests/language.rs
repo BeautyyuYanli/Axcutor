@@ -97,7 +97,7 @@ fn source_errors_reject_duplicates_extensions_and_non_json_values() {
         r#"{"input":{},"input":{},"output":{},"run":{"executor":"builtin","content":"work"}}"#,
         r#"{"input":{},"output":{},"run":{"executor":"builtin","content":"work"},}"#,
     ] {
-        let out = compile_sources(
+        let out = compile_packages(
             "main",
             [(
                 "main".into(),
@@ -275,7 +275,7 @@ fn source_depth_limit_is_shared_by_json_and_yaml() {
                 "[".repeat(arrays),
                 "]".repeat(arrays)
             );
-            let out = compile_sources(
+            let out = compile_packages(
                 "main",
                 [(
                     "main".into(),
@@ -316,7 +316,7 @@ fn catch_branch_collisions_have_one_authoritative_diagnostic() {
             } else {
                 json!(["start -> n", "n.ok -> end", "n.err -> fail"])
             };
-            let out = compile_sources(
+            let out = compile_packages(
                 "main",
                 [
                     ("main".into(), source(graph(json!({"n":node}), edges))),
@@ -616,7 +616,7 @@ fn typespec_is_closed_recursive_and_enum_equality_is_exact() {
 fn subtype(actual: Value, expected: Value, valid: bool) {
     let main = json!({"input":{"value":actual},"output":{},"graph":{"nodes":{"call":{"use":"workflow:target","with":{"input":{"p":"value"}}}},"edges":["start -> call","call -> end"]}});
     let target = json!({"input":{"p":expected},"output":{},"run":{"executor":"builtin","content":"read variables.p"}});
-    let out = compile_sources(
+    let out = compile_packages(
         "main",
         [
             ("main".into(), source(main)),
@@ -728,13 +728,13 @@ fn field_projection_checks_bindings_and_leaves_run_content_opaque() {
 
 #[test]
 fn closure_recursive_signatures_and_explicit_call_mapping() {
-    let a = json!({"input":{},"output":{"a":{"type":"integer"}},"graph":{"nodes":{"call":{"use":"workflow:opaque/../B","with":{"output":{"b":"a"}}}},"edges":["start -> call","call -> end"]}});
+    let a = json!({"input":{},"output":{"a":{"type":"integer"}},"graph":{"nodes":{"call":{"use":"workflow:example.B","with":{"output":{"b":"a"}}}},"edges":["start -> call","call -> end"]}});
     let b = json!({"input":{},"output":{"b":{"type":"integer"}},"graph":{"nodes":{"call":{"use":"workflow:A","with":{"output":{"a":"b"}}}},"edges":["start -> call","call -> end"]}});
-    let out = compile_sources(
+    let out = compile_packages(
         "A",
         [
             ("A".into(), source(a.clone())),
-            ("opaque/../B".into(), source(b)),
+            ("example.B".into(), source(b)),
             (
                 "ignored".into(),
                 SourceDocument {
@@ -747,9 +747,9 @@ fn closure_recursive_signatures_and_explicit_call_mapping() {
     ok(&out);
     assert_eq!(
         out.bundle.unwrap().workflows.keys().collect::<Vec<_>>(),
-        vec!["A", "opaque/../B"]
+        vec!["A", "example.B"]
     );
-    let out = compile_sources("A", [("A".into(), source(a.clone()))]);
+    let out = compile_packages("A", [("A".into(), source(a.clone()))]);
     error(&out, "type.unresolved_workflow");
     assert_eq!(
         out.diagnostics
@@ -765,14 +765,14 @@ fn closure_recursive_signatures_and_explicit_call_mapping() {
         json!({"input":{},"output":{"b":{"type":"any"}},"run":{"executor":"builtin","content":"work"}}),
     );
     error(
-        &compile_sources("A", [("A".into(), source(a)), ("opaque/../B".into(), bad)]),
+        &compile_packages("A", [("A".into(), source(a)), ("example.B".into(), bad)]),
         "type.unresolved_workflow",
     );
     let target = source(
         json!({"input":{"p":{"type":"integer"}},"output":{"x":{"type":"integer"},"ignored":{"type":"string"}},"branches":{"yes":{"description":"ok","output":["x"]},"no":{"description":"skip","output":[]}},"run":{"executor":"builtin","content":"work"}}),
     );
     let main = json!({"input":{},"output":{},"graph":{"variables":{"result":{"type":"number"}},"nodes":{"call":{"use":"workflow:target","with":{"input":{"p":1},"output":{"x":"result"}}}},"edges":["start -> call","call.yes -> end","call.no -> end"]}});
-    let out = compile_sources(
+    let out = compile_packages(
         "main",
         [
             ("main".into(), source(main.clone())),
@@ -810,7 +810,7 @@ fn closure_recursive_signatures_and_explicit_call_mapping() {
         if old_value {
             consume["graph"]["variables"]["result"]["default"] = json!(42);
         }
-        let out = compile_sources(
+        let out = compile_packages(
             "main",
             [
                 ("main".into(), source(consume)),
@@ -827,7 +827,7 @@ fn closure_recursive_signatures_and_explicit_call_mapping() {
     let mut invalid = main.clone();
     invalid["graph"]["nodes"]["call"]["with"]["input"] = json!({});
     error(
-        &compile_sources(
+        &compile_packages(
             "main",
             [
                 ("main".into(), source(invalid)),
@@ -839,7 +839,7 @@ fn closure_recursive_signatures_and_explicit_call_mapping() {
     let mut invalid = main;
     invalid["graph"]["nodes"]["call"]["catch"] = json!({"yes":"*"});
     error(
-        &compile_sources(
+        &compile_packages(
             "main",
             [("main".into(), source(invalid)), ("target".into(), target)],
         ),
@@ -905,7 +905,7 @@ fn directly_recursive_body_is_checked_once_using_its_signature() {
 fn workflow_output_diagnostic_points_to_the_explicit_binding() {
     let main = json!({"input":{},"output":{"local":{"type":"integer"}},"graph":{"nodes":{"call":{"use":"workflow:target","with":{"output":{"remote":"local"}}}},"edges":["start -> call","call -> end"]}});
     let target = json!({"input":{},"output":{"remote":{"type":"string"}},"run":{"executor":"builtin","content":"work"}});
-    let out = compile_sources(
+    let out = compile_packages(
         "main",
         [
             ("main".into(), source(main)),
