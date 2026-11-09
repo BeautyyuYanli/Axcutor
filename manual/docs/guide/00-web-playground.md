@@ -146,13 +146,13 @@ npm --prefix playground run test:browser
 # 根测试入口同时覆盖普通宿主与独立后端。
 uv run --locked pytest
 uv run --locked ruff check python tests/runtime tests/host tests/conftest.py tests/helpers.py playground/backend playground/scripts
-uv run --locked mypy
+uv run --locked pyrefly check
 ```
 
 浏览器测试会选择临时 HTTP、页面端口和 workspace 目录，结束时关闭测试 Worker 和 Server。覆盖保存与重载、跨页面冲突、提交和运行期间禁止编辑与文件操作、完成或取消清理后恢复编辑、Python 与契约修改后重跑、工作流提交视图、CFG/帧联动及无损 JSON。Temporal 测试服务器与 Playwright 浏览器首次使用时需要下载；截图位于 `playground/.browser-test/`。
 
 后端集成测试默认下载并启动 Temporal CLI v1.6.1 的开发服务器，验证 Worker 复用、再次导入、图内并发与取消清理。设置 `AXCUTOR_TEST_TEMPORAL_ADDRESS` 可改用已有的测试专用服务器；测试使用独立执行 ID 和队列。
 
-仅运行独立后端测试时使用 `uv run --locked pytest playground/backend/tests`。根 pytest、mypy 与 CI 已包含该包；CI 的静态检查也覆盖其源码、测试和浏览器辅助脚本。
+仅运行独立后端测试时使用 `uv run --locked pytest playground/backend/tests`。根 pytest、Pyrefly 与 CI 已包含该包；CI 的静态检查也覆盖其源码、测试和浏览器辅助脚本。
 
 也可设置 `AXCUTOR_BROWSER_URL=http://127.0.0.1:8080`，对已启动的 Compose 生产网页运行同一套检查。此模式会编辑目标 workspace，应使用隔离的测试项目与工作区目录。

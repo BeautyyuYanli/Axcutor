@@ -239,7 +239,6 @@ graph:
 
 ```python
 # === AUTO-GENERATED AXCUTOR CONTRACT MODULE ===
-# mypy: warn_unused_ignores=False
 ...
 __axcutor_contract_sha256__: str = "5d41...7c82"
 

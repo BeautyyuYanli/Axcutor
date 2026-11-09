@@ -38,7 +38,7 @@ graph: ...
 > **`run` 通过结构化 `executor` 承载受函数签名约束的业务代码。**
 > Axcutor 内建提供两种同构的强类型 Python 执行器形态：
 > - **`executor: builtin`（内联 Python 执行器）**：在 YAML 的 `content` 中直接编写异步函数体（对应 `async def execute(input: Input) -> ReturnType:`），运行时在内存中动态合成强类型 `Input`、`Output` 与 `Branch` 模型并注入函数作用域，适合轻量级转换、胶水逻辑或单文件快速原型。
-> - **`executor: module`（模块级 Python 执行器）**：在具名工作流包（包含 `__axcutor__.yaml` 与 `__init__.py` 的目录）内，通过 `content: "."` 或 `content: ".<local_path>"` 指向包的 `__init__.py` 或独立 `.py` 源文件。每个模块导入由 `axcutor contracts` 预生成的伴生强类型契约桩文件（`*_contract.py` / `_contract.py`）并定义显式 `async def execute(input: Input) -> ReturnType:`，天然获得完整的 IDE 补全、静态类型检查（`mypy --strict` / `pyright`）、单元测试与调试器断点能力，且运行时在边界强制校验编译期契约指纹（`__axcutor_contract_sha256__`）。
+> - **`executor: module`（模块级 Python 执行器）**：在具名工作流包（包含 `__axcutor__.yaml` 与 `__init__.py` 的目录）内，通过 `content: "."` 或 `content: ".<local_path>"` 指向包的 `__init__.py` 或独立 `.py` 源文件。每个模块导入由 `axcutor contracts` 预生成的伴生强类型契约桩文件（`*_contract.py` / `_contract.py`）并定义显式 `async def execute(input: Input) -> ReturnType:`，天然获得完整的 IDE 补全、静态类型检查（`pyrefly check`）、单元测试与调试器断点能力，且运行时在边界强制校验编译期契约指纹（`__axcutor_contract_sha256__`）。
 >
 > 在两种执行器中，业务代码均通过强类型只读模型 `input.<var>` 读取输入快照（其中 `type: number` 字段自动映射为 Python 原生 `float`），并通过返回 `Output(...)` 或 `Branch.<branch>(...)` 实例完成输出与控制分支路由。此外，宿主也可通过扩展 `executor` 接入远程沙箱、HTTP/RPC 微服务接口、数据库事务或大模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
 

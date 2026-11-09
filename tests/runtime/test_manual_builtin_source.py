@@ -53,7 +53,15 @@ def test_complete_manual_examples_generate_standalone_typed_python(tmp_path):
                 export(result["bundle"]["workflows"]["main"], f"{path.relative_to(manual)}_{index}")
     assert files
     checked = subprocess.run(
-        [sys.executable, "-m", "mypy", "--strict", *files],
+        [
+            sys.executable,
+            "-m",
+            "pyrefly",
+            "check",
+            "--config",
+            str(manual.parents[1] / "pyproject.toml"),
+            *files,
+        ],
         capture_output=True,
         text=True,
     )

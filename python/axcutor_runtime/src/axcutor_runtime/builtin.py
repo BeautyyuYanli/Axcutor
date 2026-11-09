@@ -28,8 +28,7 @@ if TYPE_CHECKING:
 
 # This prelude is included verbatim so exported modules compile and type-check
 # without an executor instance or imports from axcutor_runtime.
-_PRELUDE = """# mypy: warn_unused_ignores=False
-import math
+_PRELUDE = """import math
 import builtins as _ax_builtins
 import typing as _ax_typing
 import pydantic as _ax_pydantic
@@ -324,10 +323,15 @@ def synthesize_contract_module(
                 while storage in fields:
                     storage += "_"
                 aliases[field] = storage
+                # Some runtime members have no static declaration. Selective type
+                # ignores allow aliases either way and suppress only overrides.
+                suppression = (
+                    "  # type: ignore[pyrefly:bad-override]" if field in dir(BaseModel) else ""
+                )
                 declarations.extend(
                     [
                         f"    if {private}typing.TYPE_CHECKING:",
-                        f"        {field}: {mapped}  # type: ignore",
+                        f"        {field}: {mapped}{suppression}",
                     ]
                 )
                 argument = f"default={default[3:]}, " if default else ""
@@ -375,9 +379,15 @@ def synthesize_contract_module(
                 mapped_fields=field_types,
             )
             variants[branch] = variant
-            lines.append(
-                f"        {branch}: {private}typing.TypeAlias = {variant}  # type: ignore\n"
-            )
+            if branch == "__dict__":
+                # Pyrefly treats an alias named __dict__ as object storage. A
+                # nested class retains the branch constructor and field types.
+                lines.append(
+                    f"        class {branch}({variant}):  # pyrefly: ignore[bad-override]\n"
+                    "            pass\n"
+                )
+            else:
+                lines.append(f"        {branch}: {private}typing.TypeAlias = {variant}\n")
         registry = ", ".join(f"{branch!r}: {variant}" for branch, variant in variants.items())
         lines.append(
             f"    {private}variants: {private}typing.ClassVar["

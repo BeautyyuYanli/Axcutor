@@ -1,5 +1,4 @@
 # === AUTO-GENERATED AXCUTOR CONTRACT MODULE ===
-# mypy: warn_unused_ignores=False
 import math
 import builtins as _ax_builtins
 import typing as _ax_typing

@@ -61,13 +61,12 @@ async def _worker(
 
 
 async def _run(args: argparse.Namespace) -> None:
-    if args.command in ("run", "contracts"):
+    if args.command == "contracts":
         mounts = [PackageMount(name, Path(path)) for name, path in _pairs(args.mount)]
         entry, packages = load_packages(args.workflow, mounts)
-        if args.command == "contracts":
-            for path in generate_contracts(entry, packages, mounts, check=args.check):
-                print(path)
-            return
+        for path in generate_contracts(entry, packages, mounts, check=args.check):
+            print(path)
+        return
     # Controllers stay lazy so preflight precedes backend contact. The SDK
     # requires Workers to receive an eagerly connected client.
     client = await Client.connect(
@@ -75,6 +74,8 @@ async def _run(args: argparse.Namespace) -> None:
     )
     service = ExecutionService(client, args.task_queue)
     if args.command == "run":
+        mounts = [PackageMount(name, Path(path)) for name, path in _pairs(args.mount)]
+        entry, packages = load_packages(args.workflow, mounts)
         inputs = loads(args.input.read_text(encoding="utf-8")) if args.input else {}
         if not isinstance(inputs, dict):
             raise ValueError("workflow input must be a JSON object")

@@ -8,7 +8,7 @@
   1. **废除自然语言变量正则提取（`RunVarRef`）**：移除前期针对提示词字符串设计的 `\bvariables\.[a-zA-Z_]...` 正则扫描、归一化 AST 中的 `references: Vec<FieldPath>` 字段及 `symbol.capture` 检查，将 `run` 节点的静态数据流依赖完全收敛至节点显式声明的 `input` 契约，彻底解除编译器与执行器内部载荷文本的耦合；
   2. **引入内聚式 `RunSpec` 标记联合体（Tagged Union）与语言无关的规范化 JSON Schema（`TypeSpec`）导出**：将 `run` 字段的值从裸字符串重构为以 `executor` 为必填鉴别键的结构化映射对象（无裸字符串语法糖）；Rust 编译器前端（`axcutor-core`）保持对具体宿主框架（如 Pydantic 或未来 TS 沙箱）的零耦合，仅负责校验 `RunSpec` 结构并在归一化 `Run` 节点中直接导出其 `input` 变量的 `TypeSpec` 签名（`input_schema`，即规范化后的严格 JSON Schema 子集，无需引入额外 IR）；
   3. **确立 `RunActivities.execute_run` 按 `executor` 统一分派机制与首个标准执行器 `builtin`**：在 Python Temporal Activity 外壳（`RunActivities.execute_run`）中统一复用超时计时（`deadline`）、心跳取消（`heartbeat` + `AbortSignal`）与出口处的 Rust `validate_run_contract` 契约校验，内部按 `run_spec["executor"]` 分派至内置的 `builtin`（可信进程内 Python 执行器）及未来扩展的其他执行器（如 `ts_sandbox`），同时将 `options.task_queues` 改为按 `executor` 名称路由；
-  4. **确立 `builtin` 执行器基于 `TypeSpec` 的前后置 `.py` 模板合成、原生 `float` 数值边界转换与分支联合返回类型（Union of Branch Output Types）**：通过全局禁用 Python 保留字作为标识符，由 Python `builtin` 执行器模块根据节点的 `input_schema`、`output_schema` 与 `branches_contract` 将 `run.content` 自动合成为包含强类型只读 `Input`（在边界处将跨进程无损传输的 `Decimal` 统一转换为 Python 原生 `float`，对用户代码彻底屏蔽传输层 `Decimal`）、按分支精细化定义的 `Branch.<branch_id>`（或无分支时的 `Output`）模型及 `async def __axcutor_run__(input: Input) -> ReturnType:` 签名的完整可独立编译与静态分析（`pyright` / `mypy`）的 `.py` 单元。
+  4. **确立 `builtin` 执行器基于 `TypeSpec` 的前后置 `.py` 模板合成、原生 `float` 数值边界转换与分支联合返回类型（Union of Branch Output Types）**：通过全局禁用 Python 保留字作为标识符，由 Python `builtin` 执行器模块根据节点的 `input_schema`、`output_schema` 与 `branches_contract` 将 `run.content` 自动合成为包含强类型只读 `Input`（在边界处将跨进程无损传输的 `Decimal` 统一转换为 Python 原生 `float`，对用户代码彻底屏蔽传输层 `Decimal`）、按分支精细化定义的 `Branch.<branch_id>`（或无分支时的 `Output`）模型及 `async def __axcutor_run__(input: Input) -> ReturnType:` 签名的完整可独立编译与静态分析（`pyrefly check`）的 `.py` 单元。
 
 ---
 
@@ -30,7 +30,7 @@
 ### 问题 12.3：`builtin` Python 执行器需要兼顾“零隔离原生性能”、“前后端职责解耦”与“编译期全静态类型安全”
 
 作为第一个标准内置执行器，`builtin` 的定位是**直接在宿主进程内运行可信 Python 代码，无需子进程、容器或受限字节码隔离**。
-* 若直接向代码塞入裸 `dict` 并要求返回裸 `dict`，用户在编写代码时完全丧失静态类型检查器（`pyright` / `mypy`）的字段补全与类型校验；且当节点包含多个 `branches` 并关联不同的 `output` 字段子集时，裸字典或单一 `Output` 类无法在类型层面约束“选择某分支时必须且只能提供该分支承诺产出的字段子集”。
+* 若直接向代码塞入裸 `dict` 并要求返回裸 `dict`，用户在编写代码时完全丧失静态类型检查器（Pyrefly）的字段补全与类型校验；且当节点包含多个 `branches` 并关联不同的 `output` 字段子集时，裸字典或单一 `Output` 类无法在类型层面约束“选择某分支时必须且只能提供该分支承诺产出的字段子集”。
 * 同时，在跨端架构下，Rust 编译器前端（`axcutor-core`）需要编译为 WASM 在浏览器运行，不应与 Python Pydantic 或未来 TypeScript 的具体模板代码字符串生成耦合；最佳职责分界是由 Rust 编译器前端在归一化 AST 中直接导出语言无关的规范化 JSON Schema 子集（`TypeSpec`），再由 Python 侧的 `builtin` 执行器模块负责合成完整的 `.py` 模块源码以供静态检查与运行期求值。
 
 ---
@@ -117,11 +117,11 @@
 
 ### 决策 5：Python 侧前后置模板合成规范（合成可独立编译与静态类型检查的 `.py` 单元）
 
-`axcutor_runtime` 中的 `builtin` 执行器模块提供纯函数接口，根据节点的 `(input_schema, output_schema, branches_contract, content)` 将自动生成的前置类型头（Preamble）、函数签名包装（Function Header）与统一缩进 4 个空格后的 `run.content` 拼接为一个**完整的、自包含的合法 Python 模块源码字符串**。该合成源码既可在编译/测试工具链中直接交由 `compile()` 与 `pyright` / `mypy` 进行静态检查，又可在 Activity 运行期直接编译执行。
+`axcutor_runtime` 中的 `builtin` 执行器模块提供纯函数接口，根据节点的 `(input_schema, output_schema, branches_contract, content)` 将自动生成的前置类型头（Preamble）、函数签名包装（Function Header）与统一缩进 4 个空格后的 `run.content` 拼接为一个**完整的、自包含的合法 Python 模块源码字符串**。该合成源码既可在编译/测试工具链中直接交由 `compile()` 与 `pyrefly check` 进行静态检查，又可在 Activity 运行期直接编译执行。
 
 #### 1. `TypeSpec` 到 Python 类型注解的递归映射函数与传输层 `Decimal` 隐藏机制
 
-在 `axcutor_runtime.codec` 中，`decimal.Decimal` 仅作为 Temporal JSON 载荷与 Rust 核心之间的无损传输容器（防止宿主进程在搬运 JSON 数值时发生二进制浮点精度漂移）。若将 `Decimal` 暴露至 `builtin` 用户代码中，会导致用户编写的 Python 原生浮点字面量运算（如 `input.subtotal * 0.85`）在运行期抛出 `TypeError: unsupported operand type(s) for *: 'decimal.Decimal' and 'float'`，并在静态类型检查器（`pyright` / `mypy`）中破坏算术闭环。
+在 `axcutor_runtime.codec` 中，`decimal.Decimal` 仅作为 Temporal JSON 载荷与 Rust 核心之间的无损传输容器（防止宿主进程在搬运 JSON 数值时发生二进制浮点精度漂移）。若将 `Decimal` 暴露至 `builtin` 用户代码中，会导致用户编写的 Python 原生浮点字面量运算（如 `input.subtotal * 0.85`）在运行期抛出 `TypeError: unsupported operand type(s) for *: 'decimal.Decimal' and 'float'`，并在静态类型检查器（Pyrefly）中破坏算术闭环。
 
 因此，`builtin` 执行器在边界处**向用户代码完全屏蔽传输层的 `Decimal`，统一使用 Python 原生 `float`**：
 * **在 `Input` 树中（读取侧）**：`type: number` 的静态类型注解固定为单一的 `float`（运行期输入归一化时将 `codec` 解码出的 `Decimal` 或合法整数自动转换为原生 `float`），使用户拿到 `input.<field>` 后可直接与任何 Python 浮点/整数字面量及标准库函数无缝运算，无需手动调用 `float(...)`；
@@ -185,7 +185,7 @@ review_order:
       )
 ```
 
-**合成的完整 `.py` 源码（可直接交由 `pyright` / `mypy` 静态检查并由 `compile()` 编译执行）**：
+**合成的完整 `.py` 源码（可直接交由 `pyrefly check` 静态检查并由 `compile()` 编译执行）**：
 ```python
 # === AUTO-GENERATED AXCUTOR BUILTIN MODULE (NODE: review_order) ===
 from __future__ import annotations

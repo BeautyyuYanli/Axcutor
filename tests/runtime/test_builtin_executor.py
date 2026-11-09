@@ -52,11 +52,14 @@ def check_module(filename, generated):
         [
             sys.executable,
             "-m",
-            "mypy",
-            "--strict",
-            "--no-incremental",
-            "--no-color-output",
-            "--no-pretty",
+            "pyrefly",
+            "check",
+            "--config",
+            str(Path(__file__).resolve().parents[2] / "pyproject.toml"),
+            "--output-format",
+            "min-text",
+            "--color",
+            "never",
             str(filename),
         ],
         capture_output=True,
@@ -425,36 +428,41 @@ def test_generated_branch_rejects_undeclared_variants_statically(tmp_path):
     checked = check_module(filename, invalid)
     assert checked.returncode != 0
     assert f":{invalid.line_offset + 1}:" in checked.stdout
-    assert 'has no attribute "typo"' in checked.stdout
-    assert "[attr-defined]" in checked.stdout
-    assert checked.stdout.count("error:") == 1, checked.stdout
+    assert "has no class attribute `typo`" in checked.stdout
+    assert "[missing-attribute]" in checked.stdout
+    assert checked.stdout.count("ERROR ") == 1, checked.stdout
     with pytest.raises(exceptions.ApplicationError) as failure:
         asyncio.run(invoke(payload))
     assert failure.value.type == "execution"
     assert "run.content line 1: AttributeError" in str(failure.value)
 
 
-def test_generated_alias_fields_preserve_static_constructor_checks(tmp_path):
-    fields = {name: INTEGER for name in ("_private", "model_config", "__dict__", "_branch")}
-    content = "return Output(" + ", ".join(f"{name}=input.{name}" for name in fields) + ")"
-    payload = request(content, fields, fields)
+@pytest.mark.parametrize("branch", [None, "ok", "__dict__"])
+@pytest.mark.parametrize(
+    "names",
+    [("_private", "model_config", "__dict__", "_branch"), ("__class__", "__slots__", "_abc_impl")],
+)
+def test_generated_alias_fields_preserve_static_constructor_checks(tmp_path, branch, names):
+    fields = {name: INTEGER for name in names}
+    constructor = f"Branch.{branch}" if branch is not None else "Output"
+    content = f"return {constructor}(" + ", ".join(f"{name}=input.{name}" for name in fields) + ")"
+    payload = request(content, fields, fields, {branch: "kept"} if branch else {})
     args = [payload[key] for key in ("input_schema", "output_schema", "branches_contract")]
     valid = synthesize_module(*args, content)
     filename = tmp_path / "aliases.py"
     checked = check_module(filename, valid)
     assert checked.returncode == 0, checked.stdout + checked.stderr
+    corrected_content = f"return {constructor}(" + ", ".join(f"{name}=7" for name in names) + ")"
     invalid = synthesize_module(
-        *args, "return Output(_private='wrong', model_config=7, __dict__=7, _branch=7)"
+        *args, corrected_content.replace(f"{names[0]}=7", f"{names[0]}='wrong'", 1)
     )
     checked = check_module(filename, invalid)
     assert checked.returncode != 0
     assert f":{invalid.line_offset + 1}:" in checked.stdout
-    assert 'Argument "_private"' in checked.stdout
-    assert "[arg-type]" in checked.stdout
-    assert checked.stdout.count("error:") == 1, checked.stdout
-    corrected = synthesize_module(
-        *args, "return Output(_private=7, model_config=7, __dict__=7, _branch=7)"
-    )
+    assert f"`{names[0]}`" in checked.stdout
+    assert "[bad-argument-type]" in checked.stdout
+    assert checked.stdout.count("ERROR ") == 1, checked.stdout
+    corrected = synthesize_module(*args, corrected_content)
     checked = check_module(filename, corrected)
     assert checked.returncode == 0, checked.stdout + checked.stderr
 
@@ -466,6 +474,7 @@ def test_generated_alias_fields_preserve_static_constructor_checks(tmp_path):
         (("str",), None),
         (("type",), None),
         (("str", "_private"), None),
+        (("__class__", "__slots__", "_abc_impl"), None),
         (("dict", "str", "type", "_private"), "dict"),
         (("str", "_private"), "str"),
         (("type",), "type"),
@@ -505,9 +514,9 @@ def test_generated_input_rejects_undeclared_attributes_statically(tmp_path, nest
     checked = check_module(filename, invalid)
     assert checked.returncode != 0
     assert f":{invalid.line_offset + 1}:" in checked.stdout
-    assert 'has no attribute "typo"' in checked.stdout
-    assert "[attr-defined]" in checked.stdout
-    assert checked.stdout.count("error:") == 1, checked.stdout
+    assert "has no attribute `typo`" in checked.stdout
+    assert "[missing-attribute]" in checked.stdout
+    assert checked.stdout.count("ERROR ") == 1, checked.stdout
     with pytest.raises(exceptions.ApplicationError) as failure:
         asyncio.run(invoke(payload))
     assert failure.value.type == "execution"
