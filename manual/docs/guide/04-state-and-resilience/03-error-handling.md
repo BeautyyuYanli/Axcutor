@@ -15,6 +15,9 @@ Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通
 | **`contract`** | 节点执行器返回的数据结构未通过 `output` 的 `TypeSpec` 校验（如 `builtin`/`module` 执行器构造 `Output` / `Branch` 触发 `ValidationError`）、返回了非法分支对象，或 `executor: module` 目标模块缺失 `async def execute` 入口 / 伴生契约桩 `__axcutor_contract_sha256__` 指纹校验不匹配。 |
 | **`max_steps`** | 内联 `graph` 或 `use` 子工作流的累计调度步数超过其 `graph.max_steps` 上限（注：原子 `run` 节点与顶层 `run` 工作流不存在图步数计数器，禁止在其 `retry.on` 或 `catch` 显式列表中声明 `max_steps`）。 |
 
+> [!NOTE]
+> **`executor: signal` 节点的异常域收敛为 `{timeout}`**：外部向 `signal` 节点投递的不合规分支或输出在投递边界即以 HTTP `422 signal_validation_failed` 拒绝，不会在工作流内部触发 `contract` 或 `execution` 异常，也不消耗 `retry` 次数。因此 `signal` 节点的 `retry.on` 与 `catch` 显式列表仅允许声明 `timeout`。
+
 ---
 
 ## 二、 使用 `catch` 将异常物化为控制分支
@@ -23,7 +26,7 @@ Axcutor 将异常恢复整合在结构化控制流图（CFG）中：节点可通
 
 ### 1. 通配符兜底与按异常类型分流
 
-* **通配符 `catch.<branch>: "*"`**：捕获所有未被同一 `catch` 块中其他具名选择器匹配的剩余可恢复异常。
+* **通配符 `catch.<branch>: "*"`**：捕获当前节点允许异常域内所有未被同一 `catch` 块中其他具名选择器匹配的剩余可恢复异常（复合图与子工作流为 `{execution, timeout, contract, max_steps}`，常规 `run` 节点为 `{execution, timeout, contract}`，`executor: signal` 节点为 `{timeout}`）。
 * **选择器列表 `catch.<branch>: [<selector>, ...]`**：按异常类别分流至不同的恢复分支；未在 `catch` 中匹配的异常将自动向上层父图栈帧冒泡。
 
 ```yaml

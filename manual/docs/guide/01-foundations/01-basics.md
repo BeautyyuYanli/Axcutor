@@ -1,6 +1,6 @@
 # 01. Basics：基础概念与最小工作流
 
-Axcutor 使用 YAML 或 JSON 声明工作流的数据契约与控制流图（CFG）。本节介绍统一节点模型、根节点函数签名、`run` 节点的执行契约（`executor: builtin` 与 `executor: module`）以及基础顺序工作流的编写方式。
+Axcutor 使用 YAML 或 JSON 声明工作流的数据契约与控制流图（CFG）。本节介绍统一节点模型、根节点函数签名、`run` 节点的执行契约（`executor: builtin`、`executor: module` 与 `executor: signal`）以及基础顺序工作流的编写方式。
 
 ---
 
@@ -30,22 +30,23 @@ graph: ...
 
 ---
 
-## 二、 `run` 的执行契约：受函数签名约束的业务代码
+## 二、 `run` 的执行契约：受函数签名约束的业务代码与协作式等待
 
-在节点定义中，`run` 表示执行具体计算或 I/O 的最小原子执行体，采用以 `executor` 为鉴别键的结构化映射对象声明。
+在节点定义中，`run` 表示执行具体计算、外部 I/O 或协作式挂起等待的最小原子执行体，采用以 `executor` 为鉴别键的结构化映射对象声明。
 
 > [!IMPORTANT]
-> **`run` 通过结构化 `executor` 承载受函数签名约束的业务代码。**
-> Axcutor 内建提供两种同构的强类型 Python 执行器形态：
+> **`run` 通过结构化 `executor` 承载受函数签名约束的业务执行或协作式等待。**
+> Axcutor 内建提供三类保留执行器形态：
 > - **`executor: builtin`（内联 Python 执行器）**：在 YAML 的 `content` 中直接编写异步函数体（对应 `async def execute(input: Input) -> ReturnType:`），运行时在内存中动态合成强类型 `Input`、`Output` 与 `Branch` 模型并注入函数作用域，适合轻量级转换、胶水逻辑或单文件快速原型。
 > - **`executor: module`（模块级 Python 执行器）**：在具名工作流包（包含 `__axcutor__.yaml` 与 `__init__.py` 的目录）内，通过 `content: "."` 或 `content: ".<local_path>"` 指向包的 `__init__.py` 或独立 `.py` 源文件。每个模块导入由 `axcutor contracts` 预生成的伴生强类型契约桩文件（`*_contract.py` / `_contract.py`）并定义显式 `async def execute(input: Input) -> ReturnType:`，天然获得完整的 IDE 补全、静态类型检查（`pyrefly check`）、单元测试与调试器断点能力，且运行时在边界强制校验编译期契约指纹（`__axcutor_contract_sha256__`）。
+> - **`executor: signal`（协作式信号等待执行器）**：以闭合配置 `run: { executor: signal }` 在工作流内部直接挂起等待外部信号，不派发 Activity 任务、不占用 Worker 槽位。外部系统通过 HTTP `POST /v1/executions/{id}:signal` 或 CLI `axcutor signal` 提交满足节点 `output` / `branches` 契约的信号以恢复执行，适用于审批门禁、人工复核或外部异步回调汇聚。
 >
-> 在两种执行器中，业务代码均通过强类型只读模型 `input.<var>` 读取输入快照（其中 `type: number` 字段自动映射为 Python 原生 `float`），并通过返回 `Output(...)` 或 `Branch.<branch>(...)` 实例完成输出与控制分支路由。此外，宿主也可通过扩展 `executor` 接入远程沙箱、HTTP/RPC 微服务接口、数据库事务或大模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
+> 在 `builtin` 与 `module` 执行器中，业务代码均通过强类型只读模型 `input.<var>` 读取输入快照（其中 `type: number` 字段自动映射为 Python 原生 `float`），并通过返回 `Output(...)` 或 `Branch.<branch>(...)` 实例完成输出与控制分支路由。此外，宿主也可通过扩展 `executor` 接入远程沙箱、HTTP/RPC 微服务接口、数据库事务或大模型调用。图调度、静态类型检查、栈帧隔离与容错机制对所有执行器形态保持一致。
 
 运行时对 `run` 节点执行两项隔离与校验保障：
 
 1. **最小权限只读注入**：仅向执行器传入节点在 `input` 中显式声明的变量只读快照（`builtin` 与 `module` 执行器均将其封装为 `frozen=True` 的 Pydantic `Input` 实例），未声明的图变量对执行器不可见。
-2. **输出类型与分支契约校验**：执行器返回后，运行时（及 `Output` / `Branch` 构造器）校验其产出的 `output` 字段是否符合 `TypeSpec`；校验通过后才将结果原子写回所属图栈帧。
+2. **输出类型与分支契约校验**：执行器返回（或外部信号到达）后，运行时校验其产出的 `output` 字段与分支是否符合 `TypeSpec` 及 `branches` 契约；校验通过后才将结果原子写回所属图栈帧。
 
 ```yaml
 # 节点只读读取 raw_price 与 discount_rate，校验通过后原子写回 final_price
@@ -291,6 +292,35 @@ async def execute(input: Input) -> ReturnType:
 ```
 
 运行时在每次尝试执行节点前，提取 `mod.Input.__module__` 对应的契约模块并比对 `__axcutor_contract_sha256__` 指纹；若 YAML 契约已变更但未重新生成契约桩、异步入口缺失或契约类型来源不合规，运行时抛出可由 `catch` 捕获的 `contract` 异常。挂载、契约检查与部署边界见 [04. 包挂载与 Python 模块](./04-packages-and-modules.md)。
+
+---
+
+## 七、 协作式信号等待执行器（`executor: signal`）与外部唤醒
+
+当工作流需要在特定节点挂起并等待外部事件（如人工审批、异步回调通知或外部合规放行）时，可将节点声明为闭合配置 `run: { executor: signal }`（不允许携带 `content` 或其他附加字段）：
+
+```yaml
+# 挂起等待外部审批信号，24 小时未收到合法信号则转入 expired 分支
+await_approval:
+  input: [order_info]
+  output:
+    reviewer: { type: string }
+  branches:
+    approved:
+      description: "审批通过并记录审核人"
+      output: [reviewer]
+    rejected:
+      description: "审批驳回"
+      output: []
+  timeout_ms: 86400000
+  catch:
+    expired: [timeout]
+  run:
+    executor: signal
+```
+
+* **等待状态暴露（`Frame.waiting`）**：节点激活后直接在工作流协程内部挂起（不占用 Activity Worker 槽位），并将其规范等待地址（如 `__main__/await_approval`）追加至所属栈帧的 `waiting` 列表中；外部调用方可通过查询活跃栈帧的 `variables` 与 `waiting` 获取上下文及等待地址。
+* **外部契约校验与原子认领**：调用方通过 [HTTP `POST /v1/executions/{id}:signal`](../../reference/04-execution-http-api.md#投递外部信号) 或 [CLI `axcutor signal`](../00-run-with-docker.md#使用-cli-恢复等待节点) 提交 `address`、`branch`、`output` 及可选的帧步数护栏 `step`。若分支或输出不符合节点契约，请求以 `422 signal_validation_failed` 被原子拒绝，节点保持原等待状态且不消耗 `retry` 次数；校验通过后才认领槽位、写回 `output` 并沿所选分支继续推进。
 
 ---
 

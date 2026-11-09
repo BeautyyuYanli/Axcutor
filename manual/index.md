@@ -2,7 +2,7 @@
 
 Axcutor 是面向复杂业务编排的工作流语言与运行时引擎。它采用单令牌结构化并发控制流图（Structured CFG）描述执行拓扑，并通过闭合静态强类型系统（JSON Schema 子集 `TypeSpec`）约束全链路的数据契约。
 
-在 Axcutor 中，每个工作流包（`__axcutor__.yaml`）或入口工作流文件本身都是一个具备明确函数签名的节点，其输入、控制分支与输出遵循统一的映射关系：$\text{Input} \to (\text{Branch}, \text{Output})$。图内的 `run` 节点通过结构化的 `executor` 契约承载任意满足该签名约束的业务实现，既支持内置受信任的强类型内联 Python 执行器（`executor: builtin`）与包内独立模块级 Python 执行器（`executor: module`），也可扩展至脚本沙箱、HTTP/RPC 微服务接口、数据库事务以及结构化模型调用。类型检查、栈帧作用域隔离、并发无锁同步与异常原子回滚均由编译器和运行时统一保障。
+在 Axcutor 中，每个工作流包（`__axcutor__.yaml`）或入口工作流文件本身都是一个具备明确函数签名的节点，其输入、控制分支与输出遵循统一的映射关系：$\text{Input} \to (\text{Branch}, \text{Output})$。图内的 `run` 节点通过结构化的 `executor` 契约承载任意满足该签名约束的动作单元，内置提供受信任的强类型内联 Python 执行器（`executor: builtin`）、包内独立模块级 Python 执行器（`executor: module`）与协作式外部信号等待执行器（`executor: signal`），也可扩展至脚本沙箱、HTTP/RPC 微服务接口、数据库事务以及结构化模型调用。类型检查、栈帧作用域隔离、并发无锁同步与异常原子回滚均由编译器和运行时统一保障。
 
 ---
 

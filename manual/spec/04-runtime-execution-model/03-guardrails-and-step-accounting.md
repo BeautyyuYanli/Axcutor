@@ -45,4 +45,4 @@
 * 计时器绑定在节点 $N$（或 `for_each` 下的单次元素迭代）的**每一次独立尝试（Attempt $a \in \{1, \dots, \text{max\_attempts}\}$）**上；
 * 在第 $a$ 次尝试启动瞬间开启单调时钟计时器（预算为 $T$ 毫秒）；若在 $T$ 毫秒内该次尝试未完成，立即取消该次尝试（若为子图则级联取消子图内部所有在途任务），丢弃该次尝试的局部状态，并产生 **`timeout`** 异常交由该节点的 `retry` / `catch` 状态机处理。
 
-`signal` 使用 Workflow 定时器，每次重试重置等待期限；省略 `timeout_ms` 时无限期等待，不受 Activity 默认期限约束。其等待和拒绝请求不增加步数。若 Update 已同步认领等待槽位，该结果优先于同轮次就绪的尝试期限；尚未认领时，超时清理槽位并按 `timeout` 重试或捕获，见 [signal 协议](../05-executor-abi/01-run-executor-contract.md#四、signal-协作式等待与-update-恢复协议)。
+`executor: "signal"` 使用工作流计时器，每次重试重置等待期限；省略 `timeout_ms` 时无限期等待，不受 Activity 默认期限约束。其等待和边界拒绝请求不增加步数。若外部信号已在同一调度轮次内认领等待槽位，该认领结果优先于同轮次到期的尝试定时器；尚未认领时，超时清理槽位并按 `timeout` 重试或捕获，详见 [`04-signal-cooperative-executor.md`](../05-executor-abi/04-signal-cooperative-executor.md)。

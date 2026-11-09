@@ -15,7 +15,7 @@ Axcutor 工作流使用声明式的 YAML 或 JSON 文档描述数据契约与控
 1. **根节点契约层（Root Node Contract）**：位于文档顶层，通过必填的 `input` 与 `output` 映射表声明整份工作流对外暴露的参数类型契约（无输入或无输出时须显式声明为空字典 `{}`），并可通过可选的 `branches` 声明根级排他控制分支及其按需交付的输出变量子集。
 2. **控制流图容器层（Graph Container）**：由顶层或内联子图节点的 `graph` 字段开启，负责维护当前图级作用域（Graph Scope）。该层可配置当前栈帧的最大执行步数 `max_steps`，并通过 `variables` 显式声明图级局部变量的 `TypeSpec` 与可选的静态初值 `default`。
 3. **图内多态子节点层（Inner Nodes）**：挂载于 `graph.nodes` 映射表下，每个子节点必须且只能选择以下三种多态形态之一：
-   - **动作节点（`run`）**：声明 `input` / `output` 变量契约，并通过结构化 `run: { executor: ..., ... }`（如内置内联 Python 执行器 `executor: builtin` 或包内模块级 Python 执行器 `executor: module`）交由对应执行器运行。
+   - **动作节点（`run`）**：声明 `input` / `output` 变量契约，并通过结构化 `run: { executor: ..., ... }`（如内置内联 Python 执行器 `executor: builtin`、包内模块级 Python 执行器 `executor: module` 或协作式等待执行器 `executor: signal`）交由对应执行器运行或等待外部恢复信号。
    - **调用节点（`use`）**：调用跨包工作流（`workflow:<PackagePath>`）或运行时内建算子（`builtin:<op>`），通过 `with.input` 与 `with.output` 显式完成跨边界的参数绑定与返回值写回。
    - **内联块级子图（`graph`）**：在当前图内嵌套独立的子图作用域，按名捕获外层变量并导出子图输出。
    此外，子节点可挂载同构集合遍历（`for_each`）、单次超时（`timeout_ms`）、原地重试（`retry`）与可恢复异常捕获（`catch`）四类执行修饰符。
@@ -68,7 +68,7 @@ graph:
   # 3. 图内多态子节点层（Inner Nodes：run / use / graph 三选一）
   # ==========================================================
   nodes:
-    # 形态 A：动作节点（run：builtin 内联代码或 module 包内模块）
+    # 形态 A：动作节点（run：builtin 内联代码、module 包内模块或 signal 外部信号等待）
     <action_node_id>:
       for_each: { ... }                 # 可选：同构集合遍历修饰符
       timeout_ms: 5000                  # 可选：单次尝试超时上限（毫秒）
@@ -79,7 +79,7 @@ graph:
         <out_var>: <TypeSpec>
       branches: { ... }                 # 可选：排他控制分支
       run:
-        executor: builtin               # 或 executor: module（配合 content: ".<local_path>"）
+        executor: builtin               # 或 executor: module（配 content: ".<local_path>"）/ executor: signal
         content: |
           return Branch.<choice>(<out_var>=...)
 
