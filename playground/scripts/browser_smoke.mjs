@@ -81,12 +81,33 @@ try {
   const editor = page.locator('#source-text');
   const executionButton = page.getByRole('button', { name: /^Execution(?: · .*)?$/ });
   const diagnosticsButton = page.getByRole('button', { name: /^Diagnostics \(/ });
+  const openExecution = async () => {
+    if (await executionButton.getAttribute('aria-expanded') !== 'true') await executionButton.click();
+  };
   const filesToggle = page.getByRole('button', { name: 'Workspace files', exact: true });
   const editorToggle = page.getByRole('button', { name: 'Editor', exact: true });
   const stepData = status.getByRole('region', { name: 'Selected step data', exact: true });
-  const screenshot = async name => {
+  const traceTab = page.getByRole('button', { name: 'Trace', exact: true });
+  const traceCanvas = page.getByRole('region', { name: 'Execution trace', exact: true });
+  const traceDetails = page.getByRole('region', { name: 'Trace call details', exact: true });
+  const screenshot = async (name, target = page) => {
     await mkdir(new URL('../.browser-test/', import.meta.url), { recursive: true });
-    await page.screenshot({ path: fileURLToPath(new URL(`../.browser-test/${name}.png`, import.meta.url)), fullPage: true });
+    await target.screenshot({ path: fileURLToPath(new URL(`../.browser-test/${name}.png`, import.meta.url)), fullPage: true });
+  };
+  const openWithTraceOutage = async () => {
+    const target = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    target.on('pageerror', error => errors.push(error.message));
+    let reads = 0;
+    await target.route('**/v1/workspace/trace*', async route => {
+      if (++reads > 1) return route.continue();
+      await route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":{"code":"runtime_unavailable","message":"initial trace read unavailable","details":null}}' });
+    });
+    await target.goto(baseUrl);
+    await target.getByRole('button', { name: 'Trace', exact: true }).click();
+    await expect(target.getByRole('button', { name: 'Retry trace', exact: true })).toBeVisible();
+    await expect(target.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
+    await expect(target.locator('.main-canvas')).toHaveAttribute('data-canvas-source', 'editor');
+    return target;
   };
   const checkLayouts = async (name, expanded = false) => {
     await mkdir(new URL('../.browser-test/', import.meta.url), { recursive: true });
@@ -98,7 +119,7 @@ try {
         return {
           pageWidth: document.documentElement.scrollWidth, pageHeight: document.documentElement.scrollHeight,
           source: rect('.source-editor'), editor: rect('#source-text'), canvas: rect('.canvas'),
-          files: rect('.file-sidebar'), cfg: rect('.cfg-panel'), panel: rect('.bottom-panel'),
+          files: rect('.file-sidebar'), cfg: rect('.main-canvas'), panel: rect('.bottom-panel'),
         };
       });
       expect(bounds.pageWidth).toBe(width);
@@ -172,12 +193,38 @@ try {
   await expect(run).toBeEnabled();
   await expect(page.getByLabel('Entry', { exact: true })).toHaveValue(mainPath);
   await expect(page.getByLabel('Input file', { exact: true })).toHaveValue('inputs/demo.json');
+  await expect(page.getByLabel('Entry', { exact: true }).locator('option:checked')).toHaveText('demo.main');
+  await expect(page.getByLabel('Entry', { exact: true })).toHaveAttribute('title', mainPath);
+  await expect(page.getByLabel('Entry', { exact: true }).locator('option[value="workflows/demo/double/__axcutor__.yaml"]')).toHaveText('demo.double');
+  await expect(page.locator('.app-toolbar')).toHaveCount(0);
+  await expect(page.getByLabel('Canvas source', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.run-config').getByRole('button', { name: 'Run', exact: true })).toBeVisible();
+  await expect(page.locator('.run-config').getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
+  await expect(page.locator('.file-sidebar').getByRole('button', { name: 'Workspace files', exact: true })).toBeVisible();
+  await expect(page.locator('.file-sidebar').getByRole('button', { name: 'Delete file', exact: true })).toBeVisible();
+  await expect(page.locator('.source-editor').getByRole('button', { name: 'Editor', exact: true })).toBeVisible();
+  await expect(page.locator('.source-editor').getByRole('button', { name: 'Save files', exact: true })).toBeVisible();
+  await expect(page.locator('.source-editor').getByRole('button', { name: 'Discard edits', exact: true })).toBeVisible();
   await expect(graph.locator('.vue-flow__node')).toHaveCount(4);
+  await expect(page.getByText('Compiler: ready', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Files editable', { exact: true })).toHaveCount(0);
+  await expect(graph.getByRole('navigation', { name: 'Scope navigation' })).toHaveCount(0);
+  const horizontal = await graph.locator('.vue-flow__node').evaluateAll(nodes => Object.fromEntries(nodes.map(node => {
+    const rect = node.getBoundingClientRect();
+    return [node.dataset.id, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, height: rect.height }];
+  })));
+  expect(horizontal.start.x).toBeLessThan(horizontal.double.x);
+  expect(horizontal.double.x).toBeLessThan(horizontal.summarize.x);
+  expect(horizontal.summarize.x).toBeLessThan(horizontal.end.x);
+  expect(Math.abs(horizontal.start.y - horizontal.end.y)).toBeLessThan(2);
+  expect(horizontal.start.height).toBeLessThan(horizontal.double.height);
   const mainSourceText = await editor.inputValue();
-  await expect(page.getByRole('button', { name: 'Expand panel', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await expect(executionButton).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: /^(Expand|Collapse) panel$/ })).toHaveCount(0);
+  await expect(page.locator('.execution-summary')).toHaveCount(0);
   await checkLayouts('workspace');
   // Hiding panes keeps the same editor, unsaved buffer, caret and scroll position.
-  // Every combination must remove the corresponding grid column/row.
+  // Collapsed panes retain their own reopen controls in a compact header/rail.
   const unsavedText = mainSourceText + '\n# ' + 'long-line-'.repeat(80) + '\n' + '# unsaved position\n'.repeat(100);
   await editor.fill(unsavedText);
   const editorElement = await editor.elementHandle();
@@ -191,24 +238,33 @@ try {
     });
     const original = await graph.boundingBox();
     await filesToggle.click();
-    await expect(page.locator('.file-sidebar')).toBeHidden();
+    await expect(page.locator('#workspace-files-content')).toBeHidden();
     await expect(editor).toBeVisible();
     if (width >= 1280) expect((await graph.boundingBox()).width).toBeGreaterThan(original.width);
     await filesToggle.click();
     await editorToggle.click();
-    await expect(page.locator('.source-editor')).toBeHidden();
+    await expect(editor).toBeHidden();
     await expect(page.locator('.file-sidebar')).toBeVisible();
     if (width >= 1280) expect((await graph.boundingBox()).width).toBeGreaterThan(original.width);
     else expect((await graph.boundingBox()).y).toBeLessThan(original.y);
     await filesToggle.click();
-    await expect.poll(() => page.evaluate(() => {
+    const collapsed = await page.evaluate(() => {
       const workbench = document.querySelector('.workbench').getBoundingClientRect();
-      const cfg = document.querySelector('.cfg-panel').getBoundingClientRect();
-      return Math.max(Math.abs(workbench.width - cfg.width), Math.abs(workbench.height - cfg.height), Math.abs(workbench.x - cfg.x), Math.abs(workbench.y - cfg.y));
-    })).toBeLessThan(2);
+      const cfg = document.querySelector('.main-canvas').getBoundingClientRect();
+      const files = document.querySelector('.file-sidebar').getBoundingClientRect();
+      const editor = document.querySelector('.source-editor').getBoundingClientRect();
+      return { right: Math.abs(workbench.right - cfg.right), bottom: Math.abs(workbench.bottom - cfg.bottom), files: files.toJSON(), editor: editor.toJSON() };
+    });
+    expect(collapsed.right).toBeLessThan(2);
+    expect(collapsed.bottom).toBeLessThan(2);
+    expect(width > 640 ? collapsed.files.width : collapsed.files.height).toBeLessThan(50);
+    expect(width > 1100 ? collapsed.editor.width : collapsed.editor.height).toBeLessThan(50);
     await expect(filesToggle).toBeVisible();
     await expect(editorToggle).toBeVisible();
-    await expect(page.getByLabel('Canvas source', { exact: true })).toHaveValue('editor');
+    await expect(filesToggle).toHaveAttribute('title', 'Expand files');
+    await expect(filesToggle.locator('svg')).toBeVisible();
+    await expect(editorToggle).toHaveText('</>');
+    await expect(page.locator('.main-canvas')).toHaveAttribute('data-canvas-source', 'editor');
     // No manual Fit: the layout's actual size change must fit the graph.
     await expect.poll(() => graph.locator('.vue-flow__node').evaluateAll(nodes => {
       const pane = document.querySelector('.canvas').getBoundingClientRect();
@@ -226,7 +282,9 @@ try {
     await expect(page.locator('[data-workspace-state]')).toHaveText('Unsaved changes');
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
-  await editor.fill(mainSourceText);
+  await page.locator('.source-editor').getByRole('button', { name: 'Discard edits', exact: true }).click();
+  await expect(editor).toHaveValue(mainSourceText);
+  await expect(page.locator('[data-workspace-state]')).toHaveText('Saved');
   const graphZoom = () => graph.locator('.vue-flow__transformationpane').evaluate(element => new DOMMatrixReadOnly(getComputedStyle(element).transform).a);
   const initialZoom = await graphZoom();
   await graph.getByRole('button', { name: 'Zoom in', exact: true }).click();
@@ -250,7 +308,7 @@ try {
   await expect(editor).toHaveAttribute('readonly', '');
   await expect(page.getByRole('button', { name: 'Delete file', exact: true })).toBeDisabled();
   await select('inputs/demo.json');
-  await editor.fill('{"items":[3,1,2],"delay_seconds":3}');
+  await editor.fill('{"items":[3,1,2],"delay_seconds":5}');
   // Modifier parameters stay in source. Both root and graph nodes display only
   // behavior labels, including when legal integers exceed JavaScript precision.
   const modifiedRun = '"run":{"executor":"builtin","content":"return Output(value=1)"},"timeout_ms":9007199254740993,"retry":{"max_attempts":3,"backoff_ms":9007199254740993}';
@@ -341,8 +399,25 @@ try {
   await expect(status.locator('.frame-tree pre')).toHaveCount(0);
   await expect(status.locator('button[aria-pressed="true"]')).toHaveCount(1);
   await screenshot('execution-current-steps-1600');
+  await traceTab.click();
+  const parallelCall = traceCanvas.getByRole('button').filter({ hasText: 'double[0] · run' });
+  await expect(parallelCall).toBeVisible();
+  await parallelCall.click();
+  await expect(traceDetails.getByRole('region', { name: 'Call Input', exact: true })).toContainText('3');
+  await expect(traceCanvas.locator('[data-span-status="running"]')).not.toHaveCount(0);
+  const runningSpans = await traceCanvas.locator('.trace-row').count();
+  expect(runningSpans).toBeGreaterThan(3);
+  await screenshot('trace-parallel-running-1600');
+  await expect(graph).toBeVisible();
+  expect((await traceCanvas.boundingBox()).y).toBeGreaterThanOrEqual((await graph.boundingBox()).y + (await graph.boundingBox()).height);
+  await expect(page.locator('.bottom-panel').getByRole('region', { name: 'Execution trace', exact: true })).toBeVisible();
+  await traceDetails.getByRole('button', { name: 'Locate in Flow', exact: true }).click();
+  await expect(page.getByLabel('Workflow', { exact: true })).toHaveValue('demo.double');
+  await expect(graph.locator('[data-selected="true"]')).toContainText('run');
   // Switching and collapsing panes preserves observation without polling taking focus.
   await executionButton.focus();
+  await page.keyboard.press('Tab');
+  await expect(traceTab).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(diagnosticsButton).toBeFocused();
   await page.keyboard.press('Enter');
@@ -351,10 +426,12 @@ try {
   await expect(status).toBeHidden();
   await page.waitForResponse(response => /\/v1\/executions\/[^/]+$/.test(response.url()) && response.request().method() === 'GET');
   await expect(diagnosticsButton).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: 'Collapse panel', exact: true }).click();
+  await diagnosticsButton.click();
   await page.waitForResponse(response => /\/v1\/executions\/[^/]+$/.test(response.url()) && response.request().method() === 'GET');
-  await expect(page.getByRole('button', { name: 'Expand panel', exact: true })).toHaveAttribute('aria-expanded', 'false');
-  await executionButton.click();
+  await expect(diagnosticsButton).toHaveAttribute('aria-expanded', 'false');
+  await diagnosticsButton.click();
+  await expect(page.getByRole('region', { name: 'Diagnostics', exact: true })).toBeVisible();
+  await openExecution();
   await expect(status).toBeVisible();
   await select(doublePath);
   await expect(editor).toHaveValue(doubleText);
@@ -372,10 +449,11 @@ try {
   const childFrame = status.getByRole('button', { name: 'demo.double › run · item [0]', exact: true });
   await expect(childFrame).toBeVisible();
   await childFrame.click();
-  await expect(page.getByLabel('Canvas source', { exact: true })).toHaveValue('execution');
+  await expect(page.locator('.main-canvas')).toHaveAttribute('data-canvas-source', 'execution');
   await expect(page.getByLabel('Workflow', { exact: true })).toHaveValue('demo.double');
   await expect(graph.locator('[data-node-kind="run"][data-active="true"]')).toHaveCount(1);
-  await expect(graph.locator('[data-active="true"][data-selected="true"]')).toContainText('Selected · Running');
+  await expect(graph.locator('[data-active="true"][data-selected="true"] .node-title')).toHaveAttribute('aria-pressed', 'true');
+  await expect(graph.locator('[data-active="true"][data-selected="true"]').getByRole('status', { name: 'Running', exact: true })).toBeVisible();
   await expect(stepData.getByRole('heading')).toHaveText('demo.double › run · item [0]');
   await expect(stepData.getByRole('row', { name: /^value / })).toContainText('3');
   await expect(status).toHaveAttribute('data-status', 'completed', { timeout: 20000 });
@@ -397,7 +475,7 @@ try {
   const mainFrame = status.getByRole('region', { name: 'Current steps', exact: true }).locator(':scope > .frame-tree > li > button').first();
   await mainFrame.click();
   await expect(mainFrame).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByLabel('Canvas source', { exact: true })).toHaveValue('execution');
+  await expect(page.locator('.main-canvas')).toHaveAttribute('data-canvas-source', 'execution');
   await expect(status).toHaveAttribute('data-status', 'completed', { timeout: 20000 });
   await expect(status.getByRole('region', { name: 'Execution result' }).getByRole('row', { name: /^total / })).toContainText('118');
   await expect(status.getByRole('region', { name: 'Execution result' })).toContainText('9,');
@@ -406,9 +484,7 @@ try {
   await expect(page.locator('[data-workspace-state]')).toHaveText('Saved');
 
   // An ID-only response after a real start must not reuse the previous bundle.
-  const canvasSource = page.getByLabel('Canvas source', { exact: true });
-  const snapshotOption = canvasSource.locator('option[value="execution"]');
-  await expect(snapshotOption).toHaveJSProperty('disabled', false);
+  const canvas = page.locator('.main-canvas');
   await select(mainPath);
   await editor.fill(mainSourceText
     .replace('    double:', '    changed_double:')
@@ -423,6 +499,9 @@ try {
   const heldSubmission = new Promise(resolve => { releaseSubmission = resolve; });
   let releaseQueries;
   const heldQueries = new Promise(resolve => { releaseQueries = resolve; });
+  let releaseTrace;
+  const heldTrace = new Promise(resolve => { releaseTrace = resolve; });
+  const holdTrace = async route => { await heldTrace; await route.continue(); };
   let queryFailed = false;
   const queries = [];
   const record = request => {
@@ -457,6 +536,7 @@ try {
   page.on('request', record);
   await page.route('**/v1/workspace/executions', loseSource);
   await page.route('**/v1/executions/*', unavailableQuery);
+  await page.route('**/v1/workspace/trace*', holdTrace);
   try {
     const reply = page.waitForResponse(response => response.url() === runUrl && response.request().method() === 'POST');
     await run.click();
@@ -480,18 +560,21 @@ try {
     const unknownChild = status.getByRole('button', { name: 'demo.main › changed_double[0] › run', exact: true });
     await expect(unknownChild).toBeVisible();
     expect(queries).toContain(new URL('/v1/executions/' + id, baseUrl).href);
-    await expect(snapshotOption).toHaveJSProperty('disabled', true);
-    await expect(canvasSource).toHaveValue('editor');
+    await expect(canvas).toHaveAttribute('data-canvas-source', 'editor');
     await expect(status.locator('button[aria-pressed="true"]')).toHaveCount(1);
     await expect(graph.locator('[data-selected="true"]')).toHaveCount(0);
     await mainFrame.click();
     await unknownChild.click();
-    await expect(canvasSource).toHaveValue('editor');
+    await expect(canvas).toHaveAttribute('data-canvas-source', 'editor');
     await expect(graph.locator('.vue-flow__node[data-id="changed_double"]')).toBeVisible();
     await expect(graph.locator('.vue-flow__node[data-id="double"]')).toHaveCount(0);
     await expect(unknownChild).toHaveAttribute('aria-pressed', 'true');
     await expect(stepData.getByRole('heading')).toHaveText('demo.main › changed_double[0] › run');
     await expectEditing(page, false);
+    releaseTrace();
+    await expect(canvas).toHaveAttribute('data-canvas-source', 'execution');
+    await expect(graph.locator('.vue-flow__node[data-id="changed_double"]')).toBeVisible();
+    await expect(graph.locator('.vue-flow__node[data-id="double"]')).toHaveCount(0);
     let releaseCancellation;
     const heldCancellation = new Promise(resolve => { releaseCancellation = resolve; });
     const holdCancel = async route => { await heldCancellation; await route.continue(); };
@@ -501,11 +584,11 @@ try {
       await page.getByRole('button', { name: 'Cancel', exact: true }).click();
       await expect(executionButton).toHaveText('Execution · Cancelling');
       await expect(page.getByRole('button', { name: 'Cancelling…', exact: true })).toBeDisabled();
-      await page.getByRole('button', { name: 'Collapse panel', exact: true }).click();
+      await executionButton.click();
       await expect(executionButton).toBeVisible();
       await expect(page.locator('.execution-summary')).toContainText('Cancellation requested');
       await screenshot('execution-cancelling');
-      await executionButton.click();
+      await openExecution();
     } finally {
       releaseCancellation();
       await page.unroute(cancelPattern, holdCancel);
@@ -517,7 +600,9 @@ try {
   } finally {
     releaseSubmission();
     releaseQueries();
+    releaseTrace();
     await page.unroute('**/v1/executions/*', unavailableQuery);
+    await page.unroute('**/v1/workspace/trace*', holdTrace);
     await page.unroute('**/v1/workspace/executions', loseSource);
     page.off('request', record);
   }
@@ -529,12 +614,12 @@ try {
   const document = { input: { value: schema }, output: { result: schema }, graph: { nodes: { copy: { use: 'builtin:assign', with: { input: { source: 'value' }, output: { value: 'result' } } } }, edges: ['start -> copy', 'copy -> end'] } };
   await create('scratch/main.json', JSON.stringify(document));
   await page.getByLabel('Entry', { exact: true }).selectOption('scratch/main.json');
+  await expect(page.getByLabel('Entry', { exact: true }).locator('option:checked')).toHaveText('__main__');
   const exactValue = '{"integer":99999999999999999999999999999999999999999999999999,"decimal":1.00000000000000000000001,"ordered":{"2":2,"1":1,"z":3},"' + longField + '":"' + longOutput + '"}';
   await create('scratch/input.json', '{"value":' + exactValue + '}');
   await page.getByLabel('Input file', { exact: true }).selectOption('scratch/input.json');
   await startRun();
-  await expect(snapshotOption).toHaveJSProperty('disabled', false);
-  await expect(canvasSource).toHaveValue('execution');
+  await expect(canvas).toHaveAttribute('data-canvas-source', 'execution');
   await expect(graph.locator('.vue-flow__node[data-id="copy"]')).toBeVisible();
   await expect(graph.locator('.vue-flow__node[data-id="changed_double"]')).toHaveCount(0);
   await expect(status).toHaveAttribute('data-status', 'completed', { timeout: 15000 });
@@ -544,11 +629,140 @@ try {
   expect(result.indexOf('"2"')).toBeLessThan(result.indexOf('"1"'));
   expect(result).toContain(longOutput);
   await expectEditing(page, true);
+  // The builtin copy completes before any 300ms frame poll. Its real call and
+  // exact payloads remain selectable from the final trace and after page reload.
+  await traceTab.click();
+  const copyCall = traceCanvas.getByRole('button').filter({ hasText: 'copy · builtin' });
+  await expect(copyCall).toBeVisible();
+  await copyCall.click();
+  await expect(traceDetails.getByRole('region', { name: 'Call Input', exact: true })).toContainText('99999999999999999999999999999999999999999999999999');
+  await expect(traceDetails.getByRole('region', { name: 'Call Output', exact: true })).toContainText('1.00000000000000000000001');
+  await expect(copyCall).toContainText('0 ms');
+  await expect(copyCall.locator('.trace-bar[data-zero="true"]')).toBeVisible();
+  const timing = traceDetails.locator('.trace-timing');
+  await expect(timing).not.toHaveAttribute('open');
+  await expect(timing.getByText('Started', { exact: true })).toBeHidden();
+  await timing.getByText('Timing', { exact: true }).click();
+  await expect(timing.getByText('Started', { exact: true })).toBeVisible();
+  await timing.getByText('Timing', { exact: true }).click();
+  await expect(traceCanvas.getByRole('heading')).toHaveCount(0);
+  const copyId = await copyCall.getAttribute('data-span-id');
+  await traceCanvas.getByRole('button', { name: 'Zoom trace in', exact: true }).click();
+  await expect(traceCanvas.locator('.trace-timeline')).toHaveAttribute('style', /150%/);
+  await traceCanvas.getByRole('button', { name: 'Fit trace', exact: true }).click();
+  await screenshot('trace-fast-lossless-1600');
+  await traceDetails.getByRole('button', { name: 'Locate in Flow', exact: true }).click();
+  await expect(graph.locator('[data-selected="true"]')).toContainText('copy');
+  // Only the initial HTTP read fails. Retry must restore the real completed
+  // execution, result and submitted snapshot, retaining edits made meanwhile.
+  const completedRecovery = await openWithTraceOutage();
+  try {
+    const recoveryEditor = completedRecovery.locator('#source-text');
+    await expect(recoveryEditor).toBeEditable();
+    const editedText = await recoveryEditor.inputValue() + '\n# Unsaved during trace recovery.\n';
+    await recoveryEditor.fill(editedText);
+    await completedRecovery.getByRole('button', { name: 'Retry trace', exact: true }).click();
+    await completedRecovery.getByRole('button', { name: /^Execution ·/ }).click();
+    const recoveredStatus = completedRecovery.getByRole('region', { name: 'Execution inspector' });
+    await expect(recoveredStatus).toHaveAttribute('data-status', 'completed');
+    await expect(recoveredStatus.getByRole('region', { name: 'Execution result' })).toContainText('1.00000000000000000000001');
+    await expect(recoveredStatus.getByRole('region', { name: 'Execution result' })).toContainText('99999999999999999999999999999999999999999999999999');
+    const recoveryCanvas = completedRecovery.locator('.main-canvas');
+    await expect(recoveryCanvas).toHaveAttribute('data-canvas-source', 'editor');
+    await completedRecovery.getByRole('button', { name: 'Trace', exact: true }).click();
+    await completedRecovery.getByRole('region', { name: 'Execution trace', exact: true }).getByRole('button').filter({ hasText: 'copy · builtin' }).click();
+    await completedRecovery.getByRole('button', { name: 'Locate in Flow', exact: true }).click();
+    await expect(recoveryCanvas).toHaveAttribute('data-canvas-source', 'execution');
+    await expect(completedRecovery.locator('.cfg-node[data-selected="true"]')).toContainText('copy');
+    await expect(recoveryEditor).toHaveValue(editedText);
+    await expect(completedRecovery.locator('[data-workspace-state]')).toHaveText('Unsaved changes');
+    await screenshot('trace-retry-completed', completedRecovery);
+  } finally { await completedRecovery.close(); }
+
+  // Fixed response data exercises the production component's rendered geometry,
+  // independently of scheduling. The recovery tests above/below use real runs.
+  const axisPage = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  axisPage.on('pageerror', error => errors.push(error.message));
+  try {
+    const latest = await (await page.request.get(new URL('/v1/workspace/trace', baseUrl).href)).json();
+    const instant = second => `2026-01-01T00:00:${second}Z`;
+    const span = (id, start, finish, parent_id = 'window') => ({
+      id, parent_id, kind: 'run', address: `__main__/${id}`, frame_kind: 'iteration', cursor: id,
+      started_at: instant(start), finished_at: finish === null ? null : instant(finish),
+      status: finish === null ? 'running' : 'completed', input: {}, output: finish === null ? null : {},
+      branch: null, error: null, events: [],
+    });
+    const fixture = { ...latest, execution: { ...latest.execution, status: 'running', started_at: instant('00'), finished_at: null, frames: [], result: null, error: null }, complete: false, observed_at: instant('10'), spans: [
+      span('window', '00', null, null), span('early', '01', '05'),
+      span('overlap', '03', '07'), span('live', '06', null),
+    ] };
+    await axisPage.route('**/v1/workspace/trace*', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(fixture) }));
+    await axisPage.goto(baseUrl);
+    await axisPage.getByRole('button', { name: 'Trace', exact: true }).click();
+    await expect(axisPage.locator('.trace-row')).toHaveCount(4);
+    const bounds = () => axisPage.locator('.trace-row').evaluateAll(rows => Object.fromEntries(rows.map(row => {
+      const track = row.querySelector('.trace-track').getBoundingClientRect();
+      const bar = row.querySelector('.trace-bar').getBoundingClientRect();
+      return [row.dataset.spanId, { axis: track.x, left: (bar.x - track.x) / track.width, width: bar.width / track.width }];
+    })));
+    const initial = await bounds();
+    expect(initial.early.axis).toBe(initial.overlap.axis);
+    expect(initial.early.left).toBeCloseTo(0.1, 3);
+    expect(initial.early.width).toBeCloseTo(0.4, 3);
+    expect(initial.overlap.left).toBeCloseTo(0.3, 3);
+    expect(initial.overlap.width).toBeCloseTo(0.4, 3);
+    expect(initial.overlap.left).toBeLessThan(initial.early.left + initial.early.width);
+    expect(initial.live.left).toBeCloseTo(0.6, 3);
+    expect(initial.live.width).toBeCloseTo(0.4, 3);
+    const early = axisPage.locator('[data-span-id="early"]');
+    await expect(early).toContainText('4.000 s');
+    await screenshot('trace-axis-fixed', axisPage);
+    fixture.observed_at = instant('20');
+    await expect.poll(async () => (await bounds()).live.width).toBeCloseTo(0.7, 3);
+    const advanced = await bounds();
+    // The shared range doubled. Closed calls still cover 1–5s and 3–7s;
+    // only the unfinished call grows from 6–10s to 6–20s.
+    expect(advanced.live.left).toBeCloseTo(0.3, 3);
+    expect(advanced.early.left).toBeCloseTo(0.05, 3);
+    expect(advanced.early.width).toBeCloseTo(0.2, 3);
+    expect(advanced.overlap.left).toBeCloseTo(0.15, 3);
+    expect(advanced.overlap.width).toBeCloseTo(0.2, 3);
+    await expect(early).toContainText('4.000 s');
+    await screenshot('trace-axis-advanced', axisPage);
+  } finally { await axisPage.close(); }
+  await page.reload();
+  await openExecution();
+  await expect(status).toHaveAttribute('data-status', 'completed');
+  await expect(canvas).toHaveAttribute('data-canvas-source', 'execution');
+  await expect(graph.locator('.vue-flow__node[data-id="copy"]')).toBeVisible();
+  await traceTab.click();
+  await copyCall.click();
+  await expect(copyCall).toHaveAttribute('data-span-id', copyId);
+  await expect(traceDetails.getByRole('region', { name: 'Call Output', exact: true })).toContainText(longOutput);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await traceCanvas.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await screenshot('trace-fast-lossless-390');
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await openExecution();
+  await page.getByLabel('Entry', { exact: true }).selectOption('scratch/main.json');
+  await page.getByLabel('Input file', { exact: true }).selectOption('scratch/input.json');
+  await select('scratch/main.json');
+  await editor.fill(JSON.stringify(document).replaceAll('copy', 'edited_copy'));
+  await expect(graph.locator('.vue-flow__node[data-id="edited_copy"]')).toBeVisible();
+  await traceTab.click();
+  await copyCall.click();
+  await traceDetails.getByRole('button', { name: 'Locate in Flow', exact: true }).click();
+  await expect(graph.locator('[data-selected="true"]')).toContainText('copy');
+  await expect(graph.locator('.vue-flow__node[data-id="edited_copy"]')).toHaveCount(0);
+  await select('scratch/main.json');
+  await editor.fill(JSON.stringify(document));
   const longPath = 'scratch/' + 'long_directory_name/'.repeat(6) + 'a_source_file_with_a_long_name.py';
   await create(longPath, '# Long paths and source lines stay inside the editor.\n# ' + longOutput + '\n');
   await expect(file(longPath)).toHaveAttribute('title', longPath);
   await expect(page.locator('.source-path')).toHaveText(longPath);
   await graph.locator('.vue-flow__node[data-id="copy"]').getByRole('button', { name: 'copy', exact: true }).click();
+  await openExecution();
   await expect.poll(() => status.getByRole('region', { name: 'Execution result' }).locator('pre').evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
   await checkLayouts('long-content', true);
 
@@ -575,6 +789,19 @@ try {
   await expect(stepData).toContainText('99999999999999999999999999999999999999999999999999');
   const firstStep = status.getByRole('button', { name: '__main__ › collect › receive · Waiting for signal', exact: true });
   await expect(firstStep).toHaveAttribute('aria-pressed', 'true');
+  await traceTab.click();
+  await expect(traceCanvas.locator(`[data-span-id="${copyId}"]`)).toHaveCount(0);
+  const receiveCall = traceCanvas.getByRole('button').filter({ hasText: 'receive · run' });
+  await receiveCall.click();
+  await expect(receiveCall).toContainText('Waiting for signal');
+  const receiveSpanId = await receiveCall.getAttribute('data-span-id');
+  const initialElapsed = await receiveCall.locator('small').innerText();
+  for (let i = 0; i < 2; i++) await page.waitForResponse(response => response.url().includes('/v1/workspace/trace') && response.ok());
+  await expect(receiveCall).toHaveAttribute('aria-pressed', 'true');
+  await expect(receiveCall.locator('small')).not.toHaveText(initialElapsed);
+  await expect(traceDetails.getByRole('region', { name: 'Call Output', exact: true })).toContainText('No output has been returned');
+  await screenshot('trace-signal-wait-1600');
+  await openExecution();
   await expect(stepData.getByRole('rowheader', { name: 'parent_note', exact: true })).toHaveCount(0);
   // Select a non-default parent with data absent from its child. Two successful
   // polls ensure the first response has been applied before checking selection.
@@ -593,6 +820,13 @@ try {
   await screenshot('execution-parent-selection-preserved');
   await firstStep.click();
   await expect(stepData.getByRole('rowheader', { name: 'parent_note', exact: true })).toHaveCount(0);
+  const scopeNavigation = graph.getByRole('navigation', { name: 'Scope navigation', exact: true });
+  await expect(scopeNavigation).toBeVisible();
+  await scopeNavigation.getByRole('button', { name: '__main__', exact: true }).click();
+  await expect(scopeNavigation).toHaveCount(0);
+  await expect(graph.locator('.vue-flow__node[data-id="collect"]')).toBeVisible();
+  await firstStep.click();
+  await expect(scopeNavigation).toBeVisible();
   await expect(graph.locator('[data-selected="true"][data-active="true"]')).toContainText('receive');
   await graph.getByRole('button', { name: 'Zoom in', exact: true }).click();
   const runningZoom = await graphZoom();
@@ -600,11 +834,11 @@ try {
   expect(await graphZoom()).toBeCloseTo(runningZoom);
   await filesToggle.click();
   await editorToggle.click();
-  await expect(canvasSource).toHaveValue('execution');
+  await expect(canvas).toHaveAttribute('data-canvas-source', 'execution');
   for (const [width, height] of [[1600, 1000], [1280, 800], [900, 900], [390, 844]]) {
     await page.setViewportSize({ width, height });
-    await expect(page.locator('.source-editor')).toBeHidden();
-    await expect(page.locator('.file-sidebar')).toBeHidden();
+    await expect(editor).toBeHidden();
+    await expect(page.locator('#workspace-files-content')).toBeHidden();
     await stepData.getByRole('heading').scrollIntoViewIfNeeded();
     await screenshot(`execution-waiting-${width}`);
     await page.locator('.panel-content').evaluate(element => {
@@ -627,6 +861,14 @@ try {
   await expect(stepData.locator('.signal-addresses')).toHaveText('__main__/confirm');
   await expect(stepData.getByRole('row', { name: /^result / })).toContainText('1.00000000000000000000001');
   await expect(graph.locator('[data-selected="true"]')).toHaveCount(0);
+  await traceTab.click();
+  await expect(receiveCall).toHaveAttribute('data-span-id', receiveSpanId);
+  await expect(receiveCall).toHaveAttribute('aria-pressed', 'true');
+  await expect(receiveCall).toContainText('completed');
+  await expect(traceDetails.getByRole('region', { name: 'Call Output', exact: true })).toContainText('1.00000000000000000000001');
+  await expect(traceDetails.getByRole('heading').first()).toBeInViewport();
+  await screenshot('trace-completed-call-during-run-1600');
+  await openExecution();
   // Losing the cleanup observation cannot prove the workspace editable, even
   // after a real terminal execution. The original busy observation is retained.
   let unavailableWorkspaceReads = 0;
@@ -663,6 +905,8 @@ try {
   await editor.fill('{"value":1,"value":2}');
   await run.click();
   await expect(page.getByRole('region', { name: 'Diagnostics', exact: true })).toContainText('duplicate JSON key');
+  const keptTrace = await (await page.request.get(new URL('/v1/workspace/trace', baseUrl).href)).json();
+  expect(keptTrace.execution_id).toBe(waitingId);
   await select('scratch/main.json');
   await editor.fill(JSON.stringify({ ...integerRoot, run: { executor: 'builtin', content: 'raise ValueError("demo failure")' } }));
   await select('scratch/input.json');
@@ -671,6 +915,14 @@ try {
   await expect(status).toHaveAttribute('data-status', 'failed', { timeout: 15000 });
   await expect(status.getByRole('region', { name: 'Execution failure' })).toContainText('demo failure');
   await expect(executionButton).toHaveText('Execution · Failed');
+  await traceTab.click();
+  const failedCall = traceCanvas.getByRole('button').filter({ hasText: '· run' });
+  await expect(failedCall).toContainText('failed');
+  await failedCall.click();
+  await expect(traceDetails).toContainText('demo failure');
+  await expect(traceDetails.getByRole('region', { name: 'Call Output', exact: true })).toContainText('No output: this call failed');
+  await screenshot('trace-failed-1600');
+  await openExecution();
   for (const [width, height] of [[1600, 1000], [1280, 800], [900, 900], [390, 844]]) {
     await page.setViewportSize({ width, height });
     await status.getByRole('region', { name: 'Execution failure' }).scrollIntoViewIfNeeded();
@@ -687,15 +939,42 @@ try {
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(status).toHaveAttribute('data-status', 'cancelled', { timeout: 15000 });
   await expectEditing(page, true);
+  await traceTab.click();
+  await expect(traceCanvas.locator('[data-span-status="cancelled"]')).not.toHaveCount(0);
+  await traceCanvas.locator('[data-span-status="cancelled"]').last().click();
+  await expect(traceDetails.getByRole('region', { name: 'Call Output', exact: true })).toContainText('No output: this call was cancelled');
+  await screenshot('trace-cancelled-1600');
+  await openExecution();
   await editor.fill((await editor.inputValue()) + '\n# Editable after cancellation.\n');
   await startRun();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(status).toHaveAttribute('data-status', 'cancelled', { timeout: 15000 });
   await expectEditing(page, true);
+  // A real waiting run must also regain status, source and Cancel after Retry.
+  await page.getByLabel('Entry', { exact: true }).selectOption('scratch/waiting.json');
+  await page.getByLabel('Input file', { exact: true }).selectOption('scratch/input.json');
+  await select('scratch/input.json');
+  await editor.fill('{"value":' + exactValue + ',"parent_note":"Retry recovery"}');
+  const recoveryId = await startRun();
+  const runningRecovery = await openWithTraceOutage();
+  try {
+    await runningRecovery.getByRole('button', { name: 'Retry trace', exact: true }).click();
+    await runningRecovery.getByRole('button', { name: /^Execution ·/ }).click();
+    const recoveredStatus = runningRecovery.getByRole('region', { name: 'Execution inspector' });
+    await expect(recoveredStatus).toHaveAttribute('data-status', 'running');
+    await expect(recoveredStatus.locator('dd').first()).toHaveText(recoveryId);
+    await expect(runningRecovery.locator('.main-canvas')).toHaveAttribute('data-canvas-source', 'execution');
+    await expect(runningRecovery.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled();
+    await screenshot('trace-retry-running', runningRecovery);
+    await runningRecovery.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(recoveredStatus).toHaveAttribute('data-status', 'cancelled');
+    await expect(status).toHaveAttribute('data-status', 'cancelled');
+    await expectEditing(page, true);
+  } finally { await runningRecovery.close(); }
   expect(errors).toEqual([]);
   await mkdir(new URL('../.browser-test/', import.meta.url), { recursive: true });
   await page.screenshot({ path: fileURLToPath(new URL('../.browser-test/workbench.png', import.meta.url)), fullPage: true });
-  process.stdout.write('PASS: WASM loading/failure visibility, independent pane folding preserves space/buffer/caret, file/diagnostic reopen, responsive canvas and long output, behavior labels omit modifier parameters beyond JavaScript precision, keyboard/panel/zoom controls, successful polls preserve parent-step selection and its own data, polling preserves panel choice, workspace persistence/conflicts, read-only submission/execution/cleanup, module/contract edits, uncertain submission/query retry, fresh snapshots, current step selection/fallback/CFG/data and lossless JSON\n');
+  process.stdout.write('PASS: existing workbench lifecycle/layout/controls, latest trace with fast calls, zero duration and lossless Input/Output, trace zoom/Fit/CFG, page recovery and Retry for completed/running executions, shared-axis positions/overlap/live extension, preflight retention, uncertain ID/source recovery\n');
 } catch (error) {
   if (page) {
     await mkdir(new URL('../.browser-test/', import.meta.url), { recursive: true });

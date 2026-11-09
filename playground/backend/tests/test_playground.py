@@ -11,6 +11,7 @@ import shutil
 import signal
 import socket
 import sys
+from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,7 +99,7 @@ async def test_playground_persists_fast_interval_and_pairs_worker_throttling(pla
     history = await host.client.get_workflow_handle(execution_id).fetch_history()
     started = history.events[0].workflow_execution_started_event_attributes
     [request] = await host.client.data_converter.decode(started.input.payloads)
-    assert request["options"] == {"heartbeat_interval_ms": 200}
+    assert request["options"] == {"heartbeat_interval_ms": 200, "record_trace": True}
     scheduled = [
         e.activity_task_scheduled_event_attributes
         for e in history.events
@@ -351,6 +352,7 @@ async def test_shutdown_cancels_demo_and_restart_uses_fresh_queue(server, tmp_pa
     await restarted.start()
     try:
         assert restarted.queue != queue
+        assert restarted.latest is None
         assert not restarted.view()["busy"]
         assert restarted.view()["revision"] == result["workspace"]["revision"]
         assert not (host.workspace.root / "runs").exists()
@@ -449,10 +451,109 @@ async def test_ambiguous_submission_retains_id_without_automatic_resubmission(
         assert details["workspace"]["busy"]
         await asyncio.wait_for(unseen.wait(), 5)
         assert host.execution_id == execution_id
+        latest = loads((await client.get("/v1/workspace/trace")).text)
+        assert latest["execution_id"] == execution_id
+        assert latest["source"]["entry"] == "playground_demo.main"
         assert (await client.get(f"/v1/executions/{execution_id}")).status_code == 200
         await host.executions.cancel(execution_id)
         await wait_for(host, execution_id)
         assert submitted_ids == [execution_id]
+
+
+async def final_trace(host):
+    async with asyncio.timeout(15):
+        while not host.latest or not host.latest["complete"]:  # noqa: ASYNC110
+            await asyncio.sleep(0.02)
+    return host.latest
+
+
+@pytest.mark.parametrize("offloaded", [False, True])
+async def test_latest_trace_retains_completed_calls_snapshot_and_replaces_only_after_preflight(
+    playground, offloaded
+):
+    host = playground
+    if offloaded:
+        host.executions = ExecutionService(
+            host.client,
+            host.queue,
+            options={"record_trace": True, "child_workflow_history_events": 1},
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_playground_app(host)), base_url="http://test"
+    ) as client:
+        assert (await client.get("/v1/workspace/trace")).text == "null"
+        view = await host.save(
+            host.view()["revision"],
+            edit(host.view(), {INPUT: '{"items":[3,1,2],"delay_seconds":0}'}),
+        )
+        first = await host.submit(ENTRY, INPUT, view["revision"])
+        first_id = first["execution"]["execution_id"]
+        await wait_for(host, first_id)
+        record = await final_trace(host)
+        assert record["execution"]["status"] == "completed"
+        calls = [
+            span
+            for span in record["spans"]
+            if span["kind"] == "run" and "/double[" in span["address"]
+        ]
+        assert len(calls) == 3
+        assert {dumps(span["input"]) for span in calls} == {
+            '{"value":3,"delay_seconds":0}',
+            '{"value":1,"delay_seconds":0}',
+            '{"value":2,"delay_seconds":0}',
+        }
+        assert {dumps(span["output"]) for span in calls} == {
+            '{"value":6}',
+            '{"value":2}',
+            '{"value":4}',
+        }
+        assert len({span["id"] for span in record["spans"]}) == len(record["spans"])
+        assert all(span["finished_at"] is not None for span in record["spans"])
+        source = deepcopy(record["source"])
+        view = await host.save(
+            host.view()["revision"], edit(host.view(), {INPUT: '{"items":"wrong"}'})
+        )
+        failed = await client.post(
+            "/v1/workspace/executions",
+            json={"entry": ENTRY, "input": INPUT, "revision": view["revision"]},
+        )
+        assert failed.status_code == 422
+        recovered = loads((await client.get("/v1/workspace/trace")).text)
+        assert recovered["execution_id"] == first_id and recovered["source"] == source
+        view = await host.save(
+            host.view()["revision"], edit(host.view(), {INPUT: '{"items":[4],"delay_seconds":0}'})
+        )
+        second = await host.submit(ENTRY, INPUT, view["revision"])
+        second_id = second["execution"]["execution_id"]
+        assert second_id != first_id
+        assert (
+            await client.get("/v1/workspace/trace", params={"execution_id": first_id})
+        ).status_code == 404
+        await wait_for(host, second_id)
+        assert (await final_trace(host))["execution_id"] == second_id
+        assert record["source"] == source  # The displaced record is no longer mutated.
+
+
+async def test_trace_outage_does_not_change_terminal_status_or_hold_cleanup(
+    playground, monkeypatch
+):
+    host = playground
+    read = host._read_trace
+
+    async def unavailable(execution_id):
+        raise RuntimeUnavailable("trace query disconnected")
+
+    monkeypatch.setattr(host, "_read_trace", unavailable)
+    view = await host.save(
+        host.view()["revision"], edit(host.view(), {INPUT: '{"items":[],"delay_seconds":0}'})
+    )
+    result = await host.submit(ENTRY, INPUT, view["revision"])
+    final = await wait_for(host, result["execution"]["execution_id"])
+    assert final["status"] == "completed" and not host.view()["busy"]
+    assert host.latest["trace_error"] and not host.latest["complete"]
+    monkeypatch.setattr(host, "_read_trace", read)
+    record = await final_trace(host)
+    assert record["trace_error"] is None and record["execution"]["status"] == "completed"
 
 
 async def test_execution_routes_preserve_ids_lossless_frames_and_cancellation(

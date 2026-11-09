@@ -45,6 +45,7 @@ def test_heartbeat_defaults_and_explicit_values_survive_repeated_parsing(
         "max_call_depth": 64,
         "task_queues": {},
         "child_workflow_history_events": None,
+        "record_trace": False,
     }
     assert parse_runtime_options(expanded) == expanded
     assert options == original

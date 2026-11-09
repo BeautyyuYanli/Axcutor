@@ -31,6 +31,11 @@ describe('real WASM serialization and CFG', () => {
     expect(graph.nodes.map(node => node.id)).toEqual(['start', 'double', 'summarize', 'end']);
     expect(graph.edges).toHaveLength(3);
     expect(graph.nodes.every(node => Number.isFinite(node.position.x) && Number.isFinite(node.position.y))).toBe(true);
+    const byId = Object.fromEntries(graph.nodes.map(node => [node.id, node]));
+    expect(byId.start.position.x + byId.start.width).toBeLessThan(byId.double.position.x);
+    expect(byId.double.position.x + byId.double.width).toBeLessThan(byId.summarize.position.x);
+    expect(byId.summarize.position.x + byId.summarize.width).toBeLessThan(byId.end.position.x);
+    expect(byId.start.height).toBeLessThan(byId.double.height);
     expect(layoutGraph(bundle, { workflowId: 'demo.double', scopeGraphPath: [] }, null).nodes.map(node => node.id)).toEqual(['start', 'run', 'end']);
     expect(locateFrame(bundle, frame('demo.main/double[0]', 'iteration', 'double'))).toEqual({ ...scope, nodeId: 'double', iteration: '[0]' });
     expect(locateFrame(bundle, frame('demo.main/double[0]', 'function', 'run'))).toEqual({ workflowId: 'demo.double', scopeGraphPath: [], nodeId: 'run' });
@@ -50,6 +55,10 @@ describe('real WASM serialization and CFG', () => {
     expect(graph.nodes.map(node => node.id)).toContain('end.done');
     expect(graph.nodes.map(node => node.id)).toContain('fail');
     expect(graph.edges.find(edge => edge.target === 'fail')?.sourceHandle).toBe('default');
+    const byId = Object.fromEntries(graph.nodes.map(node => [node.id, node]));
+    expect(byId.a.position.x).toBe(byId.b.position.x);
+    expect(byId.a.position.y).not.toBe(byId.b.position.y);
+    expect(byId.join.position.x).toBeGreaterThan(byId.a.position.x + byId.a.width);
     expect(handleId(null)).not.toBe(handleId('default'));
   });
 

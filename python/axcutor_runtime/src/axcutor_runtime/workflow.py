@@ -7,7 +7,8 @@ The native kernel and Decimal codec must be passed through the Temporal sandbox.
 """
 
 import asyncio
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Iterator, Sequence
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
@@ -42,12 +43,15 @@ def parse_runtime_options(options: JsonObject) -> JsonObject:
         "max_call_depth": 64,
         "task_queues": {},
         "child_workflow_history_events": None,
+        "record_trace": False,
     }
     if not isinstance(options, dict) or options.keys() - (
         result.keys() | {"heartbeat_interval_ms"}
     ):
         raise ValueError("unknown runtime options")
     result.update(deepcopy(options))
+    if type(result["record_trace"]) is not bool:
+        raise ValueError("record_trace must be a boolean")
     for name in (
         "activity_timeout_ms",
         "heartbeat_interval_ms",
@@ -234,6 +238,10 @@ class AxcutorInterpreterWorkflow:
         self._waiters: dict[str, _SignalWaiter] = {}
         self._signal_initialized = False
         self._signal_init_timer: asyncio.Task[None] | None = None
+        self._trace: list[JsonObject] = []
+        self._trace_parent: ContextVar[int | None] = ContextVar(
+            "axcutor_trace_parent", default=None
+        )
         # Tasks inherit their enclosing deadline, independently of sibling tasks.
         self._deadline_scope: ContextVar[bool] = ContextVar("axcutor_deadline", default=False)
 
@@ -256,7 +264,13 @@ class AxcutorInterpreterWorkflow:
                 raise ValueError("entry must be a string")
             root = self._bundle["workflows"][entry]
             values = loads(axcutor_core.validate_input(request["input_json"], dumps(root["input"])))
-            return dumps(await self._exec_root(entry, values, depth, None, entry))
+            with self._trace_call("workflow", entry, values) as span:
+                if span is not None:
+                    span["frame_kind"] = "function"
+                    span["cursor"] = "run" if root["body"]["kind"] == "run" else "start"
+                result = await self._exec_root(entry, values, depth, None, entry)
+                self._trace_result(span, result)
+                return dumps(result)
         except (asyncio.CancelledError, exceptions.CancelledError):
             raise
         except Recoverable as error:
@@ -279,6 +293,94 @@ class AxcutorInterpreterWorkflow:
                 # of the run while gathering its cancellation/completion.
                 self._signal_init_timer.cancel()
                 await asyncio.gather(self._signal_init_timer, return_exceptions=True)
+
+    @contextmanager
+    def _trace_call(
+        self, kind: str, address: str, values: JsonObject
+    ) -> Iterator[JsonObject | None]:
+        """Optional cumulative observations, reconstructed using Workflow time.
+
+        IDs identify invocations, never addresses. Context is inherited by child
+        tasks, so parallel siblings keep their real parent without serialization.
+        Payloads stay JSON text across the SDK's ordinary query converter.
+        No commands, awaits or clocks are added when tracing is disabled.
+        """
+        if not self._options.get("record_trace"):
+            yield None
+            return
+        span: JsonObject = {
+            "id": len(self._trace) + 1,
+            "parent_id": self._trace_parent.get(),
+            "kind": kind,
+            "address": address,
+            "frame_kind": "iteration",
+            "cursor": "",
+            "started_at": workflow.now().isoformat(),
+            "finished_at": None,
+            "status": "running",
+            "input_json": dumps(values),
+            "output_json": None,
+            "branch": None,
+            "error": None,
+            "events": [],
+        }
+        self._trace.append(span)
+        token = self._trace_parent.set(span["id"])
+        evicted = False
+        try:
+            yield span
+        except GeneratorExit:
+            # SDK cache eviction may collect suspended coroutines outside the
+            # Workflow loop. It is not an execution event or a finish time.
+            evicted = True
+            raise
+        except (asyncio.CancelledError, exceptions.CancelledError):
+            span["status"] = "cancelled"
+            raise
+        except BaseException as error:
+            span["status"] = "failed"
+            span["error"] = {
+                "type": error.selector if isinstance(error, Recoverable) else type(error).__name__,
+                "message": str(error),
+            }
+            raise
+        else:
+            span["status"] = "completed"
+        finally:
+            if not evicted:
+                span["finished_at"] = workflow.now().isoformat()
+                self._trace_parent.reset(token)
+
+    @staticmethod
+    def _trace_result(span: JsonObject | None, result: JsonObject) -> None:
+        if span is not None:
+            span["output_json"] = dumps(result["output"])
+            span["branch"] = result["branch"]
+
+    def _trace_current(self) -> JsonObject | None:
+        parent = self._trace_parent.get()
+        return self._trace[parent - 1] if parent is not None else None
+
+    def _trace_event(self, kind: str, **details: Any) -> None:
+        span = self._trace_current()
+        if span is not None:
+            span["events"].append({"kind": kind, "at": workflow.now().isoformat(), **details})
+
+    def _trace_input(self, values: JsonObject) -> None:
+        span = self._trace_current()
+        if span is not None:
+            span["input_json"] = dumps(values)
+            if span["kind"] == "attempt" and span["parent_id"] is not None:
+                self._trace[span["parent_id"] - 1]["input_json"] = span["input_json"]
+
+    @workflow.query
+    def get_execution_trace(self) -> JsonObject:
+        """Cumulative calls, including closed/failed/cancelled calls and child links.
+
+        This optional query needs a Worker, including after closure. It never
+        changes the normal execution result or active-frame snapshot contract.
+        """
+        return {"spans": deepcopy(self._trace), "observed_at": workflow.now().isoformat()}
 
     @workflow.query
     def get_runtime_snapshot(self) -> JsonObject:
@@ -402,6 +504,7 @@ class AxcutorInterpreterWorkflow:
         body = node["body"]
         waiter = _SignalWaiter(frame, address, dumps(body["output"]), dumps(body["branches"]))
         self._waiters[address] = waiter
+        self._trace_event("signal_wait", address=address, step=frame.steps)
         try:
             try:
                 if not self._signal_initialized and not self._deadline_scope.get():
@@ -424,6 +527,7 @@ class AxcutorInterpreterWorkflow:
             if workflow.cancellation_reason() is not None:
                 raise asyncio.CancelledError
             assert waiter.response is not None
+            self._trace_event("signal_delivered", address=address)
             return waiter.response
         finally:
             if waiter.status == "pending":
@@ -548,7 +652,17 @@ class AxcutorInterpreterWorkflow:
         node = graph["nodes"][node_id]
         address = f"{frame.address}/{node_id}"
         if node["modifiers"]["for_each"] is not None:
-            return await self._for_each(frame, node, env, address, node_id)
+            values = {}
+            if self._options["record_trace"]:
+                # Collection plus captured parent inputs; per-item injections
+                # belong to the individual calls after acquiring a permit.
+                each = node["modifiers"]["for_each"]
+                names = dict.fromkeys([each["source"]["root"], *_read_names(node["body"])])
+                values = {name: env[name] for name in names if name in env}
+            with self._trace_call("for_each", address, values) as span:
+                result = await self._for_each(frame, node, env, address, node_id)
+                self._trace_result(span, result)
+                return result
         self._tick(frame)
         return await self._state_machine(
             frame, node, _snapshot(node["body"], env), frame.symbols, {}, address
@@ -639,8 +753,39 @@ class AxcutorInterpreterWorkflow:
         injected: JsonObject,
         address: str,
     ) -> JsonObject:
+        with self._trace_call(node["body"]["kind"], address, snapshot) as span:
+            if span is not None:
+                # A root run is inside its callee function at the same address;
+                # a graph node/iteration still points to the caller's node.
+                span["frame_kind"] = (
+                    "function"
+                    if frame.kind == "function" and address == frame.address
+                    else "iteration"
+                )
+                span["cursor"] = frame.cursor
+            result = await self._node_attempts(frame, node, snapshot, symbols, injected, address)
+            self._trace_result(span, result)
+            return result
+
+    async def _node_attempts(
+        self,
+        frame: Frame,
+        node: JsonObject,
+        snapshot: JsonObject,
+        symbols: JsonObject,
+        injected: JsonObject,
+        address: str,
+    ) -> JsonObject:
         body, modifiers = node["body"], node["modifiers"]
         if body["kind"] == "builtin":
+            span = self._trace_current()
+            if span is not None:
+                span["input_json"] = dumps(
+                    {
+                        name: loads(axcutor_core.eval_arg(dumps(arg), dumps(snapshot)))
+                        for name, arg in body["bindings"]["input"].items()
+                    }
+                )
             return loads(
                 axcutor_core.eval_builtin(
                     body["op"], dumps(body["bindings"]), dumps(snapshot), dumps(symbols)
@@ -660,26 +805,57 @@ class AxcutorInterpreterWorkflow:
             and retry["max_attempts"] <= 2147483647
         )
         attempts = 1 if native or retry is None else retry["max_attempts"]
+        span = self._trace_current()
+        if span is not None and native:
+            # SDK-managed retries have no per-attempt Workflow activation.
+            # Expose the policy, never invent individual attempts or durations.
+            self._trace_event("activity_retry_policy", **retry)
         for attempt in range(1, attempts + 1):
             try:
-                operation = self._attempt(frame, node, snapshot, symbols, injected, address, native)
-                timeout = modifiers["timeout_ms"]
-                if timeout is not None and not is_activity:
-                    token = self._deadline_scope.set(True)
-                    try:
-                        return await _with_timeout(operation, timeout, signal=is_signal)
-                    finally:
-                        self._deadline_scope.reset(token)
-                return await operation
+                with (
+                    self._trace_call("attempt", address, snapshot)
+                    if attempts > 1
+                    else nullcontext(None)
+                ) as attempt_span:
+                    if attempt_span is not None:
+                        attempt_span["attempt"] = attempt
+                        assert span is not None
+                        attempt_span["frame_kind"] = span["frame_kind"]
+                        attempt_span["cursor"] = span["cursor"]
+                    operation = self._attempt(
+                        frame, node, snapshot, symbols, injected, address, native
+                    )
+                    timeout = modifiers["timeout_ms"]
+                    if timeout is not None and not is_activity:
+                        token = self._deadline_scope.set(True)
+                        try:
+                            result = await _with_timeout(operation, timeout, signal=is_signal)
+                        finally:
+                            self._deadline_scope.reset(token)
+                    else:
+                        result = await operation
+                    self._trace_result(attempt_span, result)
+                    return result
             except Recoverable as error:
                 if error.selector == "timeout":
                     self._signal_initialized = True  # A durable deadline has fired.
                 if attempt < attempts and error.selector in retry["on"]:
+                    self._trace_event(
+                        "retry",
+                        attempt=attempt,
+                        backoff_ms=retry["backoff_ms"],
+                        error={"type": error.selector, "message": str(error)},
+                    )
                     if retry["backoff_ms"] > 0:
                         await workflow.sleep(timedelta(milliseconds=retry["backoff_ms"]))
                     continue
                 for branch, selectors in modifiers["catch"].items():
                     if error.selector in selectors:
+                        self._trace_event(
+                            "caught",
+                            branch=branch,
+                            error={"type": error.selector, "message": str(error)},
+                        )
                         return {"branch": branch, "output": {}}
                 raise
         raise EngineError("attempt loop did not terminate")
@@ -703,6 +879,9 @@ class AxcutorInterpreterWorkflow:
         if depth > self._options["max_call_depth"]:
             raise StackOverflowError("maximum call depth exceeded")
         if body["kind"] == "graph":
+            span = self._trace_current()
+            if span is not None:
+                self._trace_input({**snapshot, **injected})
             inputs = {
                 **{name: symbols[name] for name in body["input"]},
                 **{name: symbols[name] for name in injected},
@@ -728,6 +907,9 @@ class AxcutorInterpreterWorkflow:
         target = body["workflow_id"]
         root = self._bundle["workflows"][target]
         values = loads(axcutor_core.validate_input(dumps(values), dumps(root["input"])))
+        span = self._trace_current()
+        if span is not None:
+            self._trace_input(values)
         threshold = self._options["child_workflow_history_events"]
         use_child = workflow.info().is_continue_as_new_suggested() or (
             threshold is not None and workflow.info().get_current_history_length() >= threshold
@@ -763,6 +945,8 @@ class AxcutorInterpreterWorkflow:
                     "workflow_id": child.id,
                     "run_id": child.first_execution_run_id,
                 }
+                if span is not None:
+                    span["child_execution"] = {**remote.child_execution, "entry": target}
                 response = await child
             except exceptions.FailureError as error:
                 raise boundary_error(error) from error

@@ -159,6 +159,51 @@ export type WorkspaceExecution = {
     workspace: Workspace;
 };
 
+export type TraceError = {
+    type: string;
+    message: string;
+};
+
+export type TraceEvent = {
+    kind: string;
+    at: string;
+    [key: string]: unknown;
+};
+
+export type TraceSpan = {
+    id: string;
+    parent_id: string | null;
+    kind: string;
+    address: string;
+    frame_kind: 'function' | 'iteration';
+    cursor: string;
+    started_at: string;
+    finished_at: string | null;
+    status: 'running' | 'completed' | 'failed' | 'cancelled';
+    input: {
+        [key: string]: unknown;
+    };
+    output: {
+        [key: string]: unknown;
+    } | null;
+    branch: string | null;
+    error: TraceError | null;
+    attempt?: number;
+    events: Array<TraceEvent>;
+};
+
+export type LatestTrace = {
+    execution_id: string;
+    execution: Execution | null;
+    source: SubmittedSource;
+    spans: Array<TraceSpan>;
+    observed_at: string | null;
+    complete: boolean;
+    trace_error: string | null;
+};
+
+export type LatestTraceResponse = LatestTrace | null;
+
 export type GetExecutionData = {
     body?: never;
     path: {
@@ -466,3 +511,57 @@ export type RunWorkspaceResponses = {
 };
 
 export type RunWorkspaceResponse = RunWorkspaceResponses[keyof RunWorkspaceResponses];
+
+export type GetLatestTraceData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * If supplied, reject a replaced trace rather than returning another run
+         */
+        execution_id?: string;
+    };
+    url: '/v1/workspace/trace';
+};
+
+export type GetLatestTraceErrors = {
+    /**
+     * Invalid JSON or request
+     */
+    400: ErrorResponse;
+    /**
+     * Execution not found
+     */
+    404: ErrorResponse;
+    /**
+     * Method not allowed
+     */
+    405: ErrorResponse;
+    /**
+     * Workspace revision conflict, Playground busy, or signal target is not waiting
+     */
+    409: ErrorResponse;
+    /**
+     * Compilation, input or signal validation failed
+     */
+    422: ErrorResponse;
+    /**
+     * Internal server error
+     */
+    500: ErrorResponse;
+    /**
+     * Runtime unavailable
+     */
+    503: ErrorResponse;
+};
+
+export type GetLatestTraceError = GetLatestTraceErrors[keyof GetLatestTraceErrors];
+
+export type GetLatestTraceResponses = {
+    /**
+     * LatestTraceResponse
+     */
+    200: LatestTraceResponse;
+};
+
+export type GetLatestTraceResponse = GetLatestTraceResponses[keyof GetLatestTraceResponses];

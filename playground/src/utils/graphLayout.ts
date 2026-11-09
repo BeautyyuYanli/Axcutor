@@ -13,11 +13,12 @@ export interface CanvasNodeData extends Record<string, unknown> {
   kind: string;
   node?: NormalizedNode;
   ports: NodePort[];
+  tags: string[];
   active: boolean;
   iterations: string[];
 }
 export interface CanvasEdgeData extends Record<string, unknown> { cursor: string }
-export type CanvasNode = Node<CanvasNodeData>;
+export type CanvasNode = Node<CanvasNodeData> & { width: number; height: number };
 export type CanvasEdge = Edge<CanvasEdgeData>;
 export interface FrameLocation extends Scope { nodeId?: string; iteration?: string }
 
@@ -44,15 +45,26 @@ export function layoutGraph(bundle: WorkflowBundle | null, scope: Scope, analysi
 } {
   const nodes: CanvasNode[] = [];
   const edges: CanvasEdge[] = [];
+  const body = scopeBody(bundle, scope);
   const add = (id: string, kind: string, ports: NodePort[], node?: NormalizedNode) => {
     if (nodes.some(existing => existing.id === id)) return;
+    const terminal = ['start', 'end', 'fail'].includes(kind);
+    const modifiers = node?.modifiers ?? (body?.kind === 'run' ? { ...body, for_each: null } : null);
+    const tags = terminal || !modifiers ? [] : [
+      ...(modifiers.for_each ? ['Parallel items'] : []),
+      ...(modifiers.retry ? ['Retries enabled'] : []),
+      ...(modifiers.timeout_ms !== null ? ['Timeout configured'] : []),
+    ];
+    // Render and Dagre use the same compact dimensions. Runtime badges replace
+    // existing text rather than changing the topology on each observation.
+    const width = terminal ? 76 : 168;
+    const height = terminal ? 32 : 40 + 20 * (tags.length + ports.filter(port => port.branch_id !== null).length);
     nodes.push({
-      id, type: 'cfg', position: { x: 0, y: 0 }, width: 240, height: 150,
-      data: { label: id, kind, node, ports, active: false, iterations: [] },
+      id, type: 'cfg', position: { x: 0, y: 0 }, width, height,
+      data: { label: id, kind, node, ports, tags, active: false, iterations: [] },
     });
   };
   const defaultPort: NodePort = { branch_id: null, kind: 'normal', output: [], kill_vars: [] };
-  const body = scopeBody(bundle, scope);
   if (!body) {
     // Failed compilation can still publish independent, trustworthy node facts.
     for (const [id, facts] of Object.entries(analysis?.nodes ?? {})) add(id, 'unavailable', facts.ports ?? []);
@@ -100,14 +112,14 @@ export function layoutGraph(bundle: WorkflowBundle | null, scope: Scope, analysi
     }
   }
   const graph = new dagre.graphlib.Graph({ multigraph: true });
-  graph.setGraph({ rankdir: 'TB', nodesep: 50, ranksep: 80 });
+  graph.setGraph({ rankdir: 'LR', nodesep: 36, ranksep: 48 });
   graph.setDefaultEdgeLabel(() => ({}));
-  for (const node of nodes) graph.setNode(node.id, { width: 240, height: 150 });
+  for (const node of nodes) graph.setNode(node.id, { width: node.width, height: node.height });
   for (const edge of edges) graph.setEdge(edge.source, edge.target, {}, edge.id);
   dagre.layout(graph);
   for (const node of nodes) {
     const position = graph.node(node.id);
-    node.position = { x: position.x - 120, y: position.y - 75 };
+    node.position = { x: position.x - node.width / 2, y: position.y - node.height / 2 };
   }
   return { nodes, edges };
 }
