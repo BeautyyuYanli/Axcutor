@@ -27,9 +27,8 @@ graph:
       output:
         total: {type: integer}
       run:
-        executor: builtin
-        content: |
-          return Output(total=sum(input.doubled))
+        executor: module
+        content: .summarize
 
   edges:
     - start -> double

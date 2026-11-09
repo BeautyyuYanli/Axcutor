@@ -8,6 +8,11 @@ header { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
 label { display: block; }
 textarea { width: 100%; box-sizing: border-box; }
 pre { overflow: auto; }
+.file-tree { max-height: 20rem; overflow: auto; margin: 1rem 0; }
+.file-tree button { text-align: left; }
+.file-tree [aria-pressed="true"] { font-weight: bold; }
+select { max-width: 100%; }
+textarea[readonly] { background: #eee; }
 .canvas { width: 100%; height: 34rem; }
 .cfg-node { width: 240px; min-height: 120px; box-sizing: border-box; }
 .cfg-node[data-active="true"] { border: 2px solid; }

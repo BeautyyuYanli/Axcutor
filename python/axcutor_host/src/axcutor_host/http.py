@@ -52,7 +52,7 @@ def openapi_schema() -> dict[str, object]:
 
     Arbitrary business JSON is deliberately untyped here. Clients must retain
     raw input, frame variables and output instead of converting through floats.
-    This function is also the source for the generated Playground client.
+    Consumers can generate clients from this schema.
     """
 
     def ref(name: str) -> dict[str, str]:

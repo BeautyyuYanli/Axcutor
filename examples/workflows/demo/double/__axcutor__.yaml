@@ -5,8 +5,5 @@ input:
 output:
   value: {type: integer}
 run:
-  executor: builtin
-  content: |
-    import asyncio
-    await asyncio.sleep(input.delay_seconds)
-    return Output(value=input.value * 2)
+  executor: module
+  content: .

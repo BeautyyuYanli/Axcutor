@@ -1,14 +1,14 @@
 # 使用 Docker 执行工作流
 
-仓库根目录的 Compose 配置提供本地开发环境：Temporal 开发服务器、内置 Web UI、Axcutor Worker 和 HTTP API。Temporal 使用 SQLite 数据卷保存执行历史；Axcutor 宿主与 Worker 不维护独立数据库或执行状态缓存。
+仓库根目录的 Compose 配置提供本地开发环境：Playground 文件工作台、Temporal 开发服务器、内置 Web UI、Axcutor Worker 和普通 HTTP API。Temporal 使用 SQLite 数据卷保存执行历史；Axcutor 宿主与 Worker 不维护独立执行状态数据库。
 
 ## 启动并执行示例
 
 需要可用的 Docker Engine 和 Docker Compose。在仓库根目录执行：
 
 ```sh
-# 首次启动时编译 Rust 原生扩展，并安装锁定的 Python 依赖。
-docker compose up -d --build
+# 首次启动构建原生扩展、WASM 与静态网页，不依赖宿主的语言工具链。
+docker compose up -d
 
 # 提交端读取源文件、编译完整依赖闭包，再将快照提交给 Temporal。
 docker compose run --rm cli run /examples/workflows/demo/main --mount demo=/examples/workflows/demo --input /examples/inputs/demo.json
@@ -21,6 +21,10 @@ docker compose run --rm cli run /examples/workflows/demo/main --mount demo=/exam
 ```
 
 `demo.main` 对 `[3,1,2]` 以并发度 2 调用 `demo.double`，按输入顺序汇集结果，再执行 Python 汇总 Activity。每个迭代 Activity 等待 5 秒，便于观察运行状态。工作流提交后，修改源文件不会改变该次执行使用的快照。
+
+打开 `http://localhost:8080` 可在网页中编辑文件并运行示例；端口由 `AXCUTOR_PLAYGROUND_PORT` 调整。Playground 后端使用一个常驻 Worker，同一时间只接受一个根 workflow，图内仍可并发。提交、运行和清理期间文件内容只读，新建、删除、保存和新 Run 不可用；清理结束后可编辑并重跑，下一次 Run 重新导入当前 Python 与契约。基础 `worker` 服务使用镜像中预置的示例 Python 包；CLI 的工作流快照仍只包含工作流文档，部署模块代码的职责保持不变。
+
+统一镜像安装 `axcutor-host` 与 `playground/backend/` 中的独立后端包。`playground` 服务使用 `axcutor-playground` 入口；`worker`、`api` 与 `cli` 服务继续使用 `axcutor`。两种命令职责独立，普通宿主不依赖 Playground。
 
 ## 在 Web UI 查看状态
 
@@ -105,7 +109,9 @@ docker compose restart worker
 docker compose down
 ```
 
-Temporal 的执行与历史数据保存在 `temporal-data` 命名卷中；`docker compose down -v` 会删除该卷。该配置用于本地开发；Temporal 开发服务器的运行选项见 [官方命令参考](https://docs.temporal.io/cli/command-reference/server)。
+Temporal 的执行与历史数据保存在 `temporal-data` 命名卷中。Playground 使用独立 `playground-data` 卷保存 `/data/workspace`；首次从只读 `/examples` 初始化，后续保留网页修改。Run 直接在该目录生成契约，不保存运行副本、恢复凭据或结果缓存。
+
+`docker compose down` 保留两个卷；`docker compose down -v` 删除两个卷。Playground 正常关闭时尽力取消当前演示并等待 Worker 清理；每次后端启动创建新队列，不恢复旧演示。提交结果不确定时保留原 ID 供查询或取消，不自动重新提交。该配置用于本地开发；Temporal 开发服务器的运行选项见 [官方命令参考](https://docs.temporal.io/cli/command-reference/server)。
 
 在宿主机运行时，可使用同样的命令行入口：
 
@@ -115,7 +121,7 @@ docker compose up -d temporal
 uv sync --locked
 
 # 在独立终端持续运行 Worker，另一个终端提交工作流。
-uv run --locked axcutor worker
+PYTHONPATH=examples/workflows uv run --locked axcutor worker
 uv run --locked axcutor run examples/workflows/demo/main --mount demo=examples/workflows/demo --input examples/inputs/demo.json
 
 # 可在另一个终端启动 HTTP 宿主，默认仅监听 127.0.0.1:8000。
@@ -123,5 +129,12 @@ uv run --locked axcutor serve
 ```
 
 `worker`、`run` 与 `serve` 均接受 `--address`、`--namespace`、`--task-queue`，默认分别读取 `TEMPORAL_ADDRESS`、`TEMPORAL_NAMESPACE`、`AXCUTOR_TASK_QUEUE`，未配置时使用 `localhost:7233`、`default`、`axcutor`。`serve --host 0.0.0.0 --port 8000` 可调整 HTTP 监听地址与端口；HTTP 宿主不启动 Worker。
+
+本机文件工作台使用独立命令；它在后端生命周期内管理一个常驻 Worker 和一个队列：
+
+```sh
+# 先按 Web Playground 指南生成、构建静态页面；默认监听 127.0.0.1:8080。
+uv run --locked axcutor-playground --data .axcutor --examples examples --static playground/dist
+```
 
 独立 YAML/JSON 入口文件使用匿名标识 `__main__`，也可通过 `--mount` 引用公开包。`module` 实现与生成契约需另行安装在 Worker 环境；只挂载提交端的工作流目录不会部署 Python 模块。契约生成、Worker 根映射和私有可见性见 [包与模块指南](./01-foundations/04-packages-and-modules.md)。

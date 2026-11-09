@@ -3,14 +3,14 @@ import type { Execution, Frame } from '../client/types.gen';
 import type { RawExecutionSlices } from '../utils/losslessJson';
 import FrameTree from './FrameTree.vue';
 
-defineProps<{ execution: Execution | null; slices: RawExecutionSlices; selectedKey: string | null }>();
+defineProps<{ execution: Execution | null; pendingId: string | null; slices: RawExecutionSlices; selectedKey: string | null }>();
 const emit = defineEmits<{ select: [frame: Frame, key: string] }>();
 </script>
 
 <template>
   <section aria-label="Execution inspector" :data-status="execution?.status ?? 'idle'">
     <h2>Execution</h2>
-    <p v-if="!execution">Run a compiled workflow to inspect its active frames.</p>
+    <p v-if="!execution">{{ pendingId ? 'Awaiting status for execution ' + pendingId + '.' : 'Run a compiled workflow to inspect its active frames.' }}</p>
     <template v-else>
       <dl>
         <dt>ID</dt><dd>{{ execution.execution_id }}</dd>

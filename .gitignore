@@ -7,3 +7,4 @@ __pycache__/
 /playground/dist/
 /playground/src/wasm-pkg/
 /playground/.browser-test/
+/.axcutor/

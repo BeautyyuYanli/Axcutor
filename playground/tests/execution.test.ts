@@ -4,6 +4,17 @@ import { useExecution } from '../src/composables/useExecution';
 
 const view = (status = 'running', output = 'null') => `{"execution_id":"demo","status":"${status}","started_at":"2026-01-01T00:00:00Z","finished_at":${status === 'running' ? 'null' : '"2026-01-01T00:00:01Z"'},"frames":[],"result":${output},"error":null}`;
 const response = (raw: string, status = 200) => new Response(raw, { status, headers: { 'content-type': 'application/json' } });
+const submitted = (raw: string) => `{"execution":${raw},"source":{"entry":"demo.main","packages":{}},"workspace":{"revision":"generated","files":[],"busy":true,"execution_id":"demo"}}`;
+const uncertainSubmission = JSON.stringify({
+  error: {
+    code: 'runtime_unavailable',
+    message: 'submission outcome unknown; observe or cancel this ID, do not resubmit',
+    details: {
+      execution_id: 'demo',
+      workspace: { revision: 'generated', files: [], busy: true, execution_id: 'demo' },
+    },
+  },
+});
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const scopes: ReturnType<typeof effectScope>[] = [];
 function controller() {
@@ -19,7 +30,7 @@ describe('generated Hey API execution boundary', () => {
     const gets: Request[] = [];
     const replies: ((result: Response) => void)[] = [];
     const fetch = vi.fn().mockImplementation(async (request: Request) => {
-      if (request.method === 'POST') return response(view(), 202);
+      if (request.method === 'POST') return response(submitted(view()), 202);
       gets.push(request);
       return new Promise<Response>((resolve, reject) => {
         replies.push(resolve);
@@ -28,7 +39,7 @@ describe('generated Hey API execution boundary', () => {
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main', {}, '{}');
+    await state.run('main.yaml', null, 'revision');
     await vi.advanceTimersByTimeAsync(299);
     expect(gets).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
@@ -59,13 +70,14 @@ describe('generated Hey API execution boundary', () => {
     expect(state.error.value).toBeNull();
   });
 
-  it('submits raw JSON, polls every 300ms, retains output tokens and stops on terminal', async () => {
-    const fetch = vi.fn().mockResolvedValueOnce(response(view(), 202)).mockResolvedValueOnce(response(view('completed', '{"branch":null,"output":{"2":1.0,"1":999999999999999999999999999999}}')));
+  it('submits file paths, polls every 300ms, retains output tokens and stops on terminal', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(response(submitted(view()), 202)).mockResolvedValueOnce(response(view('completed', '{"branch":null,"output":{"2":1.0,"1":999999999999999999999999999999}}')));
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    expect(await state.run('main', {}, '{"2":1.0,"1":999999999999999999999999999999}')).toBe(true);
-    expect(await (fetch.mock.calls[0][0] as Request).text()).toContain('"input":{"2":1.0,"1":999999999999999999999999999999}');
-    expect(fetch.mock.calls[0][0].url).toBe('http://test/v1/executions');
+    expect(await state.run('main.yaml', 'input.json', 'revision')).toBe(true);
+    expect(JSON.parse(await (fetch.mock.calls[0][0] as Request).text())).toEqual({ entry: 'main.yaml', input: 'input.json', revision: 'revision' });
+    expect(fetch.mock.calls[0][0].url).toBe('http://test/v1/workspace/executions');
+    expect(state.source.value?.entry).toBe('demo.main');
     await vi.waitFor(() => expect(state.execution.value?.status).toBe('completed'), { timeout: 2000 });
     expect(state.slices.value.resultOutputRaw).toContain('1.0');
     expect(state.slices.value.resultOutputRaw).toContain('999999999999999999999999999999');
@@ -77,12 +89,12 @@ describe('generated Hey API execution boundary', () => {
   it('continues polling after 202 cancellation until cleanup reaches its terminal state', async () => {
     const fetch = vi.fn().mockImplementation(async (request: Request) => {
       if (request.url.endsWith(':cancel')) return response(view(), 202);
-      if (request.method === 'POST') return response(view(), 202);
+      if (request.method === 'POST') return response(submitted(view()), 202);
       return response(view('cancelled'));
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main', {}, '{}');
+    await state.run('main.yaml', null, 'revision');
     await state.cancel();
     expect(state.cancelRequested.value).toBe(true);
     expect(state.execution.value?.status).toBe('running');
@@ -94,29 +106,100 @@ describe('generated Hey API execution boundary', () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
-  it('reports strict local input and HTTP error envelopes without starting a poll', async () => {
-    const fetch = vi.fn().mockResolvedValue(response('{"error":{"code":"input_validation_failed","message":"integer required","details":null}}', 422));
+  it('observes an uncertain submission by ID once and stops after a real terminal response', async () => {
+    vi.useFakeTimers();
+    let queries = 0;
+    const fetch = vi.fn().mockImplementation(async (request: Request) => {
+      if (request.method === 'POST') return response(uncertainSubmission, 503);
+      queries++;
+      return response(queries === 1 ? view() : view('completed', '{"branch":null,"output":{"n":1.00000000000000000000001}}'));
+    });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    expect(await state.run('main', {}, '{"n":1,"n":2}')).toBe(false);
-    expect(state.error.value?.code).toBe('invalid_input_json');
-    expect(fetch).not.toHaveBeenCalled();
-    expect(await state.run('main', {}, '{"n":1.0}')).toBe(false);
-    expect(state.error.value).toMatchObject({ status: 422, code: 'input_validation_failed' });
-    await sleep(350);
+    expect(await state.run('main.yaml', null, 'revision')).toBe(false);
+    expect(state.observedId.value).toBe('demo');
+    expect(state.execution.value).toBeNull();
+    expect(state.source.value).toBeNull();
+    expect(state.workspace.value?.busy).toBe(true);
+    expect(await state.run('main.yaml', null, 'revision')).toBe(false);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(state.execution.value?.status).toBe('running');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(state.execution.value?.status).toBe('completed');
+    expect(state.observedId.value).toBeNull();
+    expect(state.slices.value.resultOutputRaw).toContain('1.00000000000000000000001');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(fetch.mock.calls.map(([request]) => [request.method, request.url])).toEqual([
+      ['POST', 'http://test/v1/workspace/executions'],
+      ['GET', 'http://test/v1/executions/demo'],
+      ['GET', 'http://test/v1/executions/demo'],
+    ]);
+  });
+
+  it('can cancel by the uncertain ID even when its first query is still unavailable', async () => {
+    vi.useFakeTimers();
+    let queries = 0;
+    const fetch = vi.fn().mockImplementation(async (request: Request) => {
+      if (request.url.endsWith(':cancel')) return response(view(), 202);
+      if (request.method === 'POST') return response(uncertainSubmission, 503);
+      queries++;
+      return queries === 1
+        ? response('{"error":{"code":"runtime_unavailable","message":"query unavailable","details":null}}', 503)
+        : response(view('cancelled'));
+    });
+    vi.stubGlobal('fetch', fetch);
+    const state = controller();
+    await state.run('main.yaml', null, 'revision');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(state.execution.value).toBeNull();
+    expect(state.observedId.value).toBe('demo');
+    expect(state.error.value?.status).toBe(503);
+    await state.cancel();
+    expect(state.cancelRequested.value).toBe(true);
+    expect(state.observedId.value).toBe('demo');
+    expect(state.workspace.value?.busy).toBe(true);
+    await state.cancel();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(state.execution.value?.status).toBe('cancelled');
+    expect(state.observedId.value).toBeNull();
+    expect(state.cancelRequested.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(fetch.mock.calls.map(([request]) => [request.method, request.url])).toEqual([
+      ['POST', 'http://test/v1/workspace/executions'],
+      ['GET', 'http://test/v1/executions/demo'],
+      ['POST', 'http://test/v1/executions/demo:cancel'],
+      ['GET', 'http://test/v1/executions/demo'],
+    ]);
+  });
+
+  it.each([
+    { name: 'input error', status: 422, code: 'input_validation_failed', raw: '{"error":{"code":"input_validation_failed","message":"integer required","details":null}}' },
+    { name: 'unavailable response without ID', status: 503, code: 'runtime_unavailable', raw: '{"error":{"code":"runtime_unavailable","message":"unavailable","details":null}}' },
+    { name: 'empty response', status: 503, code: 'network_error', raw: '' },
+  ])('reports $name without an ID and sends no queries or cancellation', async ({ raw, status, code }) => {
+    vi.useFakeTimers();
+    const fetch = vi.fn().mockResolvedValue(response(raw, status));
+    vi.stubGlobal('fetch', fetch);
+    const state = controller();
+    expect(await state.run('main.yaml', 'input.json', 'revision')).toBe(false);
+    expect(state.error.value).toMatchObject({ status, code });
+    expect(state.execution.value).toBeNull();
+    expect(state.observedId.value).toBeNull();
+    await state.cancel();
+    await vi.advanceTimersByTimeAsync(1200);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('aborts observation on disposal without sending a cancellation', async () => {
     let signal: AbortSignal | null = null;
     const fetch = vi.fn().mockImplementation(async (request: Request) => {
-      if (request.method === 'POST') return response(view(), 202);
+      if (request.method === 'POST') return response(submitted(view()), 202);
       signal = request.signal;
       return new Promise<Response>((_, reject) => request.signal.addEventListener('abort', () => reject(new Error('aborted'))));
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main', {}, '{}');
+    await state.run('main.yaml', null, 'revision');
     await vi.waitFor(() => expect(signal).not.toBeNull());
     scopes[0].stop();
     expect(signal!.aborted).toBe(true);
@@ -127,13 +210,13 @@ describe('generated Hey API execution boundary', () => {
     let pollSignal: AbortSignal | null = null;
     const fetch = vi.fn().mockImplementation(async (request: Request) => {
       if (request.url.endsWith(':cancel')) return response(view('cancelled'));
-      if (request.method === 'POST') return response(view(), 202);
+      if (request.method === 'POST') return response(submitted(view()), 202);
       pollSignal = request.signal;
       return new Promise<Response>((_, reject) => request.signal.addEventListener('abort', () => reject(new Error('aborted'))));
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main', {}, '{}');
+    await state.run('main.yaml', null, 'revision');
     await vi.waitFor(() => expect(pollSignal).not.toBeNull());
     await state.cancel();
     expect(pollSignal!.aborted).toBe(true);

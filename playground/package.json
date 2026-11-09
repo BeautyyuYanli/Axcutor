@@ -10,7 +10,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "check": "vue-tsc --noEmit",
     "test": "vitest run",
-    "generate:openapi": "uv run --project .. --locked python -m axcutor_host.http --output openapi.json",
+    "generate:openapi": "uv run --project .. --locked python -m axcutor_playground.http --output openapi.json",
     "generate:client": "npm run generate:openapi && openapi-ts",
     "generate:wasm": "python3 scripts/build_wasm.py",
     "generate": "npm run generate:client && npm run generate:wasm",
