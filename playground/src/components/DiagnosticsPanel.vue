@@ -2,13 +2,14 @@
 import type { Diagnostic } from '../types/compiler';
 import type { ExecutionProblem } from '../composables/useExecution';
 
-defineProps<{ diagnostics: Diagnostic[]; compilerError: string | null; httpError: ExecutionProblem | null }>();
+defineProps<{ diagnostics: Diagnostic[]; compilerError: string | null; httpError: ExecutionProblem | null; workspaceError: string | null }>();
 const emit = defineEmits<{ locate: [diagnostic: Diagnostic] }>();
 </script>
 
 <template>
   <section aria-label="Diagnostics">
-    <h2>Diagnostics ({{ diagnostics.length }})</h2>
+    <h2 class="sr-only">Diagnostics</h2>
+    <p v-if="workspaceError" role="alert">{{ workspaceError }}</p>
     <p v-if="compilerError" role="alert">{{ compilerError }}</p>
     <div v-if="httpError" role="alert">
       <p>HTTP {{ httpError.status ?? '—' }} / {{ httpError.code }}: {{ httpError.message }}</p>
@@ -16,8 +17,8 @@ const emit = defineEmits<{ locate: [diagnostic: Diagnostic] }>();
         <summary>Response details</summary><pre><code>{{ httpError.detailsRaw }}</code></pre>
       </details>
     </div>
-    <p v-if="!diagnostics.length && !compilerError && !httpError">No diagnostics.</p>
-    <table v-if="diagnostics.length">
+    <p v-if="!diagnostics.length && !compilerError && !httpError && !workspaceError">No diagnostics.</p>
+    <div v-if="diagnostics.length" class="table-scroll"><table>
       <thead><tr><th>Location</th><th>Code</th><th>Message</th></tr></thead>
       <tbody>
         <tr v-for="(item, index) in diagnostics" :key="index" @click="emit('locate', item)">
@@ -28,6 +29,6 @@ const emit = defineEmits<{ locate: [diagnostic: Diagnostic] }>();
           <td>{{ item.code }}</td><td>{{ item.message }}</td>
         </tr>
       </tbody>
-    </table>
+    </table></div>
   </section>
 </template>

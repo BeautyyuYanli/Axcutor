@@ -8,7 +8,7 @@ function frameKey(prefix: string | undefined, index: number): string { return pr
 </script>
 
 <template>
-  <ul>
+  <ul class="frame-tree">
     <li v-for="(frame, index) in frames" :key="`${frame.kind}:${frame.address}:${index}`" :data-frame-kind="frame.kind">
       <details open>
         <summary>

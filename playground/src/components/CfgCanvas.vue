@@ -14,7 +14,8 @@ const props = defineProps<{
   queryVariables: (raw: string, node: string, expected: string) => { candidate: VariableCandidate; typespecRaw: string }[];
 }>();
 const emit = defineEmits<{ select: [id: string]; navigate: [scope: Scope] }>();
-const { fitView, onNodesInitialized } = useVueFlow('cfg');
+const { fitView, zoomIn, zoomOut, onNodesInitialized } = useVueFlow('cfg');
+const fitGraph = () => fitView({ padding: 0.2, minZoom: 0.1, maxZoom: 1 });
 const expected = ref('');
 const topology = computed(() => layoutGraph(props.bundle, props.scope, props.analysis));
 const overlay = computed(() => liveOverlay(props.bundle, props.frames, props.scope));
@@ -61,29 +62,36 @@ function openNode(id: string) {
   if (node?.body.kind === 'graph') emit('navigate', { ...props.scope, scopeGraphPath: [...props.scope.scopeGraphPath, id] });
 }
 function doubleClick(event: NodeMouseEvent) { openNode(event.node.id); }
-onNodesInitialized(() => { void fitView({ padding: 0.2 }); });
-watch(topology, async () => { await nextTick(); await fitView({ padding: 0.2 }); });
+onNodesInitialized(() => { void fitGraph(); });
+watch(topology, async () => { await nextTick(); await fitGraph(); });
 </script>
 
 <template>
-  <section aria-label="Control flow graph">
-    <h2>CFG</h2>
-    <nav aria-label="Scope navigation">
+  <section class="cfg-panel" aria-label="Control flow graph">
+    <div class="cfg-toolbar">
+      <h2>CFG</h2>
       <label>Workflow
-        <select aria-label="Workflow" :value="scope.workflowId" @change="emit('navigate', { workflowId: ($event.target as HTMLSelectElement).value, scopeGraphPath: [] })">
+        <select aria-label="Workflow" :title="scope.workflowId" :value="scope.workflowId" @change="emit('navigate', { workflowId: ($event.target as HTMLSelectElement).value, scopeGraphPath: [] })">
           <option v-for="(_, id) in bundle?.workflows ?? {}" :key="id" :value="id">{{ id }}</option>
         </select>
       </label>
+      <div class="graph-controls" role="group" aria-label="Graph view">
+        <button type="button" aria-label="Zoom out" title="Zoom out" @click="zoomOut()">−</button>
+        <button type="button" aria-label="Zoom in" title="Zoom in" @click="zoomIn()">+</button>
+        <button type="button" @click="fitGraph">Fit graph</button>
+      </div>
+    </div>
+    <nav class="scope-navigation" aria-label="Scope navigation">
       <button type="button" @click="emit('navigate', { ...scope, scopeGraphPath: [] })">{{ scope.workflowId || 'No entry' }}</button>
       <button v-for="(part, index) in scope.scopeGraphPath" :key="index" type="button" @click="emit('navigate', { ...scope, scopeGraphPath: scope.scopeGraphPath.slice(0, index + 1) })">/ {{ part }}</button>
-      <button type="button" @click="fitView({ padding: 0.2 })">Fit graph</button>
     </nav>
     <div class="canvas" aria-label="Graph canvas">
-      <VueFlow id="cfg" :nodes="nodes" :edges="edges" :nodes-draggable="false" :nodes-connectable="false" :edges-updatable="false" :zoom-on-double-click="false" fit-view-on-init @node-click="emit('select', $event.node.id)" @node-double-click="doubleClick">
+      <VueFlow id="cfg" :nodes="nodes" :edges="edges" :nodes-draggable="false" :nodes-connectable="false" :edges-updatable="false" :zoom-on-double-click="false" :min-zoom="0.1" fit-view-on-init @node-click="emit('select', $event.node.id)" @node-double-click="doubleClick">
         <template #node-cfg="{ id, data }">
           <fieldset class="cfg-node" :data-node-kind="data.kind" :data-active="data.active" :data-selected="id === selectedNode">
-            <legend><button type="button" @click.stop="emit('select', id)">{{ data.label }}</button></legend>
+            <legend><button type="button" :aria-pressed="id === selectedNode" @click.stop="emit('select', id)">{{ data.label }}</button></legend>
             <Handle v-if="data.kind !== 'start'" type="target" :position="Position.Top" />
+            <div v-if="data.active || id === selectedNode" class="node-state">{{ [id === selectedNode ? 'Selected' : '', data.active ? 'Running' : ''].filter(Boolean).join(' · ') }}</div>
             <div>{{ data.kind }} <span v-for="tag in tags(id)" :key="tag"> · {{ tag }}</span></div>
             <div v-if="data.iterations.length">running: {{ data.iterations.join(', ') }}</div>
             <button v-if="data.node?.body.kind === 'workflow' || data.node?.body.kind === 'graph'" type="button" @click.stop="openNode(id)">Open {{ data.node.body.kind }}</button>
@@ -93,30 +101,30 @@ watch(topology, async () => { await nextTick(); await fitView({ padding: 0.2 });
         </template>
       </VueFlow>
     </div>
-    <section aria-label="Static node probe">
+    <section class="node-probe" aria-label="Static node probe" tabindex="0">
       <h3>Static probe · {{ selectedNode ?? 'Select a node' }}</h3>
       <template v-if="facts">
         <p v-if="facts.definite_in === null">Entry assignment is not proved for this graph.</p>
         <p v-else>definite_in: {{ facts.definite_in.join(', ') || '(empty)' }}</p>
-        <table>
+        <div class="table-scroll"><table>
           <thead><tr><th>Variable</th><th>TypeSpec</th><th>Origin</th></tr></thead>
           <tbody><tr v-for="variable in definiteVariables" :key="variable.name"><th>{{ variable.name }}</th><td><pre><code>{{ typeText(variable.name, variable.injected) }}</code></pre></td><td>{{ variable.injected ? 'injected' : 'definite_in' }}</td></tr></tbody>
-        </table>
+        </table></div>
         <label>Expected type
           <select v-model="expected" aria-label="Expected type"><option value="">All</option><option>integer</option><option>number</option><option>string</option><option>boolean</option></select>
         </label>
         <p v-if="variables.error" role="alert">{{ variables.error }}</p>
-        <table>
+        <div class="table-scroll"><table>
           <caption>Available variables and field projections</caption>
           <thead><tr><th>Path</th><th>TypeSpec</th></tr></thead>
           <tbody><tr v-for="item in variables.rows" :key="[item.candidate.path.root, ...item.candidate.path.fields].join('.')"><th>{{ [item.candidate.path.root, ...item.candidate.path.fields].join('.') }}</th><td><pre><code>{{ item.typespecRaw }}</code></pre></td></tr></tbody>
-        </table>
+        </table></div>
         <p v-if="facts.ports === null">Port contracts are unavailable.</p>
-        <table v-else>
+        <div v-else class="table-scroll"><table>
           <caption>Derived ports</caption>
           <thead><tr><th>Port</th><th>Kind</th><th>Output</th><th>Kill variables</th></tr></thead>
           <tbody><tr v-for="port in facts.ports" :key="handleId(port.branch_id)" :data-port-kind="port.kind"><th>{{ port.branch_id ?? 'default' }}</th><td>{{ port.kind }}</td><td>{{ port.output.join(', ') }}</td><td>{{ port.kill_vars.join(', ') }}</td></tr></tbody>
-        </table>
+        </table></div>
       </template>
       <p v-else-if="selectedNode">No graph analysis for this node (root run and terminal nodes have no node facts).</p>
     </section>

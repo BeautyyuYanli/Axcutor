@@ -8,8 +8,8 @@ const emit = defineEmits<{ select: [frame: Frame, key: string] }>();
 </script>
 
 <template>
-  <section aria-label="Execution inspector" :data-status="execution?.status ?? 'idle'">
-    <h2>Execution</h2>
+  <section class="execution-inspector" aria-label="Execution inspector" :data-status="execution?.status ?? 'idle'">
+    <h2 class="sr-only">Execution</h2>
     <p v-if="!execution">{{ pendingId ? 'Awaiting status for execution ' + pendingId + '.' : 'Run a compiled workflow to inspect its active frames.' }}</p>
     <template v-else>
       <dl>
@@ -18,9 +18,11 @@ const emit = defineEmits<{ select: [frame: Frame, key: string] }>();
         <dt>Started</dt><dd>{{ execution.started_at }}</dd>
         <dt>Finished</dt><dd>{{ execution.finished_at ?? '—' }}</dd>
       </dl>
-      <h3>Active frames</h3>
-      <FrameTree v-if="execution.frames.length" :frames="execution.frames" :slices="slices" :selected-key="selectedKey" @select="(frame, key) => emit('select', frame, key)" />
-      <p v-else>No active frames.</p>
+      <section class="execution-frames" aria-label="Active frames">
+        <h3>Active frames</h3>
+        <FrameTree v-if="execution.frames.length" :frames="execution.frames" :slices="slices" :selected-key="selectedKey" @select="(frame, key) => emit('select', frame, key)" />
+        <p v-else>No active frames.</p>
+      </section>
       <section v-if="execution.status === 'completed' && execution.result" aria-label="Execution result">
         <h3>Result · {{ execution.result.branch ?? 'end' }}</h3>
         <pre><code>{{ slices.resultOutputRaw }}</code></pre>

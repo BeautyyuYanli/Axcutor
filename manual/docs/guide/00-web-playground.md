@@ -15,6 +15,26 @@ docker compose up
 
 打开 `http://localhost:8080`。页面与 API 同源，不需要 Vite 或宿主机的 Node.js、Rust、uv。端口由 `AXCUTOR_PLAYGROUND_PORT` 调整。默认入口为 `workflows/demo/main/__axcutor__.yaml`，输入为 `inputs/demo.json`；并发调用倍增 module 后，`summarize.py` 汇总得到 `[6,2,4]` 与 `12`。
 
+## 工作台布局
+
+顶部应用栏集中展示保存状态和 Save files、Reload (discard edits)、Run、Cancel。下方运行配置行提供 Entry、Input file 和 Canvas source，并显示编译状态及提交、执行或清理期间的只读原因。
+
+桌面主区域由文件侧栏、源码编辑区与 CFG 组成。文件树独立滚动，当前文件有选中标记，悬停文件或目录可查看完整路径；新建文件表单位于侧栏底部。源码区顶部显示当前路径、可编辑或只读状态及 Delete file，原生文本框占据剩余高度。Entry input contract 默认收起，展开后查看入口字段与 TypeSpec。
+
+CFG 顶部提供工作流选择、作用域面包屑、Zoom out、Zoom in 与 Fit graph。点击节点后，下方静态探针展示变量、类型与派生端口，并在区域内滚动。节点的 Selected 与 Running 文字分别表示选中和运行状态；两种状态可以同时出现。
+
+底部面板默认收起，点击 Execution 或 Diagnostics（问题数量）即可展开并切换内容；Collapse panel 收起内容，Expand panel 恢复所选面板。例如：
+
+```text
+Run → 展开 Execution，观察帧与结果
+新的编译问题或明确提交失败 → 展开 Diagnostics，查看错误或定位源码
+Diagnostics → Collapse panel → Expand panel：仍显示 Diagnostics
+```
+
+切换或收起面板保持执行观察与编译状态，后台轮询不会重新选择面板。提交结果不确定且已取得 execution ID 时，页面保持 Execution 可见并继续观察，顶部 Cancel 可取消该执行。
+
+桌面工作台使用视口高度，各区域分别滚动；长路径在路径栏换行，表格、源码长行与原始 JSON 在所在区域内滚动。中等宽度下源码与 CFG 上下排列；手机宽度下文件、源码、CFG 与底部面板依次排列，使用页面滚动。
+
 ## 文件、保存与共享
 
 `examples/` 只读挂载到 `/examples`，`playground/workspace/` 挂载到 `/workspace`。目录在仓库中仅保留 `.gitkeep`；首次启动将示例复制到 `playground/workspace/`，后续可在网页或宿主机直接编辑该目录下的文件，修改不被纳入 Git 跟踪。
@@ -78,10 +98,10 @@ AXCUTOR_API_URL=http://127.0.0.1:9000 npm --prefix playground run dev
 
 ## 编辑、检查与执行
 
-1. Entry 选择工作流文件路径；Input file 选择 JSON 文件路径，或 Empty input `{}`。输入文件与其他源码使用同一个编辑器。独立 YAML/JSON 入口使用 `__main__`；未被入口闭包引用的文档不参与编译。
-2. 当前缓冲自动构造 `entry + packages` 交给 WASM，Python 编辑不导入模块。诊断中的包名映射到实际源码文件，点击诊断定位文件与节点。文件区可展开入口的字段契约。
+1. 在顶部配置行用 Entry 选择工作流文件路径；Input file 选择 JSON 文件路径，或 Empty input `{}`。输入文件与其他源码使用同一个编辑器。独立 YAML/JSON 入口使用 `__main__`；未被入口闭包引用的文档不参与编译。
+2. 当前缓冲自动构造 `entry + packages` 交给 WASM，Python 编辑不导入模块。底部 Diagnostics 中的包名映射到实际源码文件，点击诊断定位文件与节点。源码区底部可展开入口的字段契约。
 3. 点击 CFG 节点查看 `definite_in`、注入项、派生端口及可用变量投影；Expected type 选择器演示 WASM 的子类型过滤。双击 workflow/graph 节点或点击 Open 按钮进入目标工作流/内联图，面包屑返回上层作用域。
-4. Run 先保存文件，再携带新 revision 提交路径。响应包含实际提交的源码视图，页面据此构造 Submitted snapshot。运行中每隔 300ms 查询一次；右侧展示活跃帧的地址、游标、调用深度、步数与变量。点击帧可跳转到对应 CFG；在执行快照中点击节点也会选中对应活跃帧。并发节点显示在途迭代索引。
+4. Run 先保存文件，再携带新 revision 提交路径。响应包含实际提交的源码视图，页面据此构造 Submitted snapshot。运行中每隔 300ms 查询一次；底部 Execution 展示活跃帧的地址、游标、调用深度、步数与变量。点击帧可跳转到对应 CFG；在执行快照中点击节点也会选中对应活跃帧。并发节点显示在途迭代索引。
 5. Cancel 发起协同取消。服务端返回 `202 / running` 表示仍在清理，页面继续轮询并禁用重复取消；进入 `completed`、`failed` 或 `cancelled` 时停止查询执行。页面继续观察 workspace 忙状态，直至本地执行器也清理完成才恢复编辑、新建、删除、保存和 Run。
 
 Canvas source 的 Submitted snapshot 始终对应提交时的编译结果。清理结束后编辑源码会切换到 Editor compilation；点击帧可返回执行快照。离开页面只停止观察，不会取消已提交的执行。
@@ -161,7 +181,7 @@ uv run --locked ruff check python tests/runtime tests/host tests/conftest.py tes
 uv run --locked pyrefly check
 ```
 
-浏览器测试会选择临时 HTTP、页面端口和 workspace 目录，结束时关闭测试 Worker 和 Server。覆盖保存与重载、跨页面冲突、提交和运行期间禁止编辑与文件操作、完成或取消清理后恢复编辑、Python 与契约修改后重跑、工作流提交视图、CFG/帧联动及无损 JSON。Temporal 测试服务器与 Playwright 浏览器首次使用时需要下载；截图位于 `playground/.browser-test/`。
+浏览器测试会选择临时 HTTP、页面端口和 workspace 目录，结束时关闭测试 Worker 和 Server。覆盖保存与重载、跨页面冲突、提交和运行期间禁止编辑与文件操作、完成或取消清理后恢复编辑、Python 与契约修改后重跑、工作流提交视图、CFG/帧联动及无损 JSON；同时检查面板切换与收起、轮询期间保留面板选择、键盘焦点、缩放及长路径、表格和输出的溢出约束。布局截图覆盖 1600×1000、1280×800、900×900 与 390×844。Temporal 测试服务器与 Playwright 浏览器首次使用时需要下载；截图位于 `playground/.browser-test/`。
 
 后端集成测试默认下载并启动 Temporal CLI v1.6.1 的开发服务器，验证 Worker 复用、再次导入、图内并发与取消清理。设置 `AXCUTOR_TEST_TEMPORAL_ADDRESS` 可改用已有的测试专用服务器；测试使用独立执行 ID 和队列。
 

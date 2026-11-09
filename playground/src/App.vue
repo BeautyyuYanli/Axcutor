@@ -42,6 +42,22 @@ const analysis = computed(() => current.value?.analysis[analysisIndex.value] ?? 
 const analysisRaw = computed(() => currentRaw.value?.raw(['analysis', analysisIndex.value]) ?? null);
 const diagnostics = computed(() => [...(compileOutput.value?.diagnostics ?? []), ...(httpError.value?.diagnostics ?? [])]);
 const frames = computed(() => canvasSource.value === 'execution' && execution.value?.status === 'running' ? execution.value.frames : []);
+const writeBlocked = computed(() => serverBusy.value || preparing.value || submitting.value || observedId.value !== null);
+const readOnly = computed(() => busy.value || writeBlocked.value || !loaded.value);
+const workflowFiles = computed(() => files.value.filter(file => /\.(yaml|yml|json)$/.test(file.path)).sort((a, b) => a.path.localeCompare(b.path)));
+const inputFiles = computed(() => workflowFiles.value.filter(file => file.path.endsWith('.json')));
+const activePanel = ref<'execution' | 'diagnostics'>('execution');
+const panelOpen = ref(false);
+const diagnosticCount = computed(() => diagnostics.value.length + Number(!!(preview.value.error ?? compilerError.value)) + Number(!!workspaceProblem.value) + Number(!!httpError.value));
+function showPanel(panel: 'execution' | 'diagnostics') { activePanel.value = panel; panelOpen.value = true; }
+// Initialization errors must be visible before ready; other editor problems
+// wait for loading. Execution polling must not change the selected panel.
+watch(() => !compilerError.value && (!loaded.value || !ready.value) ? '' : JSON.stringify([
+  preview.value.error, compilerError.value, compileOutput.value?.diagnostics ?? [],
+]), (value, previous) => {
+  if (value !== previous && (preview.value.error || compilerError.value || compileOutput.value?.diagnostics.length)) showPanel('diagnostics');
+});
+watch(workspaceProblem, value => { if (value) showPanel('diagnostics'); });
 
 function navigate(target: Scope) { scope.value = target; selectedNode.value = null; }
 function selectFile(path: string) {
@@ -94,18 +110,21 @@ function selectNode(id: string) {
 }
 async function submit() {
   if (!compileOutput.value?.bundle || preparing.value) return;
+  showPanel('execution');
   preparing.value = true;
   const path = entryPath.value;
   const input = inputPath.value || null;
   try {
     const revision = await workspace.save();
-    if (!revision) return;
+    if (!revision) { showPanel('diagnostics'); return; }
     // A new submission may return only an ID; its frames cannot use an older bundle.
     submitted.value = null;
     selectedFrameKey.value = null;
     canvasSource.value = 'editor';
     navigate({ workflowId: entry.value, scopeGraphPath: [] });
     const accepted = await run(path, input, revision);
+    // An uncertain submission with an ID still belongs in the execution view.
+    if (!accepted && observedId.value === null) showPanel('diagnostics');
     if (runWorkspace.value) workspace.accept(runWorkspace.value);
     else await workspace.observe();
     if (accepted && submittedSource.value) {
@@ -130,21 +149,57 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main>
-    <header>
+  <main class="app-shell">
+    <header class="app-toolbar">
       <h1>Axcutor Playground</h1>
-      <p role="status">Compiler: {{ ready ? 'ready' : 'loading' }}</p>
-      <button type="button" :disabled="!loaded || busy || serverBusy || !ready || !preview.source || !compileOutput?.bundle || preparing || submitting || observedId !== null" @click="submit">{{ preparing || submitting ? 'Submitting…' : 'Run' }}</button>
-      <button type="button" :disabled="observedId === null || cancelRequested" @click="cancel">{{ cancelRequested ? 'Cancelling…' : 'Cancel' }}</button>
+      <p role="status" data-workspace-state>{{ !loaded ? 'Loading workspace…' : dirty ? 'Unsaved changes' : 'Saved' }}</p>
+      <div class="toolbar-actions" role="group" aria-label="Workspace actions">
+        <button type="button" :disabled="readOnly" @click="workspace.save">Save files</button>
+        <button type="button" :disabled="busy" @click="workspace.load">Reload (discard edits)</button>
+        <button class="primary-action" type="button" :disabled="readOnly || !ready || !preview.source || !compileOutput?.bundle" @click="submit">{{ preparing || submitting ? 'Submitting…' : 'Run' }}</button>
+        <button type="button" :disabled="observedId === null || cancelRequested" @click="cancel">{{ cancelRequested ? 'Cancelling…' : 'Cancel' }}</button>
+      </div>
+    </header>
+    <section class="run-config" aria-label="Run configuration">
+      <label>Entry
+        <select v-model="entryPath" aria-label="Entry" :title="entryPath">
+          <option v-for="file in workflowFiles" :key="file.path" :value="file.path">{{ file.path }}</option>
+        </select>
+      </label>
+      <label>Input file
+        <select v-model="inputPath" aria-label="Input file" :title="inputPath || 'Empty input {}'">
+          <option value="">Empty input {}</option>
+          <option v-for="file in inputFiles" :key="file.path" :value="file.path">{{ file.path }}</option>
+        </select>
+      </label>
       <label>Canvas source
         <select v-model="canvasSource" aria-label="Canvas source" @change="changeCanvasSource"><option value="editor">Editor compilation</option><option value="execution" :disabled="!submitted">Submitted snapshot</option></select>
       </label>
-    </header>
+      <div class="workbench-status" role="status">
+        <span>Compiler: {{ compilerError ? 'failed' : !ready ? 'loading' : preview.error || compileOutput?.diagnostics.length ? 'issues found' : 'ready' }}</span>
+        <span>{{ writeBlocked ? 'Read-only · submission, execution or cleanup' : busy ? 'Updating files…' : 'Files editable' }}</span>
+      </div>
+    </section>
     <div class="workbench">
-      <SourceWorkspace :files="files" :entry="entry" :entry-path="entryPath" :input-path="inputPath" :selected-file="selectedFile" :dirty="dirty" :busy="busy" :write-blocked="serverBusy || preparing || submitting || observedId !== null" :loaded="loaded" :problem="workspaceProblem" :compiler-raw="rawOutput" @file="selectFile" @entry="entryPath = $event" @input="inputPath = $event" @text="editText" @add="addFile" @remove="removeFile" @save="workspace.save" @reload="workspace.load" />
+      <SourceWorkspace :files="files" :entry="entry" :selected-file="selectedFile" :read-only="readOnly" :compiler-raw="rawOutput" @file="selectFile" @text="editText" @add="addFile" @remove="removeFile" />
       <CfgCanvas :bundle="bundle" :scope="scope" :analysis="analysis" :analysis-raw="analysisRaw" :compiler-raw="currentRaw" :selected-node="selectedNode" :frames="frames" :query-variables="availableVariables" @select="selectNode" @navigate="navigate" />
-      <ExecutionInspector :execution="execution" :pending-id="execution ? null : observedId" :slices="slices" :selected-key="selectedFrameKey" @select="selectFrame" />
     </div>
-    <DiagnosticsPanel :diagnostics="diagnostics" :compiler-error="preview.error ?? compilerError" :http-error="httpError" @locate="locateDiagnostic" />
+    <section class="bottom-panel" :data-expanded="panelOpen" aria-label="Execution and diagnostics">
+      <div class="panel-toolbar">
+        <div role="group" aria-label="Inspector panels">
+          <button type="button" :aria-pressed="activePanel === 'execution'" aria-controls="execution-panel" @click="showPanel('execution')">Execution{{ execution ? ` · ${execution.status}` : observedId ? ' · awaiting status' : '' }}</button>
+          <button type="button" :aria-pressed="activePanel === 'diagnostics'" aria-controls="diagnostics-panel" @click="showPanel('diagnostics')">Diagnostics ({{ diagnosticCount }})</button>
+        </div>
+        <button type="button" :aria-expanded="panelOpen" aria-controls="inspector-content" @click="panelOpen = !panelOpen">{{ panelOpen ? 'Collapse panel' : 'Expand panel' }}</button>
+      </div>
+      <div id="inspector-content" v-show="panelOpen" class="panel-content">
+        <div id="execution-panel" v-show="activePanel === 'execution'">
+          <ExecutionInspector :execution="execution" :pending-id="execution ? null : observedId" :slices="slices" :selected-key="selectedFrameKey" @select="selectFrame" />
+        </div>
+        <div id="diagnostics-panel" v-show="activePanel === 'diagnostics'">
+          <DiagnosticsPanel :diagnostics="diagnostics" :compiler-error="compilerError ?? preview.error" :http-error="httpError" :workspace-error="workspaceProblem" @locate="locateDiagnostic" />
+        </div>
+      </div>
+    </section>
   </main>
 </template>
