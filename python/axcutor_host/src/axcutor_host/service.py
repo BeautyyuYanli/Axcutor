@@ -332,8 +332,9 @@ class ExecutionService:
                     handle = self._handle(child["workflow_id"], child["run_id"])
                 request["address"] = local_target
                 await handle.execute_update(
-                    AxcutorInterpreterWorkflow.deliver_signal,
+                    "deliver_signal",
                     dumps(request),
+                    result_type=str,
                     rpc_timeout=self._timeout,
                 )
         except WorkflowUpdateFailedError as error:
