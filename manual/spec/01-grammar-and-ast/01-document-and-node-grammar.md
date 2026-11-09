@@ -56,7 +56,7 @@
   $$\text{ExtensibleExecutorRunSpec} ::= \{\; \texttt{executor}: \text{Identifier} \setminus \{\texttt{"builtin"}, \texttt{"module"}, \texttt{"signal"}\},\; \dots \text{（执行器特定配置字段）} \;\}$$
   其中：
   * `executor`（必填）：非空合法标识符（`Identifier`），标识目标执行器类型；
-  * 当 `executor == "signal"` 时（`SignalRunSpec`）：必须且只能包含 `executor: "signal"`。`content` 及其他额外字段均在 `/run/<field>` 处报 `schema.unknown_field`。该执行器在 Workflow 中等待外部 Update，输出与分支沿用节点契约，见 [执行器 ABI](../05-executor-abi/01-run-executor-contract.md#四、signal-协作式等待与-update-恢复协议)。
+  * 当 `executor == "signal"` 时（`SignalRunSpec`）：必须且只能包含 `executor: "signal"` 一个键，`content` 及其他额外字段均在 `/run/<field>` 处报 `schema.unknown_field` 错误。该执行器在工作流内挂起并等待外部信号恢复，输出与分支沿用节点契约，详见 [`04-signal-cooperative-executor.md`](../05-executor-abi/04-signal-cooperative-executor.md)。
   * 当 `executor == "builtin"` 时（`BuiltinRunSpec`）：必须且只能包含 `executor: "builtin"` 与 `content: NonEmptyString`（满足 $|\text{trim}(\text{content})| \ge 1$ 的 Python 源码文本）两个键，出现任何额外未知字段均在编译期报 `schema.unknown_field` 错误。其代码生成与运行期契约详见 [`02-builtin-python-executor.md`](../05-executor-abi/02-builtin-python-executor.md)。
   * 当 `executor == "module"` 时（`ModuleRunSpec`）：必须且只能包含 `executor: "module"` 与 `content: LocalModuleSpec` 两个键（出现任何额外未知字段均报 `schema.unknown_field` 错误；若 `content` 不满足单点相对路径文法 `LocalModuleSpec`，在 `/run/content` 处报 `schema.run` 错误；若所属工作流为匿名入口 `"__main__"`，编译期报 `module.anonymous_package` 错误）。其包同构布局、契约模板 SHA 校验与运行期契约详见 [`03-module-python-executor.md`](../05-executor-abi/03-module-python-executor.md)。
 
@@ -162,13 +162,13 @@
 
 * **`max_attempts: PositiveInt`（必填）**：必须为 $\ge 2$ 的正整数（含首次执行在内至少允许 2 次尝试）。
 * **`backoff_ms?: NonNegativeInt`（可选，默认 `0`）**：必须为 $\ge 0$ 的非负整数。
-* **`on?: List<RecoverableSelector>`（可选，普通节点默认 `["execution", "timeout"]`，`signal` 默认 `["timeout"]`）**：
+* **`on?: List<RecoverableSelector>`（可选，普通节点默认 `["execution", "timeout"]`，`signal` 节点默认 `["timeout"]`）**：
   * 必须为非空且无重复元素的列表，其中每个元素必须属于可恢复异常选择器全集：
     $$\mathcal{S}_{\text{all}} = \{\texttt{"execution"}, \texttt{"timeout"}, \texttt{"contract"}, \texttt{"max\_steps"}\}$$
   * **原子 `run` 节点禁止包含 `"max_steps"`**：当所属节点为 `ActionNode` 或 `RootRunNode` 时，因原子 `run` 执行体不存在图步数计数器，必须满足：
     $$\texttt{"max\_steps"} \notin \text{set}(\text{retry.on})$$
     否则编译期报错。
-  * **`signal` 的选择器集合仅为 `{"timeout"}`**：显式包含 `execution`、`contract` 或 `max_steps` 均报 `schema.selectors`，因为非法信号在 Update 边界拒绝，不进入节点异常状态机。
+  * **`signal` 节点的选择器集合仅为 `{"timeout"}`**：当 `run.executor == "signal"` 时，显式包含 `execution`、`contract` 或 `max_steps` 均报 `schema.selectors` 错误（外部非法信号在接收边界直接拒绝，不进入节点异常状态机）。
 
 ### 3. 异常捕获修饰符（`CatchSpec`）
 

@@ -88,42 +88,36 @@ graph:
 
 ### 1. `run`（结构化业务执行体配置）
 
-`run` 字段必须是一个以 `executor` 为鉴别键的映射对象（不支持裸字符串简写）。两种 Python 执行器（`builtin` 与 `module`）只含 `executor` 和 `content`；纯等待执行器 `signal` 只含 `executor`，均为闭合对象：
+`run` 字段必须是一个以 `executor` 为鉴别键的映射对象（不支持裸字符串简写）。两类内建 Python 执行器（`builtin` 与 `module`）仅包含 `executor` 和 `content`；协作式信号等待执行器 `signal` 仅包含 `executor`，三者均为闭合对象：
 
 | 字段 | 必填/可选 | 格式 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `executor` | **必填** | `Identifier` | 执行器类型鉴别键：`builtin`、`module` 与 `signal` 使用闭合配置，其他合法标识符对应宿主注册的扩展执行器，其特定配置字段保留并交给对应后端。此处使用通用标识符，不排除 Python 关键字。 |
+| `executor` | **必填** | `Identifier` | 执行器类型鉴别键：`builtin`、`module` 与 `signal` 使用闭合配置，其他合法标识符对应宿主注册的扩展执行器，其特定配置字段保留并透传给对应后端。此处使用通用标识符，不排除 Python 关键字。 |
 | `content`（当 `executor: builtin` 时） | **必填** | 非空多行 Python 代码字符串 | 作为 `async def execute(input: Input) -> ReturnType:` 的函数体执行。通过只读冻结模型 `input.<var>` 读取输入快照（其中 `type: number` 自动映射为原生 `float`）；无分支节点返回 `Output(...)`，有分支节点返回 `Branch.<branch_id>(...)`。 |
-| `content`（当 `executor: module` 时） | **必填** | `LocalModuleSpec`（`"."` 或 `".<local_path>"`） | 指向当前具名工作流包内的 Python 实现；匿名入口 `"__main__"` 禁用，禁止绝对模块名与上级跳转。顶层 `run` 与图内节点均支持 `".validate"`（对应 `validate_contract.py`）或 `"."`（对应包的 `__init__.py` 与 `_contract.py`）。目标模块须从同一模板导入 `Input`、`Output` 或 `Branch`，并实现异步 `execute`；`ReturnType` 可用于返回值注解。 |
+| `content`（当 `executor: module` 时） | **必填** | `LocalModuleSpec`（`"."` 或 `".<local_path>"`） | 指向当前具名工作流包内的 Python 实现；匿名入口 `"__main__"` 禁用，禁止绝对模块名与上级跳转。顶层 `run` 与图内节点均支持 `".validate"`（对应 `validate_contract.py`）或 `"."`（对应包的 `__init__.py` 与 `_contract.py`）。目标模块须从同一伴生契约桩导入 `Input`、`Output` 或 `Branch`，并实现异步 `execute`；`ReturnType` 可用于返回值注解。 |
+| *无附加字段*（当 `executor: signal` 时） | — | 闭合映射 `{ executor: signal }` | 在工作流协程内挂起等待外部信号，不派发 Activity 任务或心跳，也不生成 Python 契约桩（附加 `content` 等字段触发编译错误 `node.invalid_run`）。详见 [04. signal 协作式等待执行器规范](../../spec/05-executor-abi/04-signal-cooperative-executor.md)。 |
 
-结构体输出必须显式构造生成的 `Output_<path>` 模型。非必填属性可以省略；只有属性类型可空时才允许显式传入 `None`：
-
-```python
-# 假设 user.nickname 非必填且不可空，user.note 非必填且可空。
-return Output(user=Output_user(id=1, note=None))  # 输出省略 nickname，保留 note: null。
-```
-
-Python Worker 默认同时提供 `builtin` 与 `module` 执行器；`options.task_queues` 按执行器名路由。
-
-`signal` 在 Workflow 内等待外部信号，无 Activity 和心跳，也不生成 Python 契约文件。局部节点示例：
-
-```yaml
-decision:
-  output:
-    reviewer: { type: string }
-  timeout_ms: 86400000
-  catch:
-    expired: [timeout]
-  run:
-    executor: signal
-```
-
-用 [HTTP `:signal`](./04-execution-http-api.md#投递外部信号) 或 [CLI `signal`](../guide/00-run-with-docker.md#使用-cli-恢复等待节点) 提交符合 `output` / `branches` 的响应。输入声明仍参与必达定值分析，等待上下文通过帧变量观察。省略 `timeout_ms` 时无限期等待，不使用 Activity 默认期限。非法输出被拒绝，节点继续等待；`signal` 的 `retry.on` 默认 `[timeout]`，`catch` 的 `"*"` 也只对 `{timeout}` 求补，其他选择器编译报错。并发与迭代的输出仍在屏障处统一提交，迭代等待期间持有并发许可。
-
-- 对于 `executor: builtin`，需要导出独立 Python 源码进行类型检查时，可调用 `axcutor_runtime.builtin.synthesize_module(input_schema, output_schema, branches_contract, content)`，其结果包含 `source` 与 `line_offset`。
-- 对于 `executor: module`，`axcutor contracts`（或 `synthesize_contract_module`）生成包含确定性契约哈希 `__axcutor_contract_sha256__` 的契约桩 `*_contract.py` / `_contract.py`。运行时通过 `mod.Input.__module__` 反查契约模块并强制比对 SHA-256 指纹；命令及挂载说明见 [包与模块](../guide/01-foundations/04-packages-and-modules.md)。
-
-生成源码统一使用 Python 3.11 支持的 `TypeAlias` 表达返回联合类型；数值枚举由严格数值注解与枚举校验器共同约束，因为 Python `Literal` 不支持小数字面量。超过原生有限 `float` 范围的 `number` 输入在模型边界产生 `contract` 异常。
+- **`builtin` 与 `module` 执行器补充约定**：
+  - **嵌套结构体显式构造**：结构体输出必须显式构造生成的 `Output_<path>` 模型。非必填属性可以省略；只有属性类型可空时才允许显式传入 `None`：
+    ```python
+    # 假设 user.nickname 非必填且不可空，user.note 非必填且可空。
+    return Output(user=Output_user(id=1, note=None))  # 输出省略 nickname，保留 note: null。
+    ```
+  - **Worker 路由与源码合成**：Python Worker 默认同时提供 `builtin` 与 `module` 执行器；`options.task_queues` 按执行器名路由。需要导出 `builtin` 节点独立 Python 源码进行类型检查时，可调用 `axcutor_runtime.builtin.synthesize_module(input_schema, output_schema, branches_contract, content)`（返回 `source` 与 `line_offset`）；对于 `module` 节点，`axcutor contracts`（或 `synthesize_contract_module`）生成含 `__axcutor_contract_sha256__` 指纹的契约桩，运行时强制比对指纹（见 [04. 包挂载与 Python 模块](../guide/01-foundations/04-packages-and-modules.md)）。
+  - **生成模型边界**：生成源码统一使用 Python 3.11 支持的 `TypeAlias` 表达返回联合类型；数值枚举由严格数值注解与枚举校验器共同约束（因 Python `Literal` 不支持小数字面量）。超过原生有限 `float` 范围的 `number` 输入在模型边界产生 `contract` 异常。
+- **`signal` 协作式等待执行器补充约定**：
+  - **信号投递与契约校验**：通过 [HTTP `:signal`](./04-execution-http-api.md#投递外部信号) 或 [CLI `axcutor signal`](../guide/00-run-with-docker.md#使用-cli-恢复等待节点) 按 `Frame.waiting` 中的规范地址提交符合节点 `output` / `branches` 契约的响应。节点的 `input` 声明仍参与编译期必达定值分析，外部调用方通过观察所属栈帧的 `variables` 获取上下文。
+  - **超时、异常域与并发屏障**：省略 `timeout_ms` 时无限期等待（不套用 Activity 默认期限）。非法外部信号在投递边界被拒绝（`422`），节点保持等待且不消耗重试预算；`retry.on` 默认且仅允许 `[timeout]`，`catch` 的 `"*"` 仅对 `{timeout}` 求补，声明其他选择器将触发编译错误。在 Fork-Join 与 `for_each` 中，单分支或单元素的信号输出仍在汇合屏障处统一提交，迭代等待期间持续持有 `concurrency` 并发许可：
+    ```yaml
+    decision:
+      output:
+        reviewer: { type: string }
+      timeout_ms: 86400000
+      catch:
+        expired: [timeout]
+      run:
+        executor: signal
+    ```
 
 ### 2. `with`（用于 `use` 节点）
 

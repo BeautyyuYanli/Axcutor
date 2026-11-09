@@ -204,7 +204,8 @@ export default withMermaid(
             items: [
               { text: '01. run 业务执行器标准 ABI 契约', link: '/spec/05-executor-abi/01-run-executor-contract' },
               { text: '02. builtin 受信任 Python 执行器规范', link: '/spec/05-executor-abi/02-builtin-python-executor' },
-              { text: '03. module 预置 Python 模块执行器规范', link: '/spec/05-executor-abi/03-module-python-executor' }
+              { text: '03. module 预置 Python 模块执行器规范', link: '/spec/05-executor-abi/03-module-python-executor' },
+              { text: '04. signal 协作式等待执行器规范', link: '/spec/05-executor-abi/04-signal-cooperative-executor' }
             ]
           }
         ]
