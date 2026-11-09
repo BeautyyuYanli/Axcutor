@@ -1,6 +1,6 @@
 # RFC-0009: 静态子类型赋值兼容性与不可变容器协变规则（Subtyping & Covariance）
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：类型系统完备性与主流语言能力对齐（Type System Soundness & Expressiveness）
 * **核心解决的问题**：
   1. 在保留“同帧同名同类型不变式（$\Sigma_G(v) \equiv T$）”的前提下，引入形式化**静态子类型偏序关系（$T_{\text{sub}} <: T_{\text{sup}}$）**，解决现行规范在所有赋值与传参边界强制要求双向等价（$T_1 \equiv T_2$）导致的表达力僵化问题；

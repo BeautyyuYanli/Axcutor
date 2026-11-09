@@ -1,6 +1,6 @@
 # RFC-0014: 基于预置 Python 模块引用的 `module` 执行器、`__axcutor__.yaml` 包同构布局与契约模板 SHA 校验规范
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：执行器 ABI 扩展、工作流包目录结构、静态契约代码生成与运行期契约一致性校验（Executor ABI, Workflow-Package Isomorphism, Static Contract Codegen & Runtime Contract Verification）
 * **前置关联提案**：
   * [`RFC-0011: Axcutor 编译器前后端与 Temporal 运行时参考实现架构`](./0011-compiler-and-temporal-runtime-architecture.md)

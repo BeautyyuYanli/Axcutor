@@ -1,6 +1,6 @@
 # RFC-0008: 移除 `for_each.collect` 与 `for_each.filter`，统一复用节点原生 `output` / `with.output` 与分支子集契约
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：核心原语正交化与规范简化（Language Orthogonality & Specification Simplification）
 * **前置关联提案**：
   * [`RFC-0006: 移除 for_each.state，解耦无状态同构并行遍历与有状态串行循环`](./0006-remove-for-each-state.md)（方案 A1）

@@ -1,6 +1,6 @@
 # RFC-0012: 结构化 `run` 执行器分派机制、移除自然语言变量正则提取与 `builtin` 可信 Python 执行器规范
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：执行器 ABI 架构演进、语法正交化与静态类型代码生成（Executor Architecture, Grammar Simplification & Static Type Codegen）
 * **前置关联提案**：
   * [`RFC-0011: Axcutor 编译器前后端与 Temporal 运行时参考实现架构`](./0011-compiler-and-temporal-runtime-architecture.md)

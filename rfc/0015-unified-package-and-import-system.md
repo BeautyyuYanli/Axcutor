@@ -1,6 +1,6 @@
 # RFC-0015: Axcutor 统一包模型与点分模块寻址（Package & Import System）规范
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：语言模块系统、命名空间挂载与编译期可见性检查（Module System, Namespace Mounting & Compile-Time Visibility）
 * **前置关联提案**：
   * [`RFC-0011: Axcutor 编译器前后端与 Temporal 运行时参考实现架构`](./0011-compiler-and-temporal-runtime-architecture.md)

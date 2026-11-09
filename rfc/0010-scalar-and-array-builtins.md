@@ -1,6 +1,6 @@
 # RFC-0010: 标量比较、逻辑、算术与数组随机访问内建算子扩展（Scalar & Array Builtins）
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：对标主流编程语言的原语与内建算子扩展（Language Expressiveness & Builtin Extensions）
 * **核心解决的问题**：
   1. 解决纯图编排中缺乏**标量比较（`==`, `!=`, `<`, `<=`, `>`, `>=`）**、**布尔逻辑组合（`and`, `or`, `not`）**、**基础算术运算（`add`, `sub`, `mul`, `div`, `mod`）**与**集合/字符串长度测量（`length`）**导致的表达力断层，使计数循环（`while (i < n)`）、阈值路由（`score >= 0.85`）、状态累加（`total + price`）无需调用外部 `run` 执行器即可在图内零开销确定性完成；

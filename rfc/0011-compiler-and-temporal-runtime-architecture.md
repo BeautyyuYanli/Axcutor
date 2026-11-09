@@ -1,6 +1,6 @@
 # RFC-0011: Axcutor 编译器前后端与 Temporal 运行时参考实现架构（Compiler & Temporal Runtime Architecture）
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：编译器架构、跨端静态分析服务与分布式持久化运行时（Compiler Architecture & Durable Runtime Implementation）
 * **核心解决的问题**：
   1. 确立 **“零独立低级 IR、以原地消糖归一化 AST（`NormalizedAst`）作为前后端唯一分界契约”** 的编译器设计原则，避免为原本已是显式 CFG 的语言重复发明字节码或三地址码；

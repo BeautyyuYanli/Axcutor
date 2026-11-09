@@ -1,6 +1,6 @@
 # RFC-0007: 移除四项隐式类型推导与绑定语法糖，收敛为单遍显式符号表与模块化类型检查
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：类型系统简化与模块化完备性（Type System Simplification & Modular Soundness）
 * **核心解决的问题**：
   1. 移除 `graph.variables` 的无类型字面量简写（`ShorthandVarDecl`），统一为携带可选 `default` 的显式 `TypeSpec`（同时支持声明带初值局部变量与未初始化局部变量），消除对象字面量词法消歧悖论、阶段 1 `WrittenVars` 孤立标量预扫描与阶段 3 后置逆向字面量校验；

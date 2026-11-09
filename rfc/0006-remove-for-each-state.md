@@ -1,6 +1,6 @@
 # RFC-0006: 移除 `for_each.state`，解耦无状态同构并行遍历与有状态串行循环
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：核心原语正交化与规范简化（Language Orthogonality & Specification Simplification）
 * **核心解决的问题**：移除 `for_each.state` 通道，消除 `for_each` 在“无状态数据并行（Data Parallelism）”与“有状态串行折叠（Sequential Fold）”之间的职责耦合，将跨元素有状态串行迭代完全收敛至原生 CFG 成环回边与 `builtin:array_shift` 算子，大幅削减编译期（阶段 01~03）与运行期（阶段 04）的横切特判规则。
 * **关联规范模块（`manual/spec/`）**：

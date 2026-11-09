@@ -1,6 +1,6 @@
 # RFC-0017: 协作式挂起执行器 `signal`、Temporal Update 恢复协议与宿主 `:signal` 接口规范
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：执行器 ABI 扩展、Temporal 确定性挂起调度与宿主 HTTP/CLI 恢复协议（Cooperative Signal Executor, Workflow Update Suspension & Host Signal API）
 * **前置关联提案**：
   * [`RFC-0011: Axcutor 编译器前后端与 Temporal 运行时参考实现架构`](./0011-compiler-and-temporal-runtime-architecture.md)
