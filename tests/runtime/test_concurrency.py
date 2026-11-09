@@ -9,6 +9,52 @@ from helpers import INTEGER, action, array, assign, builtin, call, graph, inline
 from temporalio.client import WorkflowFailureError
 
 
+@pytest.mark.parametrize(("concurrency", "slots", "peak"), [(3, 1, 1), (1, 3, 1), (2, 3, 2)])
+async def test_business_permits_and_worker_activity_slots_are_independent(
+    execution, concurrency, slots, peak
+):
+    active = maximum = 0
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def work(request, signal):
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        if active == peak:
+            entered.set()
+        try:
+            await release.wait()
+            return {"output": {"results": request["input_snapshot"]["item"]}}
+        finally:
+            active -= 1
+
+    document = graph(
+        {
+            "map": action(
+                "work",
+                ["item"],
+                {"results": INTEGER},
+                for_each={"source": "items", "item": "item", "concurrency": concurrency},
+            )
+        },
+        ["start -> map", "map -> end"],
+        inputs={"items": array()},
+        outputs={"results": array()},
+    )
+    async with execution({"work": work}, max_concurrent_activities=slots) as run:
+        handle = await run.start(document, {"items": [1, 2, 3]})
+        try:
+            await asyncio.wait_for(entered.wait(), 10)
+            root = (await handle.query("get_runtime_snapshot"))["frames"][0]
+            # Iteration permits include queued Activities, even when fewer
+            # Worker slots can execute their business functions concurrently.
+            assert root["steps"] == len(root["children"]) == concurrency
+        finally:
+            release.set()
+        assert (await run.finish(handle))["output"] == {"results": [1, 2, 3]}
+    assert maximum == peak and active == 0
+
+
 @pytest.mark.parametrize("kind", ["run", "graph", "call", "partial_call"])
 @pytest.mark.parametrize("ordered_map", [False, True])
 async def test_for_each_ordered_slots_skips_and_injected_scopes(execution, kind, ordered_map):

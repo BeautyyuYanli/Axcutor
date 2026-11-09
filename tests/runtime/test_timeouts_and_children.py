@@ -11,6 +11,41 @@ from temporalio.api.enums.v1 import EventType
 from temporalio.testing import ActivityEnvironment
 
 
+@pytest.mark.parametrize("outer_timeout", [None, 100])
+async def test_retry_backoff_is_outside_attempt_budget_but_inside_composite_deadline(
+    execution, outer_timeout
+):
+    calls = []
+
+    async def work(request, signal):
+        calls.append(request["attempt_timeout_ms"])
+        await asyncio.sleep(0.02)
+        return {"output": {"value": True if len(calls) == 1 else 7}}
+
+    inner = graph(
+        {
+            "work": action(
+                "work",
+                outputs={"value": INTEGER},
+                timeout_ms=80,
+                retry={"max_attempts": 2, "backoff_ms": 300, "on": ["contract"]},
+            )
+        },
+        ["start -> work", "work -> end"],
+        outputs={"value": INTEGER},
+    )
+    modifiers = {"timeout_ms": outer_timeout} if outer_timeout else {}
+    document = graph(
+        {"sub": inline(inner, catch={"timed": ["timeout"]}, **modifiers)},
+        ["start -> sub", "sub -> end", "sub.timed -> end"],
+        outputs={"value": INTEGER},
+        variables={"value": {**INTEGER, "default": 99}},
+    )
+    async with execution({"work": work}) as run:
+        assert (await run.execute(document))["output"] == {"value": 99 if outer_timeout else 7}
+    assert calls == [80] * (1 if outer_timeout else 2)
+
+
 @pytest.mark.parametrize("composite", [False, True])
 async def test_attempt_timeout_retries_then_catches_and_discards_late_output(execution, composite):
     calls, signals = [], []

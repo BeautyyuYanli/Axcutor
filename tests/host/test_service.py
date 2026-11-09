@@ -1,6 +1,7 @@
 """Host contracts exercised against the compiler and real Temporal boundaries."""
 
 import asyncio
+from copy import deepcopy
 from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -53,6 +54,60 @@ def service(client, queue=None, **kwargs):
         options={"heartbeat_interval_ms": 20, "heartbeat_timeout_ms": 1000},
         **kwargs,
     )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        [],
+        "",
+        False,
+        0,
+        {"heartbeat_interval_ms": None},
+        {"heartbeat_timeout_ms": True},
+        {"heartbeat_timeout_ms": 1},
+        {"heartbeat_interval_ms": 30000},
+        {"activity_timeout_ms": -1},
+        {"max_call_depth": 0},
+        {"task_queues": {"builtin": ""}},
+        {"child_workflow_history_events": False},
+        {"max_heartbeat_throttle_interval": 200},
+    ],
+)
+async def test_invalid_host_options_are_rejected_at_construction_without_backend(options):
+    client = await Client.connect("127.0.0.1:1", lazy=True)
+    with pytest.raises(ValueError):
+        ExecutionService(client, options=options)
+
+
+@pytest.mark.parametrize(
+    "options", [None, {}, {"heartbeat_timeout_ms": 1000}, {"heartbeat_interval_ms": 200}]
+)
+async def test_host_persists_raw_overrides_and_worker_receives_derived_defaults(server, options):
+    queue = str(uuid4())
+    if options:
+        options = {**options, "task_queues": {"builtin": queue}}
+    original = deepcopy(options or {})
+    host = ExecutionService(server.client, queue, options=options)
+    if options:
+        options["task_queues"]["builtin"] = "must-not-be-used"
+        options["heartbeat_interval_ms"] = 1
+    seen = []
+
+    async def work(request, signal):
+        seen.append(request)
+        return {"output": {}}
+
+    async with create_worker(server.client, queue, {"builtin": work}):
+        first = await host.submit("demo.main", packages(empty()))
+        assert (await host.wait(first["execution_id"]))["status"] == "completed"
+    history = await server.client.get_workflow_handle(first["execution_id"]).fetch_history()
+    started = history.events[0].workflow_execution_started_event_attributes
+    [request] = await server.client.data_converter.decode(started.input.payloads)
+    assert request["options"] == original
+    timeout = original.get("heartbeat_timeout_ms", 30000)
+    assert seen[0]["heartbeat_interval_ms"] == original.get("heartbeat_interval_ms", timeout // 3)
+    assert seen[0]["attempt_timeout_ms"] == 604800000
 
 
 async def assert_not_public(host, handle):

@@ -29,6 +29,48 @@ from .errors import (
 )
 
 
+def parse_runtime_options(options: JsonObject) -> JsonObject:
+    """Validate and copy overrides, then fill deterministic execution defaults.
+
+    Hosts use the same ingress rules but persist only their original overrides.
+    Child requests carry the expanded result, so explicit values must survive
+    repeated parsing. Backend duration limits are checked only when consumed.
+    """
+    result: JsonObject = {
+        "activity_timeout_ms": 7 * 24 * 60 * 60 * 1000,
+        "heartbeat_timeout_ms": 30000,
+        "max_call_depth": 64,
+        "task_queues": {},
+        "child_workflow_history_events": None,
+    }
+    if not isinstance(options, dict) or options.keys() - (
+        result.keys() | {"heartbeat_interval_ms"}
+    ):
+        raise ValueError("unknown runtime options")
+    result.update(deepcopy(options))
+    for name in (
+        "activity_timeout_ms",
+        "heartbeat_interval_ms",
+        "heartbeat_timeout_ms",
+        "max_call_depth",
+    ):
+        if name in result and (type(result[name]) is not int or result[name] <= 0):
+            raise ValueError(f"{name} must be a positive integer")
+    # Only absence derives an interval; explicit None is rejected above.
+    result.setdefault("heartbeat_interval_ms", max(1, result["heartbeat_timeout_ms"] // 3))
+    if result["heartbeat_interval_ms"] >= result["heartbeat_timeout_ms"]:
+        raise ValueError("heartbeat interval must be less than heartbeat timeout")
+    queues = result["task_queues"]
+    if not isinstance(queues, dict) or any(
+        not isinstance(k, str) or not isinstance(v, str) or not v for k, v in queues.items()
+    ):
+        raise ValueError("task_queues must map executor names to nonempty task queues")
+    threshold = result["child_workflow_history_events"]
+    if threshold is not None and (type(threshold) is not int or threshold <= 0):
+        raise ValueError("child_workflow_history_events must be a positive integer")
+    return result
+
+
 @dataclass
 class Frame:
     """One activation. Only its execution coroutine mutates env/cursor.
@@ -205,7 +247,7 @@ class AxcutorInterpreterWorkflow:
         try:
             self._bundle_json = request["bundle_json"]
             self._bundle = loads(self._bundle_json)
-            self._options = self._parse_options(request.get("options", {}))
+            self._options = parse_runtime_options(request.get("options", {}))
             depth = request.get("_call_depth", 1)
             if type(depth) is not int or depth < 1:
                 raise ValueError("invalid call depth")
@@ -237,39 +279,6 @@ class AxcutorInterpreterWorkflow:
                 # of the run while gathering its cancellation/completion.
                 self._signal_init_timer.cancel()
                 await asyncio.gather(self._signal_init_timer, return_exceptions=True)
-
-    @staticmethod
-    def _parse_options(options: JsonObject) -> JsonObject:
-        result: JsonObject = {
-            "activity_timeout_ms": 7 * 24 * 60 * 60 * 1000,
-            "heartbeat_interval_ms": 1000,
-            "heartbeat_timeout_ms": 10000,
-            "max_call_depth": 64,
-            "task_queues": {},
-            "child_workflow_history_events": None,
-        }
-        if not isinstance(options, dict) or options.keys() - result.keys():
-            raise ValueError("unknown runtime options")
-        result.update(deepcopy(options))
-        for name in (
-            "activity_timeout_ms",
-            "heartbeat_interval_ms",
-            "heartbeat_timeout_ms",
-            "max_call_depth",
-        ):
-            if type(result[name]) is not int or result[name] <= 0:
-                raise ValueError(f"{name} must be a positive integer")
-        if result["heartbeat_interval_ms"] >= result["heartbeat_timeout_ms"]:
-            raise ValueError("heartbeat interval must be less than heartbeat timeout")
-        queues = result["task_queues"]
-        if not isinstance(queues, dict) or any(
-            not isinstance(k, str) or not isinstance(v, str) or not v for k, v in queues.items()
-        ):
-            raise ValueError("task_queues must map executor names to nonempty task queues")
-        threshold = result["child_workflow_history_events"]
-        if threshold is not None and (type(threshold) is not int or threshold <= 0):
-            raise ValueError("child_workflow_history_events must be a positive integer")
-        return result
 
     @workflow.query
     def get_runtime_snapshot(self) -> JsonObject:

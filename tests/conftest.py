@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -64,7 +65,7 @@ class Execution:
 @pytest.fixture
 def execution(server):
     @asynccontextmanager
-    async def run(executors=None):
+    async def run(executors=None, **worker_options):
         queue = str(uuid4())
         state = Execution(server, queue)
         # These lifecycle tests inject a single executor backend with several
@@ -76,7 +77,10 @@ def execution(server):
                 return await executors[request["run_spec"]["content"]](request, signal)
 
             registry = {"builtin": dispatch}
-        async with create_worker(server.client, queue, registry):
+        # Fast application heartbeats above need matching SDK throttling; these
+        # lifecycle test values must not become production Worker defaults.
+        worker_options.setdefault("max_heartbeat_throttle_interval", timedelta(milliseconds=20))
+        async with create_worker(server.client, queue, registry, **worker_options):
             try:
                 yield state
             finally:

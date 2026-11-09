@@ -6,7 +6,6 @@ resources, not DSL execution semantics.
 """
 
 from collections.abc import Mapping
-from datetime import timedelta
 from typing import Any
 
 from temporalio.client import Client
@@ -34,7 +33,12 @@ def create_worker(
     module_mounts: Mapping[str, str] | None = None,
     **kwargs: Any,
 ) -> Worker:
-    """Register both Python executors; copy mount configuration outside replay."""
+    """Register executors and pass resource/throttle kwargs to the SDK unchanged.
+
+    SDK defaults apply unless the host overrides them. Fast cancellation needs
+    both a short application heartbeat interval in the execution request and a
+    short max_heartbeat_throttle_interval here.
+    """
     activities = RunActivities(executors, module_mounts=module_mounts)
     return Worker(
         client,
@@ -42,9 +46,5 @@ def create_worker(
         workflows=[AxcutorInterpreterWorkflow],
         activities=[activities.execute_run],
         workflow_runner=workflow_runner(),
-        # Cancellation is delivered through heartbeats. Keep SDK throttling low
-        # enough that a configured short heartbeat timeout remains usable.
-        max_heartbeat_throttle_interval=timedelta(milliseconds=100),
-        default_heartbeat_throttle_interval=timedelta(milliseconds=100),
         **kwargs,
     )

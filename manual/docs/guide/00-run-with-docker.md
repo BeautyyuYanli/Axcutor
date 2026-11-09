@@ -116,7 +116,7 @@ curl -X POST http://localhost:8000/v1/executions/http-demo:cancel
 
 ## Worker 生命周期与数据保存
 
-`worker` 服务持续轮询 `axcutor` task queue，解释 workflow 并执行受信任的 `run.executor: builtin` 与 `run.executor: module` Python 代码。接到停止信号后，Worker 最多等待 20 秒让 Activity 完成，再按 Temporal 协议关闭；Compose 的停止宽限期为 30 秒。
+`worker` 服务持续轮询 `axcutor` task queue，解释 workflow 并执行受信任的 `run.executor: builtin` 与 `run.executor: module` Python 代码。接到停止信号后，Worker 给在途 Activity 20 秒宽限，届满发起本地取消并继续等待任务退出；这不是清理完成的硬期限。Compose 的进程停止宽限期为 30 秒，届满可强制终止尚未完成清理的进程。
 
 ```sh
 # 查看基础设施和 Worker 状态。

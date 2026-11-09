@@ -41,6 +41,9 @@ from .workspace import Workspace, WorkspaceConflict, WorkspaceView, discover_mou
 
 logger = logging.getLogger(__name__)
 
+# Pair application heartbeats with Worker throttling for interactive cancellation.
+_HEARTBEAT_INTERVAL_MS = 200
+
 
 class SubmittedSource(TypedDict):
     entry: str
@@ -70,7 +73,9 @@ class Playground:
         self.client = client
         self.workspace = workspace
         self.queue = "axcutor-playground-" + str(uuid4())
-        self.executions = ExecutionService(client, self.queue)
+        self.executions = ExecutionService(
+            client, self.queue, options={"heartbeat_interval_ms": _HEARTBEAT_INTERVAL_MS}
+        )
         self.execution_id: str | None = None
         self._completion: asyncio.Task[None] | None = None
         self._worker: Worker | None = None
@@ -95,6 +100,7 @@ class Playground:
             self.queue,
             executors={"builtin": builtin, "module": module},
             graceful_shutdown_timeout=timedelta(seconds=5),
+            max_heartbeat_throttle_interval=timedelta(milliseconds=_HEARTBEAT_INTERVAL_MS),
         )
         await self._worker.__aenter__()
 

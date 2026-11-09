@@ -11,6 +11,7 @@ import shutil
 import signal
 import socket
 import sys
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -18,12 +19,13 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from axcutor_host.service import ExecutionService, RuntimeUnavailable
+from axcutor_host.service import ExecutionNotFound, ExecutionService, RuntimeUnavailable
 from axcutor_playground.coordinator import Playground
 from axcutor_playground.http import create_playground_app
 from axcutor_playground.workspace import Workspace
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.worker import create_worker
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 
@@ -84,6 +86,29 @@ async def wait_for(host, execution_id):
     final = await asyncio.wait_for(host.executions.wait(execution_id), 20)
     await idle(host)
     return final
+
+
+async def test_playground_persists_fast_interval_and_pairs_worker_throttling(playground):
+    host = playground
+    assert host._worker.config()["max_heartbeat_throttle_interval"] == timedelta(milliseconds=200)
+    assert host._worker.config()["default_heartbeat_throttle_interval"] == timedelta(seconds=30)
+    result = await host.submit(ENTRY, INPUT, host.view()["revision"])
+    execution_id = result["execution"]["execution_id"]
+    assert (await wait_for(host, execution_id))["status"] == "completed"
+    history = await host.client.get_workflow_handle(execution_id).fetch_history()
+    started = history.events[0].workflow_execution_started_event_attributes
+    [request] = await host.client.data_converter.decode(started.input.payloads)
+    assert request["options"] == {"heartbeat_interval_ms": 200}
+    scheduled = [
+        e.activity_task_scheduled_event_attributes
+        for e in history.events
+        if e.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
+    ]
+    assert scheduled
+    for event in scheduled:
+        [payload] = await host.client.data_converter.decode(event.input.payloads)
+        assert loads(payload)["heartbeat_interval_ms"] == 200
+        assert event.heartbeat_timeout.ToMilliseconds() == 30000
 
 
 async def test_resident_worker_reimports_python_helpers_contracts_and_deleted_modules(playground):
@@ -333,19 +358,79 @@ async def test_shutdown_cancels_demo_and_restart_uses_fresh_queue(server, tmp_pa
         await restarted.close()
 
 
+async def test_shutdown_retains_imports_and_workspace_ownership_until_cleanup_finishes(playground):
+    host = playground
+    view = host.view()
+    double = """import asyncio
+from . import helper
+from ._contract import Input, Output, ReturnType
+
+async def execute(input: Input) -> ReturnType:
+    helper.started.set()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        helper.cleaning.set()
+        await helper.release.wait()
+"""
+    view = await host.save(
+        view["revision"],
+        edit(
+            view,
+            {
+                DOUBLE: double,
+                HELPER: (
+                    "import asyncio\nstarted = asyncio.Event()\n"
+                    "cleaning = asyncio.Event()\nrelease = asyncio.Event()\n"
+                ),
+                INPUT: '{"items":[1],"delay_seconds":30}',
+            },
+        ),
+    )
+    await host.submit(ENTRY, INPUT, view["revision"])
+    async with asyncio.timeout(5):
+        while "playground_demo.double.helper" not in sys.modules:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+        helper = sys.modules["playground_demo.double.helper"]
+        await helper.started.wait()
+    closing = asyncio.create_task(host.close())
+    other = Workspace(host.workspace.root, host.workspace.examples)
+    try:
+        await asyncio.wait_for(helper.cleaning.wait(), 5)
+        assert not closing.done()
+        assert sys.modules["playground_demo.double.helper"] is helper
+        with pytest.raises(BlockingIOError):
+            other.open()
+    finally:
+        helper.release.set()
+        await asyncio.wait_for(closing, 15)
+    assert "playground_demo.double.helper" not in sys.modules
+    other.open()
+    other.close()
+
+
 async def test_ambiguous_submission_retains_id_without_automatic_resubmission(
     playground, monkeypatch
 ):
     host = playground
     real_submit = host.executions.submit
+    real_wait = host.executions.wait
     submitted_ids = []
+    unseen = asyncio.Event()
 
     async def lose_ack(entry, packages, input=None, execution_id=None):
         submitted_ids.append(execution_id)
         await real_submit(entry, packages, input, execution_id)
         raise RuntimeUnavailable("lost submission response")
 
+    async def temporarily_not_found(execution_id):
+        if not unseen.is_set():
+            unseen.set()
+            raise ExecutionNotFound("temporarily invisible")
+        return await real_wait(execution_id)
+
     monkeypatch.setattr(host.executions, "submit", lose_ack)
+    monkeypatch.setattr(host.executions, "wait", temporarily_not_found)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=create_playground_app(host)), base_url="http://test"
     ) as client:
@@ -362,6 +447,7 @@ async def test_ambiguous_submission_retains_id_without_automatic_resubmission(
         execution_id = details["execution_id"]
         assert submitted_ids == [execution_id]
         assert details["workspace"]["busy"]
+        await asyncio.wait_for(unseen.wait(), 5)
         assert host.execution_id == execution_id
         assert (await client.get(f"/v1/executions/{execution_id}")).status_code == 200
         await host.executions.cancel(execution_id)
@@ -374,7 +460,9 @@ async def test_execution_routes_preserve_ids_lossless_frames_and_cancellation(
 ):
     host = Playground(server.client, Workspace(tmp_path / "workspace", templates))
     queue = str(uuid4())
-    service = ExecutionService(server.client, queue)
+    service = ExecutionService(
+        client=server.client, task_queue=queue, options={"heartbeat_interval_ms": 200}
+    )
     execution_id = "订单 / a/../b\n% ? # :cancel"
     location = "/v1/executions/" + quote(execution_id, safe="").replace(".", "%2E")
     text = dumps(
@@ -387,7 +475,9 @@ async def test_execution_routes_preserve_ids_lossless_frames_and_cancellation(
             },
         }
     )
-    async with create_worker(server.client, queue):
+    async with create_worker(
+        server.client, queue, max_heartbeat_throttle_interval=timedelta(milliseconds=200)
+    ):
         await service.submit(
             "__main__",
             {"__main__": {"format": "json", "text": text}},

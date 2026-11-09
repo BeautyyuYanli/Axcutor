@@ -141,7 +141,11 @@ return Output(value=input.value * 3)
 
 Submitted snapshot 保留实际提交的工作流 `entry + packages`，Python 源码不进入执行历史。工作流与 Python 文件在两次运行之间编辑，修改在后续 Run 生效。通用 module 执行器仍使用标准导入缓存，此 Run 边界由独立 Playground 后端负责。
 
-正常关闭后端会尽力取消当前演示，等待本地清理并关闭 Worker。重启创建新队列，不恢复旧演示，不保存恢复凭据或执行结果。提交结果不确定时，错误详情保留 `execution_id`，可查询或取消原 ID；查询失败不表示执行未创建，也不会自动重新提交。无法确认该 ID 终态时，workspace 保持忙状态，重启后端可开始新的演示。
+Playground 显式采用 `200ms` 应用心跳间隔和 Worker 最大心跳节流间隔，失活检测窗口保持默认 `30000ms`。这两个入口共同增加取消送达机会，配置归属见 [运行选项与心跳](./04-state-and-resilience/02-guardrails-and-timeouts.md#runtime-options)。
+
+正常关闭时，HTTP 服务先排空连接和请求，再进入应用关闭；当前 HTTP 排空没有时间上限。进入应用关闭后，后端给取消调用 `5s`、完成观察 `10s`；观察超时只结束等待，不宣告业务结束或释放工作区。随后关闭 Worker，先给在途 Activity `5s` 宽限，届满发起本地取消并继续等待退出，最后卸载模块和释放工作区。Compose 的 `35s` 为进程外停止期限，可能强制中断未完成的清理，不能用各阶段预算之和保证清理完成。
+
+重启创建新队列，不恢复旧演示，不保存恢复凭据或执行结果。提交结果不确定时，错误详情保留 `execution_id`，可查询或取消原 ID；查询失败不表示执行未创建，也不会自动重新提交。运行期间仅当 Temporal 终态且本地执行器排空后才解锁；无法确认该 ID 终态时，workspace 保持忙状态，重启后端可开始新的演示。
 
 `playground/workspace/` 保存持久化 workspace 文件；`temporal-data` 保存执行历史与结果。`docker compose down` 保留二者，`docker compose down -v` 删除 `temporal-data` 卷。Playground 是受信任的本地演示工具，不提供账户、每浏览器独立 workspace 或旧演示恢复保证。
 

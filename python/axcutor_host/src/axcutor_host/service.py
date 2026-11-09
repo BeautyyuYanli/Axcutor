@@ -18,7 +18,7 @@ from axcutor_runtime.bundle import compile_bundle
 from axcutor_runtime.codec import JsonObject, dumps, loads
 from axcutor_runtime.errors import SELECTORS
 from axcutor_runtime.packages import package_path
-from axcutor_runtime.workflow import AxcutorInterpreterWorkflow
+from axcutor_runtime.workflow import AxcutorInterpreterWorkflow, parse_runtime_options
 from temporalio import exceptions
 from temporalio.client import (
     Client,
@@ -157,6 +157,8 @@ class ExecutionService:
     query with no Worker. A successful start can precede a query timeout; callers
     should supply an ID and GET it after an ambiguous 503. IDs cannot be reused
     while Temporal retains the execution (including closed executions).
+    Runtime options are validated at construction and copied as raw overrides;
+    only the Workflow fills defaults, including the derived heartbeat interval.
     """
 
     def __init__(
@@ -171,7 +173,9 @@ class ExecutionService:
             raise ValueError("rpc_timeout must be positive")
         self._client = client
         self._task_queue = task_queue
-        self._options = deepcopy(options or {})
+        overrides = {} if options is None else options
+        parse_runtime_options(overrides)
+        self._options = deepcopy(overrides)
         self._timeout = rpc_timeout
 
     async def submit(

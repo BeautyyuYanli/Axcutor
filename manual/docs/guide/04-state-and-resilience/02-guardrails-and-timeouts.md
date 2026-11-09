@@ -1,6 +1,6 @@
 # 02. 执行护栏：`max_steps`、调用栈深度与 `timeout_ms`
 
-在运行包含动态循环（成环回边）、跨包子工作流调用（`use`）与外部 I/O 的工作流时，Axcutor 提供单图步数上限、调用栈深度上限与节点级超时重试三项执行护栏，控制工作流的资源消耗与执行时长。
+Axcutor 提供单图步数上限、调用栈深度上限与节点级超时重试。业务预算由工作流作者声明；运行选项、Worker 资源和部署期限分别由对应宿主管理。各项限制有独立的作用范围，不构成整个执行的统一时长或资源上限。
 
 ---
 
@@ -119,7 +119,68 @@ nodes:
 
 ---
 
-## 四、 完整示例：组合步数护栏、超时控制与快照重试
+## 四、运行选项、心跳与宿主资源 {#runtime-options}
+
+### 1. 配置归属与持久化
+
+| 类别 | 配置入口 | 作用范围 |
+| :--- | :--- | :--- |
+| 业务预算 | DSL 的 `max_steps`、`timeout_ms`、`retry`、`for_each.concurrency` | 图帧、节点尝试或同一次集合激活。 |
+| 运行选项 | `ExecutionService(..., options=...)`；直接 Workflow 请求的 `options` | 写入执行请求，执行和重放时解析，向 Child 传递展开后的完整值。 |
+| 宿主与部署 | `ExecutionService.rpc_timeout`、`create_worker(..., **kwargs)`、Uvicorn 与 Compose | 控制面调用、当前进程资源、服务排空或进程停止。 |
+| 内部保护 | 编译器与编解码边界、宿主观察与前端轮询 | 源码解析、数值表示或状态刷新；不增加 DSL 字段。 |
+
+生产宿主默认提交空覆盖字典 `{}`。宿主在构造时检查选项，但只复制和保存原始覆盖值；Workflow 补齐以下六项默认值。非法类型、未知键或参数关系在宿主报 `ValueError`，在直接 Workflow 入口报不可恢复的 `EngineError`。
+
+| 运行选项 | 默认值 | 规则与边界 |
+| :--- | :--- | :--- |
+| `activity_timeout_ms` | `604800000`（7 天） | 正整数；Activity 型 `run` 未声明 `timeout_ms` 时的单次尝试预算。 |
+| `heartbeat_timeout_ms`（T） | `30000` | 正整数；Worker 失活检测窗口。 |
+| `heartbeat_interval_ms`（I） | `max(1, T // 3)`，默认 `10000` | 正整数，且 `I < T`；只有省略键时派生，显式值保持不变。 |
+| `max_call_depth` | `64` | 正整数；跨 Child 继续累计逻辑调用深度。 |
+| `child_workflow_history_events` | `None` | `None` 或正整数；在工作流调用边界触发 Child 的历史事件数提示，不截断父历史。 |
+| `task_queues` | `{}` | 字符串键、非空字符串值的映射；按执行器名路由 Activity。 |
+
+正整数不包含布尔值。除历史提示外，上述整数选项均不接受显式 `None`。例如：
+
+```python
+from axcutor_host import ExecutionService
+
+# 只改 T 时派生 I=333；T=2 派生 I=1，T=1 无法满足 I<T，会被拒绝。
+service = ExecutionService(client, options={"heartbeat_timeout_ms": 1000})
+```
+
+根请求只持久化覆盖值，因此未显式配置的选项在执行或重放时按运行时默认值补齐。已有 Activity 的请求及 Server 原生重试沿用历史参数；重放后的新调度采用补齐后的值。已启动的 Child 持有父 Run 当时展开的完整选项，重新解析不改写显式值。
+
+控制参数在实际消费时还须能表示为后端要求的整数或时长；入口不扫描整包 AST 的时间参数，也不将超大数值静默截短。
+
+### 2. 应用心跳与 Worker 节流
+
+Activity 的有效尝试预算 A 取节点显式 `timeout_ms`，省略时取 `activity_timeout_ms`。Server 尝试期限与 Activity 本地 deadline 从 A 派生，Server 的有效心跳 timeout 为 `min(T, A)`。排队时间不消耗 A；复合节点和 `signal` 省略期限时不套用 Activity 兜底。
+
+I 控制应用调用心跳的间隔。SDK 继续合并心跳，通常按有效心跳 timeout 的 `0.8` 倍与 Worker 最大节流间隔的较小值发送；仅配置 SDK 节流不会自动产生应用心跳。生产 Worker 沿用 SDK 的最大 / 默认节流间隔 `60s / 30s`，默认长尝试的典型节流窗口约 `24s`，取消送达可能等待数十秒。
+
+交互宿主需同时缩短两处间隔。例如 Playground 保留 `T=30000`，采用以下配对：
+
+```python
+from datetime import timedelta
+from axcutor_runtime.worker import create_worker
+
+service = ExecutionService(client, options={"heartbeat_interval_ms": 200})
+worker = create_worker(client, "axcutor", max_heartbeat_throttle_interval=timedelta(milliseconds=200))
+```
+
+Worker 的槽位、poller、启动速率、缓存和 `tuner` 继续通过 SDK 参数配置并由 SDK 校验。它们不写入执行请求，也不改变 `for_each.concurrency` 的业务许可；每个集合激活与每个 Worker 分别拥有自己的限制。
+
+### 3. 期限、重试与清理
+
+每次重试重置尝试期限，退避不计入下一次尝试。外层复合节点的期限覆盖后代排队、尝试、退避和等待；超时后仍等待后代收到取消并完成清理，之后才进入重试或 `catch`。本地 deadline 置位取消信号，提交前再次检查单调时钟，丢弃同步校验或序列化造成的迟到成功。外部副作用的幂等性由执行器与外部系统负责。
+
+`ExecutionService.rpc_timeout` 默认 `5s`，约束单次后端调用；一个公开方法可能串行发起多个调用。`wait()` 的执行结果观察不设业务期限；取消观察任务不会取消执行。提交或信号投递返回 `503 runtime_unavailable` 时可能已经生效，应查询原 ID。
+
+Playground 的 [关闭顺序](../00-web-playground.md#常驻-worker-与再次运行) 保留 Worker 对本地任务的所有权。快速心跳增加取消送达机会，不保证执行终态、工作区解锁或停机一定在固定窗口内完成。浏览器轮询与健康检查均不参与业务超时判定。
+
+## 五、完整示例：组合步数护栏、超时控制与快照重试
 
 以下完整工作流在内联子图上配置 `max_steps` 与整体 `timeout_ms`，并在子图内部的外部接口调用节点上配置单次尝试超时与 `retry`：
 
@@ -133,7 +194,7 @@ output:
 graph:
   nodes:
     # 阶段 1：带步数上限与总超时保护的内联探索子图
-    # - timeout_ms: 30000 限制整个子图单次运行总耗时不超过 30 秒
+    # - timeout_ms: 30000 在子图单次尝试达到 30 秒后发起取消，并等待后代清理
     # - catch 拦截子图步数超限 (max_steps) 或总超时 (timeout)，转入降级节点
     bounded_research_stage:
       timeout_ms: 30000
