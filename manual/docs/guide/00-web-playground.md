@@ -1,6 +1,6 @@
 # Web Playground
 
-Playground 是基于真实文件的本地工作台。多个页面共享一个持久化 workspace，可编辑 YAML、JSON 和 Python，使用 WASM 实时预览 CFG 与诊断。Run 使用与 CLI 相同的文件加载、编译、输入校验和 module 执行器；执行状态、历史与结果由 Temporal 保存。
+Playground 是基于真实文件的本地工作台。多个页面共享一个持久化 workspace，可编辑 YAML、JSON 和 Python，使用 WASM 实时预览 CFG 与诊断。Run 使用与 CLI 相同的文件加载、编译、输入校验和 module 执行器；执行状态、历史与结果由 Temporal 保存。Playground 另在进程内存中保留当前或最近一轮的 trace、结果与提交时工作流快照，页面刷新可恢复，后端重启清空。
 
 浏览器前端位于 `playground/`，独立 Python 包位于 `playground/backend/`，入口为 `axcutor-playground`。该包单向依赖 `axcutor-host/runtime/core`，负责 workspace、文件 API 和 Worker 生命周期；普通 host/runtime 不依赖 Playground。相关 Python 测试位于 `playground/backend/tests/`。
 
@@ -17,28 +17,38 @@ docker compose up
 
 ## 工作台布局
 
-顶部应用栏集中展示保存状态、Workspace files 和 Editor 两个独立开关，以及 Save files、Reload (discard edits)、Run、Cancel。下方运行配置行提供 Entry、Input file 和 Canvas source，并显示编译状态与文件可编辑状态。
+页面顶部直接显示运行配置行：Entry、Input file、Run 和 Cancel；编译加载或异常时才显示状态提示。Entry 展示 `demo.main` 等模块名，独立文档显示 `__main__`；悬停可查看对应文件路径，提交仍使用实际文件路径。
 
-桌面主区域由文件侧栏、源码编辑区与 CFG 组成。文件树独立滚动，当前文件有选中标记，悬停文件或目录可查看完整路径；新建文件表单位于侧栏底部。源码区顶部显示当前路径、可编辑或只读状态及 Delete file，原生文本框占据剩余高度。
+桌面主区域由文件侧栏、源码编辑区与持续显示的流程画布组成。文件树独立滚动，当前文件有选中标记，悬停文件或目录可查看完整路径；Delete file 位于文件区内，新建文件表单位于侧栏底部。Editor 内提供 Save files、Discard edits、保存状态、当前路径及必要的生成文件或只读提示，原生文本框占据剩余高度。
 
-Workspace files 和 Editor 默认展开；收起后释放对应空间，两者都收起时 CFG 占满主工作区，顶部开关仍可使用。折叠保留未保存内容、编辑位置、画布来源与执行观察；点击文件、新建成功或定位诊断会展开编辑区。例如：
+Workspace files 和 Editor 默认展开，通过各自标题按钮收起或展开。收起后仅保留本区域的图标入口，悬停显示名称，仍支持键盘展开。折叠保留未保存内容、编辑位置、画布来源与执行观察；点击文件、新建成功或定位诊断会展开编辑区。例如：
 
 ```text
 Editor → 收起源码区 → 点击文件 → 展开该文件的源码
-Workspace files → Editor → 只显示画布 → Editor → 恢复原编辑内容
+Workspace files → Editor → 画布获得更多空间 → Editor → 恢复原编辑内容
 ```
 
-CFG 顶部提供工作流选择、作用域面包屑、Zoom out、Zoom in 与 Fit graph。区域尺寸变化后自动适配当前图。节点保留名称、分支和进入子图操作；配置了并行遍历、重试或超时时，分别显示 Parallel items、Retries enabled、Timeout configured 行为标签，不列出参数数值。Selected 与 Running 文字分别表示选中和运行状态，两种状态可以同时出现。
+流程图从左到右排列，节点使用紧凑卡片，Start、End 和 Fail 使用小标记。顶部保留工作流选择、Zoom out、Zoom in 与 Fit graph；作用域面包屑仅在进入内联子图后出现。区域尺寸变化后自动适配当前图。节点标题旁的箭头进入工作流或子图，也可双击节点进入；所有入口支持键盘操作。配置了并行遍历、重试或超时时，分别显示 Parallel items、Retries enabled、Timeout configured 行为标签，不列出参数数值；运行中的并行项在同一位置显示索引。蓝色外框表示选中，绿色标记表示运行，两种状态可以同时出现。
 
-底部面板默认收起，点击 Execution 或 Diagnostics（问题数量）即可展开并切换内容；Collapse panel 收起内容，Expand panel 恢复所选面板。例如：
+底部 Trace 面板使用共享时间刻度，按父子层级展示每次真实调用的状态、持续时间与并行条，调用详情位于时间线旁；窄屏改为上下排列。查看 Trace 时上方流程画布继续显示。Zoom trace in / out 放大或缩小时间轴，Fit trace 恢复完整范围，窄屏在时间线内部滚动。零时间调用显示为可选择的点，耗时仍为 `0 ms`。开始、结束与事件时间来自可重放的 Workflow 时钟；未结束条延伸至 Playground 本次查询的 UTC 观测时间，耗时标记为 observed，已结束条固定使用记录的起止时间。这些时间不表示 CPU 时间或独立执行器性能指标。例如：
+
+```text
+Trace → 选择 copy · builtin → 查看独立 Input / Output、状态和耗时
+Trace → Timing → 展开开始/结束时间
+Trace → 选择已结束的并行项 → Locate in Flow → 定位提交快照中的 CFG 节点
+```
+
+调用详情位于 Trace 面板，结束后仍可选择；轮询保持选中调用。默认突出状态、耗时与 Input / Output，精确起止时间在 Timing 中默认折叠。Locate in Flow 定位上方画布，保留 Trace 与详情。失败、取消和尚未返回输出分别说明，无输出字段的成功调用显示空输出。等待、解释器重试及 catch 事件在详情中展示；Temporal 原生 Activity 重试仅显示已知策略，不推测每次尝试的次数或时间。
+
+底部面板默认收起，点击 Execution、Trace 或 Diagnostics（问题数量）即可展开并切换内容；再次点击当前标签收起，再次点击恢复。例如：
 
 ```text
 Run → 展开 Execution，观察当前步骤、所选步骤数据与结果
 新的编译问题或明确提交失败 → 展开 Diagnostics，查看错误或定位源码
-Diagnostics → Collapse panel → Expand panel：仍显示 Diagnostics
+Diagnostics → Diagnostics → 收起 → Diagnostics → 恢复诊断内容
 ```
 
-Execution 标题持续显示 Not run、Submitting、Observing、Running、Waiting for signal、Cancelling、Succeeded、Failed 或 Cancelled；面板收起时状态与生命周期提示仍可见。提交期间隐藏上一次结果，只收到 ID 或查询暂时失败时继续观察并允许取消。执行终态后 workspace 仍忙时，提示本地工作或清理尚未结束，文件继续只读。
+Execution 标题持续显示 Not run、Submitting、Observing、Running、Waiting for signal、Cancelling、Succeeded、Failed 或 Cancelled；面板收起时状态仍可见。仅在观察失败、等待取消、其他页面占用或终态后仍在清理等情况下额外显示说明。提交期间隐藏上一次结果，只收到 ID 或查询暂时失败时继续观察并允许取消。执行终态后 workspace 仍忙时，提示本地工作或清理尚未结束，文件继续只读。
 
 切换或收起面板保持执行观察与编译状态，后台轮询不会重新选择面板。提交结果不确定且已取得 execution ID 时，页面保持 Execution 可见并继续观察，顶部 Cancel 可取消该执行。
 
@@ -58,7 +68,7 @@ workflows/demo/double/__axcutor__.yaml → demo.double
 scratch/main.json                    → __main__
 ```
 
-Save files 保存当前全部文件；Run 先保存，再请求执行。保存与 Run 都携带 workspace revision。多个页面修改时，过期请求返回 `409 / workspace_conflict`，页面保留本地内容，不提交本次执行。可先复制需要保留的文本，再点击 Reload (discard edits) 重新读取共享文件。刷新页面也会读取已保存文件。
+Editor 中的 Save files 保存当前全部文件，Discard edits 重新读取已保存文件；Run 先保存，再请求执行。保存与 Run 都携带 workspace revision。多个页面修改时，过期请求返回 `409 / workspace_conflict`，页面保留本地内容，不提交本次执行。可先复制需要保留的文本，再点击 Discard edits 重新读取共享文件。刷新页面也会读取已保存文件。
 
 提交准备、运行和本地清理期间，文件编辑器只读，新建、删除、保存和再次 Run 均不可用；文件浏览、GET 与 Cancel 保持可用。后端在忙时直接拒绝保存和新 Run，返回 `409`。Run 前先保存已有编辑，生成契约后直接更新文件视图和 revision。
 
@@ -107,13 +117,13 @@ AXCUTOR_API_URL=http://127.0.0.1:9000 npm --prefix playground run dev
 
 ## 编辑、检查与执行
 
-1. 在顶部配置行用 Entry 选择工作流文件路径；Input file 选择 JSON 文件路径，或 Empty input `{}`。输入文件与其他源码使用同一个编辑器。独立 YAML/JSON 入口使用 `__main__`；未被入口闭包引用的文档不参与编译。
+1. 在顶部配置行用 Entry 按模块名选择工作流；Input file 选择 JSON 文件路径，或 Empty input `{}`。输入文件与其他源码使用同一个编辑器。独立 YAML/JSON 入口使用 `__main__`；未被入口闭包引用的文档不参与编译。
 2. 当前缓冲自动构造 `entry + packages` 交给 WASM，Python 编辑不导入模块。底部 Diagnostics 中的包名映射到实际源码文件，点击诊断展开编辑区并定位文件与节点。
 3. 点击 CFG 节点选中节点；双击 workflow/graph 节点或点击 Open 按钮进入目标工作流/内联图，面包屑返回上层作用域。编译器的类型和静态分析用于图与诊断，不在界面另列内部分析表格。
-4. Run 先保存文件，再携带新 revision 提交路径。响应包含实际提交的源码视图，页面据此构造 Submitted snapshot。运行中每隔 300ms 查询一次；Execution 按父子关系列出当前步骤，以工作流、节点名称及并行项索引区分，默认选择一个真实的当前步骤。点击步骤展示其字段和值并跳转对应 CFG；在执行快照中点击节点也会选中对应步骤。步骤消失后改选当前步骤，不保留已经失效的数据。成功时突出输出字段和值及实际返回分支，失败时突出原因，取消时显示已取消；执行 ID 与时间位于默认收起的 Execution details。
-5. Cancel 发起协同取消。服务端返回 `202 / running` 表示仍在清理，页面继续轮询并禁用重复取消；进入 `completed`、`failed` 或 `cancelled` 时停止查询执行。页面继续观察 workspace 忙状态，直至本地执行器也清理完成才恢复编辑、新建、删除、保存和 Run。
+4. Run 先保存文件，再携带新 revision 提交路径。响应包含实际提交的源码视图，页面据此构造 Submitted snapshot。运行中每隔 300ms 查询状态；Execution 按父子关系列出当前步骤，以工作流、节点名称及并行项索引区分，默认选择一个真实的当前步骤。点击当前步骤展示其当前字段并跳转对应 CFG；当前帧消失后改选仍活跃的步骤。Trace 则保留每次已经发生的调用，独立展示真实 Input / Output，循环和重试不会按地址合并，短于轮询间隔的步骤也能在结束后查看。
+5. 成功时突出最终输出及实际返回分支，失败时突出原因，取消时显示已取消；执行 ID 与时间位于默认收起的 Execution details。Cancel 发起协同取消。服务端返回 `202 / running` 表示仍在清理，页面继续轮询并禁用重复取消；进入 `completed`、`failed` 或 `cancelled` 时停止查询普通执行状态。Trace 独立观察到最终记录后停止，失败或断连时保留已有数据并重试，也可点击 Retry trace。页面继续观察 workspace 忙状态，直至本地执行器也清理完成才恢复编辑、新建、删除、保存和 Run。
 
-Canvas source 的 Submitted snapshot 始终对应提交时的编译结果。清理结束后编辑源码会切换到 Editor compilation；点击帧可返回执行快照。离开页面只停止观察，不会取消已提交的执行。
+画布来源自动选择：提交或恢复运行时使用该轮工作流快照，选择或编辑源码时使用当前编辑内容，点击执行步骤或 Locate in Flow 时使用对应运行快照。Trace 自身始终对应该轮提交，查看 Trace 不覆盖正在编辑的画布。离开页面只停止观察，不会取消已提交的执行；刷新或重开页面会加载本次后端启动期间最近一轮及快照。
 
 `signal` 节点挂起时，标题与步骤显示 `Waiting for signal`，所选步骤的数据区显示精确等待地址，workspace 继续保持忙状态。通过 [Execution 信号接口](../reference/04-execution-http-api.md#投递外部信号) 选择地址并提交输出，例如：
 
@@ -137,11 +147,13 @@ Content-Type: application/json
 return Output(value=input.value * 3)
 ```
 
-每次 Run 前清除 workspace 自有业务包、辅助模块和契约的导入缓存，包括已删除文件的旧模块；清除 workspace 字节码缓存并使导入查找缓存失效，再按普通 Python 规则导入。host、runtime 和第三方库缓存保持原样。若 workspace 根包名已被非 workspace 模块占用，Run 拒绝该名称。运行中不 reload 模块；运行期间外部文件编辑器应避免并发修改该目录，在宿主机修改文件后可在页面点击 Reload (discard edits) 或刷新页面同步最新内容。
+每次 Run 前清除 workspace 自有业务包、辅助模块和契约的导入缓存，包括已删除文件的旧模块；清除 workspace 字节码缓存并使导入查找缓存失效，再按普通 Python 规则导入。host、runtime 和第三方库缓存保持原样。若 workspace 根包名已被非 workspace 模块占用，Run 拒绝该名称。运行中不 reload 模块；运行期间外部文件编辑器应避免并发修改该目录，在宿主机修改文件后可在 Editor 中点击 Discard edits 或刷新页面同步最新内容。
 
 Submitted snapshot 保留实际提交的工作流 `entry + packages`，Python 源码不进入执行历史。工作流与 Python 文件在两次运行之间编辑，修改在后续 Run 生效。通用 module 执行器仍使用标准导入缓存，此 Run 边界由独立 Playground 后端负责。
 
-正常关闭后端会尽力取消当前演示，等待本地清理并关闭 Worker。重启创建新队列，不恢复旧演示，不保存恢复凭据或执行结果。提交结果不确定时，错误详情保留 `execution_id`，可查询或取消原 ID；查询失败不表示执行未创建，也不会自动重新提交。无法确认该 ID 终态时，workspace 保持忙状态，重启后端可开始新的演示。
+正常关闭后端会尽力取消当前演示，等待本地清理并关闭 Worker。最近一轮缓存仅在进程内存中存在，不写入数据库、文件或浏览器历史；没有运行列表。新执行在预检通过并分配 ID 后替换上一轮，保存、编译或输入预检失败保留原记录。提交结果不确定但已取得 ID 时，缓存及后续观察均指向该 ID；页面可从最近一轮接口取得对应源码快照，不会自动重新提交。无法确认该 ID 终态时，workspace 保持忙状态。
+
+重启后端会清空最近一轮缓存并创建新队列，不恢复旧演示。普通 ExecutionService 仍为无缓存通用服务，已关闭执行的 get / wait 仅依赖 Temporal history，无需 Worker。Playground 显式启用 runtime 的可选 `record_trace`；累计 trace 查询（包括已关闭 Workflow 与其 Child Workflow）依赖常驻 Worker，最终记录取得后由 Playground 内存保留，读取最终缓存无需再次查询 Worker。追踪失败不改变执行终态或 workspace 清理锁。
 
 `playground/workspace/` 保存持久化 workspace 文件；`temporal-data` 保存执行历史与结果。`docker compose down` 保留二者，`docker compose down -v` 删除 `temporal-data` 卷。Playground 是受信任的本地演示工具，不提供账户、每浏览器独立 workspace 或旧演示恢复保证。
 
@@ -154,6 +166,7 @@ Submitted snapshot 保留实际提交的工作流 `entry + packages`，Python �
 | `GET /v1/workspace` | 返回文件路径、文本、生成标记、revision、busy 和当前 execution_id。 |
 | `PUT /v1/workspace` | 接收 revision 与完整 `{path,text}` 文件集合，缺少的普通文件表示删除；忙时返回 409。 |
 | `POST /v1/workspace/executions` | 接收 entry、可选 input 文件路径和 revision，返回 Execution、实际 source 与生成后的 workspace；忙时返回 409。 |
+| `GET /v1/workspace/trace` | 返回当前或最近一轮的 execution_id、Execution（提交结果未知时可为 null）、source、累计 spans、observed_at、complete 与 trace_error；无记录时返回 null。可传 execution_id 查询参数校验该轮，已替换或重启清空时返回 404。 |
 | `GET /v1/executions/{id}` | 沿用现有状态投影。 |
 | `POST /v1/executions/{id}:cancel` | 沿用现有协同取消。 |
 | `POST /v1/executions/{id}:signal` | 向 `Frame.waiting` 地址投递输出和可选分支、步数，沿用宿主信号契约。 |
@@ -170,7 +183,7 @@ Submitted snapshot 保留实际提交的工作流 `entry + packages`，Python �
 {"integer":99999999999999999999999999999999999,"number":1.0,"ordered":{"2":2,"1":1,"z":3}}
 ```
 
-重复对象键、非有限数值、非法 JSON 和非对象 Input 会在提交前报错。响应中的 `frames[].variables`、`result.output` 和错误详情按原始 token 提取并仅调整空白；字段表也保留字段与嵌套对象的原始键序及数值精度。宿主可规范化等价的十进制写法，数值与 integer/number 类别遵循 [HTTP API 无损 JSON 契约](../reference/04-execution-http-api.md)。WASM 编译与查询 API 继续使用原始 JSON 契约，直接查询测试保留枚举数值与键序的校验。
+重复对象键、非有限数值、非法 JSON 和非对象 Input 会在提交前报错。响应中的 `frames[].variables`、`result.output`、trace 的 `spans[].input` / `output` 和错误详情按原始 token 提取并仅调整空白；字段表也保留字段与嵌套对象的原始键序及数值精度。宿主可规范化等价的十进制写法，数值与 integer/number 类别遵循 [HTTP API 无损 JSON 契约](../reference/04-execution-http-api.md)。WASM 编译与查询 API 继续使用原始 JSON 契约，直接查询测试保留枚举数值与键序的校验。
 
 ## 验证
 
@@ -192,7 +205,7 @@ uv run --locked pyrefly check
 
 浏览器测试会选择临时 HTTP、页面端口和 workspace 目录，结束时关闭测试 Worker 和 Server。覆盖保存与重载、跨页面冲突、提交和运行期间禁止编辑与文件操作、完成或取消清理后恢复编辑、Python 与契约修改后重跑、工作流提交视图、CFG/步骤联动及无损 JSON；同时检查文件区与编辑区独立折叠、恢复后内容与位置保留、文件与诊断重开编辑区、生命周期提示、面板切换与收起、轮询期间保留面板选择、键盘焦点、缩放及长内容溢出约束。布局与双折叠画布截图覆盖 1600×1000、1280×800、900×900 与 390×844，并包含步骤数据、成功结果与失败界面。Temporal 测试服务器与 Playwright 浏览器首次使用时需要下载；截图位于 `playground/.browser-test/`。
 
-后端集成测试默认下载并启动 Temporal CLI v1.6.1 的开发服务器，验证 Worker 复用、再次导入、图内并发与取消清理。设置 `AXCUTOR_TEST_TEMPORAL_ADDRESS` 可改用已有的测试专用服务器；测试使用独立执行 ID 和队列。
+后端集成测试默认下载并启动 Temporal CLI v1.6.1 的开发服务器，验证 Worker 复用、再次导入、图内并发、取消清理、最近一轮替换与预检保留、关闭后的 Child Workflow trace 及追踪故障重试。runtime 测试使用真实 Temporal 和 history 重放，覆盖快速循环、无损值、并行重试及失败/取消的部分 trace。浏览器检查时间线、零时间调用、独立 Input / Output、缩放/定位与页面重开恢复，并将 trace 截图存入同一目录。设置 `AXCUTOR_TEST_TEMPORAL_ADDRESS` 可改用已有的测试专用服务器；测试使用独立执行 ID 和队列。
 
 仅运行独立后端测试时使用 `uv run --locked pytest playground/backend/tests`。根 pytest、Pyrefly 与 CI 已包含该包；CI 的静态检查也覆盖其源码、测试和浏览器辅助脚本。
 

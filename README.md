@@ -9,9 +9,11 @@ Axcutor 将 YAML/JSON 工作流编译为自包含快照，通过 Temporal 执行
 docker compose up
 ```
 
-打开 [Playground](http://localhost:8080)，即可编辑真实 YAML/JSON/Python 文件、选择入口与输入文件、运行 module 工作流，并查看 CFG、当前步骤、所选步骤数据及最终结果。默认示例将 `[3,1,2]` 并发倍增为 `[6,2,4]`，汇总得到 `12`。
+打开 [Playground](http://localhost:8080)，即可编辑真实 YAML/JSON/Python 文件、按模块名选择入口、指定输入文件并运行 module 工作流。流程画布从左到右排列并持续显示，底部 Trace 面板展示执行时间线和每次调用的 Input / Output，Execution 展示最终结果。默认示例将 `[3,1,2]` 并发倍增为 `[6,2,4]`，汇总得到 `12`。
 
 `examples/` 是只读模板；`playground/workspace/` 挂载到容器 `/workspace`。首次启动将示例初始化到 `playground/workspace/`，后续可在网页或宿主机直接编辑该目录下的文件，修改不被纳入 Git 跟踪。后端启动一个常驻 Worker，同一时间运行一个根工作流，图内仍可并发。提交、运行和清理期间，文件内容只读，新建、删除、保存与 Run 不可用；结束后可编辑并重跑，下一次 Run 重新导入当前 Python。多个页面共享 workspace，revision 冲突或运行忙时返回 `409`。详见 [Web Playground](manual/docs/guide/00-web-playground.md)。
+
+Playground 进程仅在内存中保留当前或最近一轮的 trace、结果与提交时工作流快照，刷新或重开页面可继续查看。新执行替换上一轮，保存或预检失败保留上一轮；后端重启清空记录。不提供运行历史列表或额外持久化存储。
 
 ## 使用 Docker CLI 执行工作流
 

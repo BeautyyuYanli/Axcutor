@@ -131,6 +131,72 @@ def openapi_schema() -> dict[str, Any]:
                 },
                 ["execution", "source", "workspace"],
             ),
+            "TraceError": obj({"type": text, "message": text}, ["type", "message"]),
+            "TraceEvent": {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {"kind": text, "at": text},
+                "required": ["kind", "at"],
+            },
+            "TraceSpan": obj(
+                {
+                    "id": text,
+                    "parent_id": {"type": ["string", "null"]},
+                    "kind": text,
+                    "address": text,
+                    "frame_kind": {"type": "string", "enum": ["function", "iteration"]},
+                    "cursor": text,
+                    "started_at": text,
+                    "finished_at": {"type": ["string", "null"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["running", "completed", "failed", "cancelled"],
+                    },
+                    "input": {"type": "object", "additionalProperties": True},
+                    "output": {"type": ["object", "null"], "additionalProperties": True},
+                    "branch": {"type": ["string", "null"]},
+                    "error": {"anyOf": [ref("TraceError"), {"type": "null"}]},
+                    "attempt": {"type": "integer"},
+                    "events": {"type": "array", "items": ref("TraceEvent")},
+                },
+                [
+                    "id",
+                    "parent_id",
+                    "kind",
+                    "address",
+                    "frame_kind",
+                    "cursor",
+                    "started_at",
+                    "finished_at",
+                    "status",
+                    "input",
+                    "output",
+                    "branch",
+                    "error",
+                    "events",
+                ],
+            ),
+            "LatestTrace": obj(
+                {
+                    "execution_id": text,
+                    "execution": {"anyOf": [ref("Execution"), {"type": "null"}]},
+                    "source": ref("SubmittedSource"),
+                    "spans": {"type": "array", "items": ref("TraceSpan")},
+                    "observed_at": {"type": ["string", "null"]},
+                    "complete": {"type": "boolean"},
+                    "trace_error": {"type": ["string", "null"]},
+                },
+                [
+                    "execution_id",
+                    "execution",
+                    "source",
+                    "spans",
+                    "observed_at",
+                    "complete",
+                    "trace_error",
+                ],
+            ),
+            "LatestTraceResponse": {"anyOf": [ref("LatestTrace"), {"type": "null"}]},
         }
     )
 
@@ -159,6 +225,16 @@ def openapi_schema() -> dict[str, Any]:
     paths["/v1/workspace/executions"] = {
         "post": operation("runWorkspace", "WorkspaceExecution", "RunWorkspaceRequest"),
     }
+    paths["/v1/workspace/trace"] = {"get": operation("getLatestTrace", "LatestTraceResponse")}
+    paths["/v1/workspace/trace"]["get"]["parameters"] = [
+        {
+            "name": "execution_id",
+            "in": "query",
+            "required": False,
+            "schema": text,
+            "description": "If supplied, reject a replaced trace rather than returning another run",
+        }
+    ]
     return schema
 
 
@@ -216,6 +292,13 @@ def create_playground_app(playground: Playground, static: Path | None = None) ->
     async def get(request: Request) -> Response:
         return _json(await playground.executions.get(request.path_params["execution_id"]))
 
+    async def trace(request: Request) -> Response:
+        latest = playground.latest
+        expected = request.query_params.get("execution_id")
+        if expected and (latest is None or latest["execution_id"] != expected):
+            return _error("execution_not_found", "This trace has been replaced or cleared", 404)
+        return _json(latest)
+
     async def cancel(request: Request) -> Response:
         execution = await playground.executions.cancel(request.path_params["execution_id"])
         return _json(execution, 202 if execution["status"] == "running" else 200)
@@ -245,6 +328,7 @@ def create_playground_app(playground: Playground, static: Path | None = None) ->
             Route("/openapi.json", schema, methods=["GET"]),
             Route("/v1/workspace", workspace, methods=["GET", "PUT"]),
             Route("/v1/workspace/executions", submit, methods=["POST"]),
+            Route("/v1/workspace/trace", trace, methods=["GET"]),
             Route(
                 "/v1/executions/{execution_id:playground_execution_id}:cancel",
                 cancel,

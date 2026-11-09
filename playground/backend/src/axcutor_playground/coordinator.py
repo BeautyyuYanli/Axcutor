@@ -1,9 +1,10 @@
 """One resident Worker, one workspace and one root execution at a time.
 
-Temporal owns history/results. Only the active ID, its completion waiter and
-local executor calls live here. Imports are discarded between runs, never while
-business code is in flight. A lost submission response keeps the workspace busy
-until that ID is observed terminal; it must never trigger another submission.
+Temporal owns execution state. This process retains only the current/latest
+run's source, view and cumulative trace; a new preflight-approved ID replaces it.
+Imports are discarded between runs, never while business code is in flight.
+A lost submission response keeps the workspace busy until that ID is observed
+terminal; it must never trigger another submission.
 """
 
 import asyncio
@@ -12,7 +13,8 @@ import logging
 import shutil
 import sys
 from contextlib import suppress
-from datetime import timedelta
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
 from uuid import uuid4
@@ -34,7 +36,9 @@ from axcutor_runtime.contracts import generate_contracts
 from axcutor_runtime.module import module_executor
 from axcutor_runtime.packages import load_packages
 from axcutor_runtime.worker import create_worker
+from axcutor_runtime.workflow import AxcutorInterpreterWorkflow
 from temporalio.client import Client
+from temporalio.common import QueryRejectCondition
 from temporalio.worker import Worker
 
 from .workspace import Workspace, WorkspaceConflict, WorkspaceView, discover_mounts, source_path
@@ -58,20 +62,34 @@ class WorkspaceExecution(TypedDict):
     workspace: WorkspaceState
 
 
+class LatestTrace(TypedDict):
+    execution_id: str
+    execution: Execution | None
+    source: SubmittedSource
+    spans: list[JsonObject]
+    observed_at: str | None
+    complete: bool
+    trace_error: str | None
+
+
 class Playground:
     """Own one Worker for the ASGI lifespan; refuse writes while busy.
 
     Executor wrappers count concurrent calls without serializing a graph. The
     completion waiter clears the ID only after Temporal closes and those calls
     drain. Save and Run preparation do not yield while holding the storage lock.
+    The latest-record observer retries independently of that cleanup lock and
+    stops after final capture or replacement by the next preflight-approved ID.
     """
 
     def __init__(self, client: Client, workspace: Workspace) -> None:
         self.client = client
         self.workspace = workspace
         self.queue = "axcutor-playground-" + str(uuid4())
-        self.executions = ExecutionService(client, self.queue)
+        self.executions = ExecutionService(client, self.queue, options={"record_trace": True})
         self.execution_id: str | None = None
+        self.latest: LatestTrace | None = None
+        self._trace_observer: asyncio.Task[None] | None = None
         self._completion: asyncio.Task[None] | None = None
         self._worker: Worker | None = None
         self._module: Executor = module_executor({})
@@ -123,6 +141,10 @@ class Playground:
                 with suppress(asyncio.CancelledError):
                     await self._completion
             if self._worker:
+                if self._trace_observer:
+                    self._trace_observer.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await self._trace_observer
                 await self._worker.__aexit__(None, None, None)
                 self._worker = None
         finally:
@@ -212,9 +234,22 @@ class Playground:
             self._module = module_executor({mount.name: mount.name for mount in mounts})
             execution_id = str(uuid4())
             self.execution_id = execution_id
+            if self._trace_observer:
+                self._trace_observer.cancel()
+            record: LatestTrace = {
+                "execution_id": execution_id,
+                "execution": None,
+                "source": {"entry": entry_id, "packages": deepcopy(packages)},
+                "spans": [],
+                "observed_at": None,
+                "complete": False,
+                "trace_error": None,
+            }
+            self.latest = record
 
         try:
             execution = await self.executions.submit(entry_id, packages, inputs, execution_id)
+            record["execution"] = execution
         except RuntimeUnavailable as error:
             raise RuntimeUnavailable(
                 "submission outcome unknown; observe or cancel this ID, do not resubmit",
@@ -224,6 +259,7 @@ class Playground:
             # This waiter also survives an HTTP disconnect or an ambiguous ACK.
             # It only observes this ID; NOT_FOUND never authorizes a new start.
             self._completion = asyncio.create_task(self._wait_until_done(execution_id))
+            self._trace_observer = asyncio.create_task(self._observe_trace(record))
         return {
             "execution": execution,
             "source": {"entry": entry_id, "packages": packages},
@@ -233,10 +269,107 @@ class Playground:
     async def _wait_until_done(self, execution_id: str) -> None:
         while True:
             try:
-                await self.executions.wait(execution_id)
+                execution = await self.executions.wait(execution_id)
+                if self.latest and self.latest["execution_id"] == execution_id:
+                    self.latest["execution"] = execution
                 break
             except (RuntimeUnavailable, ExecutionNotFound):
                 logger.warning("Awaiting uncertain execution %s", execution_id)
                 await asyncio.sleep(1)
         await self._drained.wait()
         self.execution_id = None
+
+    async def _observe_trace(self, record: LatestTrace) -> None:
+        """Capture final trace independently of the workspace cleanup lock.
+
+        Queries replay closed Workflows on the resident Worker, including failed
+        and cancelled runs. A failed observation never changes execution status
+        or prevents cleanup. Retry until captured or replaced by a new ID.
+        """
+        while self.latest is record:
+            terminal = (
+                record["execution"] is not None and record["execution"]["status"] != "running"
+            )
+            try:
+                spans, observed_at, problem = await self._read_trace(record["execution_id"])
+                if problem:
+                    # A child outage must not discard either newly observed root
+                    # calls or already captured child calls. IDs are per invocation.
+                    merged = {span["id"]: span for span in record["spans"]}
+                    merged.update({span["id"]: span for span in spans})
+                    spans = list(merged.values())
+                record["spans"] = spans
+                record["observed_at"] = observed_at
+                record["trace_error"] = problem
+                if terminal and not problem:
+                    record["complete"] = True
+                    return
+            except RuntimeUnavailable as error:
+                record["trace_error"] = str(error)
+            await asyncio.sleep(0.3)
+
+    async def _read_trace(self, execution_id: str) -> tuple[list[JsonObject], str, str | None]:
+        """Flatten child traces with run-scoped IDs and the active-frame address mapping.
+
+        Links remain in cumulative runtime spans after child frames disappear.
+        Child queries pin the exact run; only this Playground cache owns records.
+        Payload JSON is decoded with the same lossless codec as Execution values.
+        """
+        spans: list[JsonObject] = []
+        problems: list[str] = []
+
+        async def read(
+            workflow_id: str,
+            run_id: str | None = None,
+            parent: str | None = None,
+            prefix: tuple[str, str] | None = None,
+        ) -> str:
+            handle = self.client.get_workflow_handle(workflow_id, run_id=run_id)
+            try:
+                async with asyncio.timeout(5):
+                    snapshot = await handle.query(
+                        AxcutorInterpreterWorkflow.get_execution_trace,
+                        reject_condition=QueryRejectCondition.NONE,
+                        rpc_timeout=timedelta(seconds=5),
+                    )
+            except Exception as error:
+                raise RuntimeUnavailable(f"Trace unavailable: {error}") from error
+            local = snapshot["spans"]
+            id_prefix = f"{workflow_id}:{run_id or 'root'}:"
+            for item in local:
+                child = item.pop("child_execution", None)
+                span_id = id_prefix + str(item["id"])
+                item["id"] = span_id
+                item["parent_id"] = (
+                    id_prefix + str(item["parent_id"]) if item["parent_id"] is not None else parent
+                )
+                if prefix:
+                    item["address"] = prefix[1] + item["address"].removeprefix(prefix[0])
+                    for event in item["events"]:
+                        if "address" in event:
+                            event["address"] = prefix[1] + event["address"].removeprefix(prefix[0])
+                item["input"] = loads(item.pop("input_json"))
+                output = item.pop("output_json")
+                item["output"] = loads(output) if output is not None else None
+                spans.append(item)
+                if child:
+                    # A child starts at its callee entry. Keep the same address
+                    # prefix replacement used for active-frame snapshots.
+                    try:
+                        await read(
+                            child["workflow_id"],
+                            child["run_id"],
+                            span_id,
+                            (child["entry"], item["address"]),
+                        )
+                    except RuntimeUnavailable as error:
+                        problems.append(str(error))
+            return snapshot["observed_at"]
+
+        recorded_at = await read(execution_id)
+        # Query-only activations retain the last Workflow Task's logical time.
+        # Open bars extend to this real observation time; completed span endpoints
+        # remain replayable Workflow events. Preserve the logical lower bound if
+        # a test server has advanced its clock or the hosts' clocks differ.
+        observed_at = max(datetime.fromisoformat(recorded_at), datetime.now(UTC))
+        return spans, observed_at.isoformat(), "; ".join(problems) or None

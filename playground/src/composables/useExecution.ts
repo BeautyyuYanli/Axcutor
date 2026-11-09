@@ -92,6 +92,9 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
       const id = envelope?.error?.details?.execution_id;
       if (submission && result.response?.status === 503 && envelope?.error?.code === 'runtime_unavailable'
         && typeof id === 'string' && id.length > 0) {
+        execution.value = null;
+        source.value = null;
+        slices.value = { frameVariablesRaw: new Map(), resultOutputRaw: null };
         observedId.value = id;
       }
       error.value = {
@@ -129,11 +132,7 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
     generation++;
     clearTimer();
     abortRequests();
-    execution.value = null;
-    observedId.value = null;
-    slices.value = { frameVariablesRaw: new Map(), resultOutputRaw: null };
     error.value = null;
-    source.value = null;
     workspace.value = null;
     cancelRequested.value = false;
     submitting.value = true;
@@ -157,5 +156,13 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
     schedule();
   }
 
-  return { execution, observedId, slices, error, source, workspace, submitting, cancelRequested, run, cancel };
+  function restore(raw: string | null, id: string, submittedSource: SubmittedSource) {
+    if (disposed || submitting.value || execution.value || observedId.value) return;
+    source.value = submittedSource;
+    if (raw && raw !== 'null') accept(raw, generation);
+    else observedId.value = id;
+    schedule();
+  }
+
+  return { execution, observedId, slices, error, source, workspace, submitting, cancelRequested, run, cancel, restore };
 }

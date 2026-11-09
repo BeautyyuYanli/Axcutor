@@ -1,17 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue';
 import SourceWorkspace from './components/SourceWorkspace.vue';
 import CfgCanvas from './components/CfgCanvas.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
 import ExecutionInspector from './components/ExecutionInspector.vue';
+import TraceCanvas from './components/TraceCanvas.vue';
+import TraceInspector from './components/TraceInspector.vue';
 import { compileSource, useCompiler } from './composables/useCompiler';
 import { useExecution } from './composables/useExecution';
+import { useLatestTrace } from './composables/useLatestTrace';
 import { useWorkspace } from './composables/useWorkspace';
 import { workspaceSource } from './utils/workspace';
 import type { CompileOutput, Diagnostic, Scope } from './types/compiler';
 import type { Frame } from './client/types.gen';
 import { locateFrame, sameScope } from './utils/graphLayout';
 import { executionSteps, executionSummary, flattenSteps } from './utils/executionView';
+import { locateSpan } from './utils/traceView';
 
 const workspace = useWorkspace();
 const { files, busy, serverBusy, dirty, loaded, problem: workspaceProblem } = workspace;
@@ -27,11 +31,51 @@ const entry = computed(() => preview.value.source?.entry ?? '__main__');
 const scope = ref<Scope>({ workflowId: entry.value, scopeGraphPath: [] });
 const selectedNode = ref<string | null>(null);
 const selectedFrameKey = ref<string | null>(null);
+const selectedSpanId = ref<string | null>(null);
 const canvasSource = ref<'editor' | 'execution'>('editor');
 const submitted = shallowRef<CompileOutput | null>(null);
 const { ready, error: compilerError, compileOutput } = useCompiler(entry, packages);
-const { execution, observedId, slices, source: submittedSource, workspace: runWorkspace, error: httpError, submitting, cancelRequested, run, cancel } = useExecution();
+const { execution, observedId, slices, source: submittedSource, workspace: runWorkspace, error: httpError, submitting, cancelRequested, run, cancel, restore: restoreExecution } = useExecution();
+const trace = useLatestTrace();
+const { view: traceView, problem: traceProblem } = trace;
+const currentId = computed(() => observedId.value ?? execution.value?.execution_id ?? null);
+watch(currentId, id => {
+  selectedNode.value = null;
+  selectedFrameKey.value = null;
+  selectedSpanId.value = null;
+  if (id) trace.track(id);
+});
+const runSource = computed(() => traceView.value?.metadata.execution_id === currentId.value
+  ? traceView.value.metadata.source : submittedSource.value);
+let snapshotId: string | null = null;
+watch([ready, runSource, currentId], () => {
+  if (currentId.value !== snapshotId) { submitted.value = null; canvasSource.value = 'editor'; }
+  if (!ready.value || !runSource.value || !currentId.value || snapshotId === currentId.value) return;
+  submitted.value = compileSource(runSource.value);
+  snapshotId = currentId.value;
+  // A delayed recovery may arrive after editing began. Make the submitted
+  // snapshot available without replacing the user's editor view or scope.
+  if (!loaded.value || !dirty.value) {
+    canvasSource.value = 'execution';
+    navigate({ workflowId: runSource.value.entry, scopeGraphPath: [] });
+  }
+});
+watch(traceView, value => {
+  const spans = value?.metadata.spans ?? [];
+  if (!spans.some(span => span.id === selectedSpanId.value)) {
+    const parents = new Set(spans.map(span => span.parent_id));
+    selectedSpanId.value = spans.find(span => !parents.has(span.id))?.id ?? null;
+  }
+});
 const preparing = ref(false);
+// Every first successful observation can restore the page, including Retry
+// after bootstrap failed. Execution guards protect an already observed ID;
+// preparation also covers Save/Run before a new submission has returned its ID.
+watch([traceView, preparing], ([value, isPreparing]) => {
+  if (value && !isPreparing) restoreExecution(
+    value.json.raw(['execution']), value.metadata.execution_id, value.metadata.source,
+  );
+});
 const current = computed(() => canvasSource.value === 'execution' ? submitted.value : compileOutput.value);
 const bundle = computed(() => current.value?.bundle ?? null);
 const analysis = computed(() => current.value?.analysis.find(item => sameScope({
@@ -43,8 +87,14 @@ const writeBlocked = computed(() => serverBusy.value || preparing.value || submi
 const readOnly = computed(() => busy.value || writeBlocked.value || !loaded.value);
 const workflowFiles = computed(() => files.value.filter(file => /\.(yaml|yml|json)$/.test(file.path)).sort((a, b) => a.path.localeCompare(b.path)));
 const inputFiles = computed(() => workflowFiles.value.filter(file => file.path.endsWith('.json')));
-const activePanel = ref<'execution' | 'diagnostics'>('execution');
+const entryOptions = computed(() => workflowFiles.value.map(file => {
+  // Use the same discovery as preview and Run; standalone documents are __main__.
+  try { return { path: file.path, name: workspaceSource(files.value, file.path).entry }; }
+  catch { return { path: file.path, name: 'Invalid entry' }; }
+}));
+const activePanel = ref<'execution' | 'trace' | 'diagnostics'>('execution');
 const panelOpen = ref(false);
+const traceDetails = ref<HTMLElement | null>(null);
 const filesOpen = ref(true);
 const editorOpen = ref(true);
 const summary = computed(() => executionSummary({
@@ -63,16 +113,20 @@ watch(steps, value => {
   }
 });
 const workspaceNotice = computed(() => {
-  if (preparing.value || submitting.value) return 'Files are read-only during submission.';
-  if (serverBusy.value) return execution.value && execution.value.status !== 'running'
-    ? 'Execution has finished. The shared workspace is still busy with local work or cleanup; files remain read-only.'
-    : 'The shared workspace is busy with an execution or cleanup; files remain read-only.';
-  if (observedId.value) return 'Files remain read-only while this execution is observed.';
-  if (busy.value) return 'Updating workspace files…';
+  if (preparing.value || submitting.value) return '';
+  if (serverBusy.value && execution.value && execution.value.status !== 'running') {
+    return 'Execution finished. The workspace is still busy with local work or cleanup.';
+  }
+  if (cancelRequested.value || (observedId.value && (httpError.value || !execution.value))) return summary.value.message;
+  if (serverBusy.value && !currentId.value) return 'The shared workspace is busy in another page.';
   return '';
 });
 const diagnosticCount = computed(() => diagnostics.value.length + Number(!!(preview.value.error ?? compilerError.value)) + Number(!!workspaceProblem.value) + Number(!!httpError.value));
-function showPanel(panel: 'execution' | 'diagnostics') { activePanel.value = panel; panelOpen.value = true; }
+function showPanel(panel: 'execution' | 'trace' | 'diagnostics') { activePanel.value = panel; panelOpen.value = true; }
+function togglePanel(panel: 'execution' | 'trace' | 'diagnostics') {
+  if (activePanel.value === panel) panelOpen.value = !panelOpen.value;
+  else showPanel(panel);
+}
 // Initialization errors must be visible before ready; other editor problems
 // wait for loading. Execution polling must not change the selected panel.
 watch(() => !compilerError.value && (!loaded.value || !ready.value) ? '' : JSON.stringify([
@@ -133,6 +187,20 @@ function selectNode(id: string) {
   const frame = find(execution.value?.frames ?? []);
   if (frame) selectedFrameKey.value = `${frame.kind}:${frame.address}`;
 }
+function selectSpan(id: string) {
+  selectedSpanId.value = id;
+  showPanel('trace');
+  void nextTick(() => traceDetails.value?.scrollTo({ top: 0 }));
+}
+function locateSelectedSpan() {
+  const span = traceView.value?.metadata.spans.find(item => item.id === selectedSpanId.value);
+  if (!span || !submitted.value?.bundle) return;
+  const target = locateSpan(submitted.value.bundle, span);
+  if (!target) return;
+  canvasSource.value = 'execution';
+  scope.value = { workflowId: target.workflowId, scopeGraphPath: target.scopeGraphPath };
+  selectedNode.value = target.nodeId ?? null;
+}
 async function submit() {
   if (!compileOutput.value?.bundle || preparing.value) return;
   showPanel('execution');
@@ -142,31 +210,17 @@ async function submit() {
   try {
     const revision = await workspace.save();
     if (!revision) { showPanel('diagnostics'); return; }
-    // A new submission may return only an ID; its frames cannot use an older bundle.
-    submitted.value = null;
-    selectedFrameKey.value = null;
-    canvasSource.value = 'editor';
-    navigate({ workflowId: entry.value, scopeGraphPath: [] });
     const accepted = await run(path, input, revision);
     // An uncertain submission with an ID still belongs in the execution view.
     if (!accepted && observedId.value === null) showPanel('diagnostics');
     if (runWorkspace.value) workspace.accept(runWorkspace.value);
     else await workspace.observe();
-    if (accepted && submittedSource.value) {
-      submitted.value = compileSource(submittedSource.value);
-      canvasSource.value = 'execution';
-      navigate({ workflowId: submittedSource.value.entry, scopeGraphPath: [] });
-      selectedFrameKey.value = null;
-    }
   } finally { preparing.value = false; }
 }
-function changeCanvasSource() {
-  const id = canvasSource.value === 'execution' ? submitted.value?.bundle?.entry : entry.value;
-  navigate({ workflowId: id ?? entry.value, scopeGraphPath: [] });
-}
 watch(entryPath, value => { selectFile(value); });
-watch(entry, value => { navigate({ workflowId: value, scopeGraphPath: [] }); });
+watch(entry, value => { if (canvasSource.value === 'editor') navigate({ workflowId: value, scopeGraphPath: [] }); });
 onMounted(async () => {
+  void trace.restore();
   await workspace.load();
   if (!files.value.some(file => file.path === entryPath.value)) entryPath.value = files.value.find(file => /\.(yaml|yml|json)$/.test(file.path))?.path ?? '';
   if (!files.value.some(file => file.path === inputPath.value)) inputPath.value = '';
@@ -175,22 +229,10 @@ onMounted(async () => {
 
 <template>
   <main class="app-shell">
-    <header class="app-toolbar">
-      <h1>Axcutor Playground</h1>
-      <p role="status" data-workspace-state>{{ !loaded ? 'Loading workspace…' : dirty ? 'Unsaved changes' : 'Saved' }}</p>
-      <div class="toolbar-actions" role="group" aria-label="Workspace actions">
-        <button type="button" :aria-expanded="filesOpen" aria-controls="workspace-files" @click="filesOpen = !filesOpen">Workspace files</button>
-        <button type="button" :aria-expanded="editorOpen" aria-controls="workspace-editor" @click="editorOpen = !editorOpen">Editor</button>
-        <button type="button" :disabled="readOnly" @click="workspace.save">Save files</button>
-        <button type="button" :disabled="busy" @click="workspace.load">Reload (discard edits)</button>
-        <button class="primary-action" type="button" :disabled="readOnly || !ready || !preview.source || !compileOutput?.bundle" @click="submit">{{ preparing || submitting ? 'Submitting…' : 'Run' }}</button>
-        <button type="button" :disabled="observedId === null || cancelRequested" @click="cancel">{{ cancelRequested ? 'Cancelling…' : 'Cancel' }}</button>
-      </div>
-    </header>
     <section class="run-config" aria-label="Run configuration">
       <label>Entry
         <select v-model="entryPath" aria-label="Entry" :title="entryPath">
-          <option v-for="file in workflowFiles" :key="file.path" :value="file.path">{{ file.path }}</option>
+          <option v-for="option in entryOptions" :key="option.path" :value="option.path" :title="option.path">{{ option.name }}</option>
         </select>
       </label>
       <label>Input file
@@ -199,30 +241,38 @@ onMounted(async () => {
           <option v-for="file in inputFiles" :key="file.path" :value="file.path">{{ file.path }}</option>
         </select>
       </label>
-      <label>Canvas source
-        <select v-model="canvasSource" aria-label="Canvas source" @change="changeCanvasSource"><option value="editor">Editor compilation</option><option value="execution" :disabled="!submitted">Submitted snapshot</option></select>
-      </label>
-      <div class="workbench-status" role="status">
+      <div class="run-actions" role="group" aria-label="Run actions">
+        <button class="primary-action" type="button" :disabled="readOnly || !ready || !preview.source || !compileOutput?.bundle" @click="submit">{{ preparing || submitting ? 'Submitting…' : 'Run' }}</button>
+        <button type="button" :disabled="observedId === null || cancelRequested" @click="cancel">{{ cancelRequested ? 'Cancelling…' : 'Cancel' }}</button>
+      </div>
+      <div v-if="compilerError || !ready || preview.error || compileOutput?.diagnostics.length" class="workbench-status" role="status">
         <span>Compiler: {{ compilerError ? 'failed' : !ready ? 'loading' : preview.error || compileOutput?.diagnostics.length ? 'issues found' : 'ready' }}</span>
-        <span>{{ writeBlocked ? 'Files read-only' : busy ? 'Updating files…' : 'Files editable' }}</span>
       </div>
     </section>
     <div class="workbench" :data-files-open="filesOpen" :data-editor-open="editorOpen">
-      <SourceWorkspace :files="files" :files-open="filesOpen" :editor-open="editorOpen" :selected-file="selectedFile" :read-only="readOnly" @file="selectFile" @text="editText" @add="addFile" @remove="removeFile" />
-      <CfgCanvas :bundle="bundle" :scope="scope" :analysis="analysis" :selected-node="selectedNode" :frames="frames" @select="selectNode" @navigate="navigate" />
+      <SourceWorkspace :files="files" :files-open="filesOpen" :editor-open="editorOpen" :selected-file="selectedFile" :read-only="readOnly" :busy="busy" :loaded="loaded" :dirty="dirty" @toggle-files="filesOpen = !filesOpen" @toggle-editor="editorOpen = !editorOpen" @save="workspace.save" @discard="workspace.load" @file="selectFile" @text="editText" @add="addFile" @remove="removeFile" />
+      <section class="main-canvas" aria-label="Workflow canvas" :data-canvas-source="canvasSource">
+        <CfgCanvas :bundle="bundle" :scope="scope" :analysis="analysis" :selected-node="selectedNode" :frames="frames" @select="selectNode" @navigate="navigate" />
+      </section>
     </div>
-    <section class="bottom-panel" :data-expanded="panelOpen" aria-label="Execution and diagnostics">
+    <section class="bottom-panel" :data-expanded="panelOpen" :data-panel="activePanel" aria-label="Execution and diagnostics">
       <div class="panel-toolbar">
         <div role="group" aria-label="Inspector panels">
-          <button type="button" :aria-pressed="activePanel === 'execution'" aria-controls="execution-panel" @click="showPanel('execution')">Execution · {{ summary.label }}</button>
-          <button type="button" :aria-pressed="activePanel === 'diagnostics'" aria-controls="diagnostics-panel" @click="showPanel('diagnostics')">Diagnostics ({{ diagnosticCount }})</button>
+          <button type="button" :aria-pressed="activePanel === 'execution'" :aria-expanded="activePanel === 'execution' && panelOpen" aria-controls="execution-panel" @click="togglePanel('execution')">Execution · {{ summary.label }}</button>
+          <button type="button" :aria-pressed="activePanel === 'trace'" :aria-expanded="activePanel === 'trace' && panelOpen" aria-controls="trace-panel" @click="togglePanel('trace')">Trace</button>
+          <button type="button" :aria-pressed="activePanel === 'diagnostics'" :aria-expanded="activePanel === 'diagnostics' && panelOpen" aria-controls="diagnostics-panel" @click="togglePanel('diagnostics')">Diagnostics ({{ diagnosticCount }})</button>
         </div>
-        <button type="button" :aria-expanded="panelOpen" aria-controls="inspector-content" @click="panelOpen = !panelOpen">{{ panelOpen ? 'Collapse panel' : 'Expand panel' }}</button>
       </div>
-      <p class="execution-summary" role="status">{{ summary.message }}{{ workspaceNotice ? ` ${workspaceNotice}` : '' }}</p>
+      <p v-if="workspaceNotice" class="execution-summary" role="status">{{ workspaceNotice }}</p>
       <div id="inspector-content" v-show="panelOpen" class="panel-content">
         <div id="execution-panel" v-show="activePanel === 'execution'">
           <ExecutionInspector :execution="execution" :pending-id="observedId" :preparing="preparing || submitting" :slices="slices" :steps="steps" :selected-key="selectedFrameKey" @select="selectFrame" />
+        </div>
+        <div id="trace-panel" v-show="activePanel === 'trace'" class="trace-panel">
+          <TraceCanvas :spans="traceView?.metadata.spans ?? []" :observed-at="traceView?.metadata.observed_at ?? null" :selected-id="selectedSpanId" :problem="traceProblem" :complete="traceView?.metadata.complete ?? false" @select="selectSpan" @retry="trace.retry" />
+          <div ref="traceDetails" class="trace-details">
+            <TraceInspector v-if="traceView && !preparing && !submitting" :view="traceView" :selected-id="selectedSpanId" @locate="locateSelectedSpan" />
+          </div>
         </div>
         <div id="diagnostics-panel" v-show="activePanel === 'diagnostics'">
           <DiagnosticsPanel :diagnostics="diagnostics" :compiler-error="compilerError ?? preview.error" :http-error="httpError" :workspace-error="workspaceProblem" @locate="locateDiagnostic" />

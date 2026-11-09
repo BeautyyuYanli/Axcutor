@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CancelExecutionData, CancelExecutionErrors, CancelExecutionResponses, GetExecutionData, GetExecutionErrors, GetExecutionResponses, GetWorkspaceData, GetWorkspaceErrors, GetWorkspaceResponses, RunWorkspaceData, RunWorkspaceErrors, RunWorkspaceResponses, SaveWorkspaceData, SaveWorkspaceErrors, SaveWorkspaceResponses, SignalExecutionData, SignalExecutionErrors, SignalExecutionResponses } from './types.gen';
+import type { CancelExecutionData, CancelExecutionErrors, CancelExecutionResponses, GetExecutionData, GetExecutionErrors, GetExecutionResponses, GetLatestTraceData, GetLatestTraceErrors, GetLatestTraceResponses, GetWorkspaceData, GetWorkspaceErrors, GetWorkspaceResponses, RunWorkspaceData, RunWorkspaceErrors, RunWorkspaceResponses, SaveWorkspaceData, SaveWorkspaceErrors, SaveWorkspaceResponses, SignalExecutionData, SignalExecutionErrors, SignalExecutionResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -50,3 +50,5 @@ export const runWorkspace = <ThrowOnError extends boolean = false>(options: Opti
         ...options.headers
     }
 });
+
+export const getLatestTrace = <ThrowOnError extends boolean = false>(options?: Options<GetLatestTraceData, ThrowOnError>): RequestResult<GetLatestTraceResponses, GetLatestTraceErrors, ThrowOnError> => (options?.client ?? client).get<GetLatestTraceResponses, GetLatestTraceErrors, ThrowOnError>({ url: '/v1/workspace/trace', ...options });
