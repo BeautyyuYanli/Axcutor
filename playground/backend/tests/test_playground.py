@@ -411,6 +411,50 @@ async def test_execution_routes_preserve_ids_lossless_frames_and_cancellation(
                 await service.cancel(execution_id)
 
 
+async def test_playground_signal_route_uses_execution_contract(server, tmp_path, templates):
+    host = Playground(server.client, Workspace(tmp_path / "data", templates))
+    queue = str(uuid4())
+    service = ExecutionService(server.client, queue)
+    execution_id = "订单 / a/../b\n% ? # :signal"
+    location = "/v1/executions/" + quote(execution_id, safe="").replace(".", "%2E")
+    doc = {"input": {}, "output": {"value": {"type": "number"}}, "run": {"executor": "signal"}}
+    async with create_worker(server.client, queue):
+        await service.submit(
+            "__main__",
+            {"__main__": {"format": "json", "text": dumps(doc)}},
+            execution_id=execution_id,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_playground_app(host)), base_url="http://test"
+        ) as client:
+            try:
+                schema = loads((await client.get("/openapi.json")).text)
+                assert (
+                    schema["paths"]["/v1/executions/{execution_id}:signal"]["post"]["operationId"]
+                    == "signalExecution"
+                )
+                for body, status, code in [
+                    ("{", 400, "invalid_json"),
+                    (dumps({"address": "__main__", "output": None}), 400, "invalid_request"),
+                    (dumps({"address": "__main__", "output": {}}), 422, "signal_validation_failed"),
+                    (dumps({"address": "elsewhere"}), 409, "signal_not_waiting"),
+                ]:
+                    response = await client.post(location + ":signal", content=body)
+                    assert response.status_code == status, response.text
+                    assert loads(response.text)["error"]["code"] == code
+                response = await client.post(
+                    location + ":signal",
+                    content=('{"address":"__main__","output":{"value":1.000000000000000000001}}'),
+                )
+                assert response.status_code in (200, 202), response.text
+                final = await service.wait(execution_id)
+                assert dumps(final["result"]["output"]) == '{"value":1.000000000000000000001}'
+                response = await client.post(location + ":signal", content='{"address":"__main__"}')
+                assert response.status_code == 409
+            finally:
+                await service.cancel(execution_id)
+
+
 async def test_independent_console_entry_starts_http_serves_static_and_runs_modules(
     server, tmp_path, templates
 ):

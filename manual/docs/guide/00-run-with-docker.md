@@ -74,6 +74,27 @@ docker compose run --rm cli run /examples/workflows/demo/main --mount demo=/exam
 
 `--no-wait` 只输出初始 `Execution`，退出码仅反映提交是否成功，不反映执行终态；执行结果需使用返回的 `execution_id` 另行查询。相同 ID 在 Temporal 保留执行记录期间不可重复提交，已完成的执行也会冲突。
 
+## 使用 CLI 恢复等待节点
+
+`signal` 子命令将业务输出投递给 `Frame.waiting` 中的目标地址。完整参数形式为：
+
+```sh
+axcutor signal <execution_id> <address> [--branch <branch_id>] [--output <json_file>] [--step <step>] [--wait]
+```
+
+例如，查询发现等待地址 `__main__/decision`、所属帧 `steps: 2`，节点的 `approved` 分支要求输出 `reviewer: string`，则输出文件 `approval.json` 可为：
+
+```json
+{"reviewer":"alice"}
+```
+
+```sh
+# 地址来自 waiting；step 比较所属帧当前步数，避免循环中的迟到请求。
+uv run --locked axcutor signal order-001 __main__/decision --branch approved --output approval.json --step 2 --wait
+```
+
+省略 `--output` 时使用 `{}`，文件顶层必须是 JSON object；无分支节点省略 `--branch`。`--wait` 在投递后仍运行时继续等待终态，最终仅输出一行无损 `Execution` JSON；指定 `--wait` 时只有 `completed` 退出码为零，未指定时退出码只反映投递成功。连接参数 `--address` 始终表示 Temporal 服务地址，位置参数 `<address>` 表示节点地址。错误码和投递结果不确定时的查询方式见 [Execution API](../reference/04-execution-http-api.md)。
+
 ## 通过 HTTP 提交、查询与取消
 
 `api` 服务在 `http://localhost:8000` 提供接口；可用 `AXCUTOR_HTTP_PORT` 调整宿主端口。以下请求包含一个完整源码快照，工作流将输入整数复制到输出：
@@ -128,7 +149,7 @@ uv run --locked axcutor run examples/workflows/demo/main --mount demo=examples/w
 uv run --locked axcutor serve
 ```
 
-`worker`、`run` 与 `serve` 均接受 `--address`、`--namespace`、`--task-queue`，默认分别读取 `TEMPORAL_ADDRESS`、`TEMPORAL_NAMESPACE`、`AXCUTOR_TASK_QUEUE`，未配置时使用 `localhost:7233`、`default`、`axcutor`。`serve --host 0.0.0.0 --port 8000` 可调整 HTTP 监听地址与端口；HTTP 宿主不启动 Worker。
+`worker`、`run`、`signal` 与 `serve` 均接受 `--address`、`--namespace`、`--task-queue`，默认分别读取 `TEMPORAL_ADDRESS`、`TEMPORAL_NAMESPACE`、`AXCUTOR_TASK_QUEUE`，未配置时使用 `localhost:7233`、`default`、`axcutor`。`serve --host 0.0.0.0 --port 8000` 可调整 HTTP 监听地址与端口；HTTP 宿主不启动 Worker。
 
 本机文件工作台使用独立命令；它在后端生命周期内管理一个常驻 Worker 和一个队列：
 

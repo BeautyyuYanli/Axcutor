@@ -15,7 +15,7 @@ from axcutor_runtime import compile_bundle
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.packages import PackageMount, load_packages
 from axcutor_runtime.worker import create_worker
-from helpers import INTEGER, call, graph
+from helpers import INTEGER, N, action, call, graph
 from temporalio.client import WorkflowFailureError
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples/workflows"
@@ -277,3 +277,83 @@ async def test_cli_failure_exit_code_depends_on_wait_mode(server, tmp_path, no_w
         else:
             final = lines[-1]
     assert final["status"] == "failed" and final["error"]["type"] == "execution"
+
+
+@pytest.mark.parametrize("wait", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+async def test_signal_cli_keeps_target_separate_from_server_and_emits_one_result(
+    server, tmp_path, wait, fail
+):
+    queue = str(uuid4())
+    host = ExecutionService(server.client, queue)
+    doc = graph(
+        {
+            "decision": {
+                "run": {"executor": "signal"},
+                "output": {"value": N},
+                "branches": {"ok": "accepted"},
+            },
+            "after": action(
+                "import asyncio\nawait asyncio.sleep(0.1)\n"
+                + ("raise RuntimeError('after delivery')" if fail else "return Output()")
+            ),
+        },
+        ["start -> decision", "decision.ok -> after", "after -> end"],
+        outputs={"value": N},
+    )
+    output = tmp_path / "output.json"
+    output.write_text('{"value":1.00000000000000000000000001}')
+    async with create_worker(server.client, queue):
+        first = await host.submit("__main__", {"__main__": {"format": "json", "text": dumps(doc)}})
+        code, stdout, stderr = await invoke(
+            "signal",
+            first["execution_id"],
+            "__main__/decision",
+            "--branch",
+            "ok",
+            "--output",
+            output,
+            "--step",
+            1,
+            "--address",
+            server.client.service_client.config.target_host,
+            *(["--wait"] if wait else []),
+        )
+        assert code == (1 if wait and fail else 0), stderr
+        assert len(stdout.splitlines()) == 1
+        response = loads(stdout)
+        assert response["execution_id"] == first["execution_id"]
+        if wait:
+            assert response["status"] == ("failed" if fail else "completed")
+        final = await host.wait(first["execution_id"])
+        if not fail:
+            assert dumps(final["result"]["output"]) == output.read_text()
+
+
+@pytest.mark.parametrize("text", ["null", "[]", "1", "true"])
+async def test_signal_cli_rejects_nonobject_output_before_backend(tmp_path, text):
+    output = tmp_path / "output.json"
+    output.write_text(text)
+    code, stdout, stderr = await invoke(
+        "signal", "missing", "__main__", "--output", output, "--address", "127.0.0.1:1"
+    )
+    assert code == 1 and not stdout
+    assert "output must be an object" in stderr
+
+
+async def test_signal_cli_defaults_to_empty_output(server):
+    queue = str(uuid4())
+    host = ExecutionService(server.client, queue)
+    doc = {"input": {}, "output": {}, "run": {"executor": "signal"}}
+    async with create_worker(server.client, queue):
+        first = await host.submit("__main__", {"__main__": {"format": "json", "text": dumps(doc)}})
+        code, stdout, stderr = await invoke(
+            "signal",
+            first["execution_id"],
+            "__main__",
+            "--wait",
+            "--address",
+            server.client.service_client.config.target_host,
+        )
+        assert code == 0, stderr
+        assert loads(stdout)["result"] == {"branch": None, "output": {}}

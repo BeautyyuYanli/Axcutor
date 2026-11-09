@@ -28,6 +28,8 @@ from temporalio.client import (
     WorkflowHandle,
     WorkflowQueryFailedError,
     WorkflowQueryRejectedError,
+    WorkflowUpdateFailedError,
+    WorkflowUpdateRPCTimeoutOrCancelledError,
 )
 from temporalio.common import QueryRejectCondition, RetryPolicy, WorkflowIDReusePolicy
 from temporalio.service import RPCError, RPCStatusCode
@@ -39,6 +41,7 @@ class Frame(TypedDict):
     kind: Literal["function", "block", "iteration"]
     address: str
     cursor: str
+    waiting: list[str]
     call_depth: int
     steps: int
     max_steps: int | None
@@ -95,6 +98,14 @@ class ExecutionAlreadyExists(HostError):
 
 class RuntimeUnavailable(HostError):
     code = "runtime_unavailable"
+
+
+class SignalNotWaiting(HostError):
+    code = "signal_not_waiting"
+
+
+class SignalValidationError(HostError):
+    code = "signal_validation_failed"
 
 
 def _timestamp(value: datetime) -> str:
@@ -252,8 +263,107 @@ class ExecutionService:
             raise RuntimeUnavailable(f"runtime unavailable: {error}") from error
         return await self._get(execution_id, description.run_id)
 
+    async def signal(
+        self,
+        execution_id: str,
+        address: str,
+        output: JsonObject | None = None,
+        branch: str | None = None,
+        step: int | None = None,
+    ) -> Execution:
+        """Deliver once to a waiting address, transparently crossing Child Workflows.
+
+        Each handle pins its run. After root existence is established, a closed
+        target is a conflict, including a close racing a query or Update. A 503
+        means delivery is unknown; cancelling this caller never cancels the run.
+        """
+        if not isinstance(address, str) or not address:
+            raise InvalidRequest("address must be a nonempty string")
+        if output is not None and not isinstance(output, dict):
+            raise InvalidRequest("output must be an object")
+        if branch is not None and (not isinstance(branch, str) or not branch):
+            raise InvalidRequest("branch must be a nonempty string or null")
+        if step is not None and (type(step) is not int or step < 1):
+            raise InvalidRequest("step must be a positive integer or null")
+        try:
+            # Freeze caller-owned data before any network suspension.
+            request = loads(
+                dumps({"address": address, "output": output or {}, "branch": branch, "step": step})
+            )
+        except (ValueError, TypeError, RecursionError, OverflowError) as error:
+            raise InvalidRequest(str(error)) from error
+        description = await self._describe(self._handle(execution_id))
+        if description.status != WorkflowExecutionStatus.RUNNING:
+            raise SignalNotWaiting(f"execution {execution_id!r} has ended")
+        handle = self._handle(execution_id, description.run_id)
+        current_prefix: str | None = None
+        try:
+            # The overall bound includes lazy connections and Update result polling.
+            async with asyncio.timeout(self._timeout.total_seconds()):
+                while True:
+                    snapshot = await handle.query(
+                        AxcutorInterpreterWorkflow.get_runtime_snapshot,
+                        reject_condition=QueryRejectCondition.NOT_OPEN,
+                        rpc_timeout=self._timeout,
+                    )
+                    nodes = list(snapshot["frames"])
+                    if not nodes:
+                        raise SignalNotWaiting(f"no signal node waiting at {address!r}")
+                    local_root = nodes[0]["address"]
+                    if current_prefix is None:
+                        current_prefix = local_root
+                        if address != local_root and not address.startswith(local_root + "/"):
+                            raise SignalNotWaiting(f"no signal node waiting at {address!r}")
+                    local_target = local_root + address.removeprefix(current_prefix)
+                    remote = None
+                    while nodes:
+                        node = nodes.pop()
+                        if node.get("child_execution") and (
+                            local_target == node["address"]
+                            or local_target.startswith(node["address"] + "/")
+                        ):
+                            remote = node
+                            break
+                        nodes.extend(node["children"])
+                    if remote is None:
+                        break
+                    current_prefix += remote["address"].removeprefix(local_root)
+                    child = remote["child_execution"]
+                    handle = self._handle(child["workflow_id"], child["run_id"])
+                request["address"] = local_target
+                await handle.execute_update(
+                    AxcutorInterpreterWorkflow.deliver_signal,
+                    dumps(request),
+                    rpc_timeout=self._timeout,
+                )
+        except WorkflowUpdateFailedError as error:
+            cause = error.cause
+            if isinstance(cause, exceptions.ApplicationError):
+                if cause.type == "SignalNotWaitingError":
+                    raise SignalNotWaiting(cause.message) from error
+                if cause.type == "SignalValidationError":
+                    raise SignalValidationError(cause.message) from error
+            raise RuntimeUnavailable(f"signal Update failed: {cause}") from error
+        except WorkflowUpdateRPCTimeoutOrCancelledError as error:
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                # The SDK wraps caller cancellation as an Update RPC error.
+                raise asyncio.CancelledError from error
+            raise RuntimeUnavailable(f"signal delivery is unknown: {error}") from error
+        except RPCError as error:
+            if error.status in (RPCStatusCode.NOT_FOUND, RPCStatusCode.FAILED_PRECONDITION):
+                raise SignalNotWaiting(f"no signal node waiting at {address!r}") from error
+            raise RuntimeUnavailable(f"runtime unavailable: {error.message}") from error
+        except WorkflowQueryRejectedError as error:
+            raise SignalNotWaiting(f"no signal node waiting at {address!r}") from error
+        except (WorkflowQueryFailedError, RuntimeError, TimeoutError) as error:
+            raise RuntimeUnavailable(f"runtime unavailable: {error}") from error
+        return await self._get(execution_id, description.run_id)
+
     def _handle(self, execution_id: str, run_id: str | None = None) -> WorkflowHandle[Any, Any]:
-        return self._client.get_workflow_handle(execution_id, run_id=run_id)
+        return self._client.get_workflow_handle(
+            execution_id, run_id=run_id, first_execution_run_id=run_id
+        )
 
     def _rpc_error(self, error: RPCError, execution_id: str) -> HostError:
         if error.status == RPCStatusCode.NOT_FOUND:
@@ -373,6 +483,10 @@ class ExecutionService:
                     "kind": node["kind"],
                     "address": address,
                     "cursor": node["cursor"],
+                    "waiting": [
+                        prefix[1] + waiting.removeprefix(prefix[0]) if prefix else waiting
+                        for waiting in node["waiting"]
+                    ],
                     "call_depth": node["call_depth"],
                     "steps": node["steps"],
                     "max_steps": node["max_steps"],

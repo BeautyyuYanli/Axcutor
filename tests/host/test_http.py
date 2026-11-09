@@ -94,6 +94,11 @@ async def test_openapi_is_stateless_and_matches_execution_shapes():
     cancel = paths["/v1/executions/{execution_id}:cancel"]["post"]
     assert cancel["operationId"] == "cancelExecution"
     assert {"200", "202"} <= cancel["responses"].keys()
+    signal = paths["/v1/executions/{execution_id}:signal"]["post"]
+    assert signal["operationId"] == "signalExecution"
+    assert {"200", "202", "409", "422", "503"} <= signal["responses"].keys()
+    assert components["SignalExecutionRequest"]["additionalProperties"] is False
+    assert components["SignalExecutionRequest"]["required"] == ["address"]
 
 
 @pytest.mark.parametrize(
@@ -110,10 +115,11 @@ async def test_openapi_is_stateless_and_matches_execution_shapes():
         b"{}{}",
     ],
 )
-async def test_invalid_json_is_strict_and_precedes_backend(text):
+@pytest.mark.parametrize("url", ["/v1/executions", "/v1/executions/missing:signal"])
+async def test_invalid_json_is_strict_and_precedes_backend(text, url):
     backend = await Client.connect("127.0.0.1:1", lazy=True)
     async with client_for(backend) as client:
-        assert_error(await client.post("/v1/executions", content=text), 400, "invalid_json")
+        assert_error(await client.post(url, content=text), 400, "invalid_json")
 
 
 @pytest.mark.parametrize(
@@ -305,3 +311,121 @@ async def test_http_roundtrip_preserves_large_integer_decimal_and_map_order(serv
             assert dumps(final["result"]["output"]["result"]) == dumps(value)
             assert final["result"]["branch"] is None and final["frames"] == []
             assert (await client.post(location + ":cancel")).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        None,
+        {},
+        {"address": ""},
+        {"address": 1},
+        {"address": None},
+        {"address": "main", "output": None},
+        {"address": "main", "output": []},
+        {"address": "main", "extra": True},
+        {"address": "main", "branch": ""},
+        {"address": "main", "branch": 1},
+        {"address": "main", "step": True},
+        {"address": "main", "step": 0},
+        {"address": "main", "step": Decimal("1.0")},
+    ],
+)
+async def test_signal_http_shape_errors_precede_backend(body):
+    backend = await Client.connect("127.0.0.1:1", lazy=True)
+    async with client_for(backend) as client:
+        assert_error(
+            await client.post("/v1/executions/missing:signal", content=dumps(body)),
+            400,
+            "invalid_request",
+        )
+
+
+@pytest.mark.parametrize("execution_id", ["signal/.", "signal/..", "订单 / a/../b\n% ? # :signal"])
+async def test_signal_http_routes_lossless_output_conflicts_and_validation(server, execution_id):
+    queue = str(uuid4())
+    host = ExecutionService(server.client, queue)
+    doc = graph(
+        {
+            "decision": {
+                "run": {"executor": "signal"},
+                "output": {"value": N},
+                "branches": {"ok": "approved"},
+            },
+            "after": {"run": {"executor": "signal"}},
+        },
+        ["start -> decision", "decision.ok -> after", "after -> end"],
+        outputs={"value": N},
+    )
+    async with create_worker(server.client, queue), live_client(host) as client:
+        submitted = await client.post(
+            "/v1/executions",
+            content=dumps(
+                {
+                    "entry": "__main__",
+                    "packages": {"__main__": {"format": "json", "text": dumps(doc)}},
+                    "execution_id": execution_id,
+                }
+            ),
+        )
+        assert submitted.status_code == 202, submitted.text
+        location = submitted.headers["location"]
+        body = {"address": "__main__/decision", "branch": "ok", "output": {"value": 7}}
+        for changes in [
+            {"branch": "bad"},
+            {"branch": None},
+            {"output": {}},
+            {"output": {"value": True}},
+        ]:
+            assert_error(
+                await client.post(location + ":signal", content=dumps({**body, **changes})),
+                422,
+                "signal_validation_failed",
+            )
+        for changes in [{"address": "__main__/missing"}, {"step": 2}]:
+            assert_error(
+                await client.post(location + ":signal", content=dumps({**body, **changes})),
+                409,
+                "signal_not_waiting",
+            )
+        before = loads((await client.get(location)).text)
+        assert before["frames"][0]["steps"] == 1
+        assert before["frames"][0]["waiting"] == ["__main__/decision"]
+        value = Decimal("1.0000000000000000000000000001")
+        response = await client.post(
+            location + ":signal",
+            content=dumps(
+                {
+                    **body,
+                    "output": {"value": value},
+                    "step": 1,
+                }
+            ),
+        )
+        assert response.status_code == 202, response.text
+        running = loads(response.text)
+        assert running["frames"][0]["waiting"] == ["__main__/after"]
+        assert running["frames"][0]["variables"] == {"value": value}
+        response = await client.post(
+            location + ":signal",
+            content=dumps(
+                {
+                    "address": "__main__/after",
+                    "branch": None,
+                    "step": None,
+                }
+            ),
+        )
+        result = loads(response.text)
+        assert response.status_code == (202 if result["status"] == "running" else 200)
+        final = await host.wait(execution_id)
+        assert final["result"]["output"] == {"value": value}
+        assert_error(
+            await client.post(location + ":signal", content=dumps(body)), 409, "signal_not_waiting"
+        )
+        assert_error(
+            await client.post(f"/v1/executions/{uuid4()}:signal", content=dumps(body)),
+            404,
+            "execution_not_found",
+        )

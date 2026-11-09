@@ -8,10 +8,11 @@ The native kernel and Decimal codec must be passed through the Temporal sandbox.
 
 import asyncio
 from collections.abc import Awaitable, Sequence
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
 import axcutor_core
 from temporalio import exceptions, workflow
@@ -48,6 +49,22 @@ class Frame:
     steps: int = 0
     cursor: str = "start"
     child_execution: JsonObject | None = None
+
+
+@dataclass
+class _SignalWaiter:
+    """One attempt owned by its waiting coroutine; Updates only claim it once.
+
+    Validators read live frame steps without mutating either object. Delivery
+    removes the address synchronously, before the execution coroutine resumes.
+    """
+
+    frame: Frame
+    address: str
+    output_schema_json: str
+    branches_contract_json: str
+    status: Literal["pending", "delivered", "expired"] = "pending"
+    response: JsonObject | None = None
 
 
 def _path_type(symbols: JsonObject, path: JsonObject) -> JsonObject:
@@ -121,12 +138,16 @@ async def _owned_group(coroutines: Sequence[Awaitable[Any]]) -> list[Any]:
         raise
 
 
-async def _with_timeout(operation: Awaitable[JsonObject], timeout_ms: int) -> JsonObject:
+async def _with_timeout(
+    operation: Awaitable[JsonObject], timeout_ms: int, *, signal: bool = False
+) -> JsonObject:
     """Own the deadline and child together, retaining the timeout selector.
 
     SDK cancellation can raise temporalio.CancelledError rather than asyncio's
     CancelledError, so asyncio.wait_for cannot reliably identify its own timer.
     Explicitly racing a Workflow timer also waits for descendant cleanup.
+    A signal already claimed synchronously by an Update retains its result even
+    if this timer wakes in the same turn. Other operations discard late results.
     """
     task = asyncio.ensure_future(operation)
     timer = asyncio.create_task(workflow.sleep(timedelta(milliseconds=timeout_ms)))
@@ -139,7 +160,14 @@ async def _with_timeout(operation: Awaitable[JsonObject], timeout_ms: int) -> Js
         await asyncio.gather(timer, return_exceptions=True)
         return result
     except BaseException as original:
-        results = await cancel_and_drain([task, timer])
+        signal_deadline = (
+            signal and isinstance(original, Recoverable) and original.selector == "timeout"
+        )
+        results = await cancel_and_drain(
+            [task, timer], message="signal attempt timeout" if signal_deadline else None
+        )
+        if signal_deadline and not isinstance(results[0], BaseException):
+            return results[0]
         if not isinstance(original, (asyncio.CancelledError, exceptions.CancelledError)):
             errors = [result for result in results if isinstance(result, BaseException)]
             if errors:
@@ -149,7 +177,11 @@ async def _with_timeout(operation: Awaitable[JsonObject], timeout_ms: int) -> Js
 
 @workflow.defn
 class AxcutorInterpreterWorkflow:
-    """One read-only bundle plus a tree of active frames, reconstructed by replay."""
+    """One read-only bundle plus a tree of active frames, reconstructed by replay.
+
+    The run coroutine owns the optional, shared signal initialization timer.
+    Attempts only own their waiters; delivering one never waits for that timer.
+    """
 
     def __init__(self) -> None:
         self._frames: dict[int, Frame] = {}
@@ -157,6 +189,11 @@ class AxcutorInterpreterWorkflow:
         self._bundle: JsonObject = {}
         self._bundle_json = ""
         self._options: JsonObject = {}
+        self._waiters: dict[str, _SignalWaiter] = {}
+        self._signal_initialized = False
+        self._signal_init_timer: asyncio.Task[None] | None = None
+        # Tasks inherit their enclosing deadline, independently of sibling tasks.
+        self._deadline_scope: ContextVar[bool] = ContextVar("axcutor_deadline", default=False)
 
     @workflow.run
     async def run(self, request: JsonObject) -> str:
@@ -194,6 +231,12 @@ class AxcutorInterpreterWorkflow:
             raise exceptions.ApplicationError(
                 str(error), type="EngineError", non_retryable=True
             ) from error
+        finally:
+            if self._signal_init_timer is not None:
+                # This task only owns a Workflow sleep. Propagate cancellation
+                # of the run while gathering its cancellation/completion.
+                self._signal_init_timer.cancel()
+                await asyncio.gather(self._signal_init_timer, return_exceptions=True)
 
     @staticmethod
     def _parse_options(options: JsonObject) -> JsonObject:
@@ -243,6 +286,11 @@ class AxcutorInterpreterWorkflow:
                 "address": frame.address,
                 "call_depth": frame.call_depth,
                 "cursor": frame.cursor,
+                "waiting": [
+                    w.address
+                    for w in self._waiters.values()
+                    if w.frame.id == frame.id and w.status == "pending"
+                ],
                 "steps": frame.steps,
                 "max_steps": frame.max_steps,
                 "env_json": dumps(frame.env),
@@ -262,6 +310,117 @@ class AxcutorInterpreterWorkflow:
             else:
                 roots.append(nodes[frame.id])
         return {"frames": roots}
+
+    def _validate_signal_request(self, request_json: str) -> tuple[_SignalWaiter, str]:
+        """Reject invalid Updates without state changes or accepted history events."""
+        try:
+            request = loads(request_json)
+            if (
+                not isinstance(request, dict)
+                or not {"address", "output"} <= request.keys()
+                or request.keys() - {"address", "branch", "output", "step"}
+                or not isinstance(request["address"], str)
+                or not request["address"]
+                or not isinstance(request["output"], dict)
+                or (
+                    request.get("branch") is not None
+                    and (not isinstance(request["branch"], str) or not request["branch"])
+                )
+                or (
+                    request.get("step") is not None
+                    and (type(request["step"]) is not int or request["step"] < 1)
+                )
+            ):
+                raise ValueError("invalid signal request")
+        except (ValueError, TypeError, RecursionError, OverflowError) as error:
+            raise exceptions.ApplicationError(
+                str(error), type="SignalValidationError", non_retryable=True
+            ) from error
+        address = request["address"]
+        waiter = self._waiters.get(address)
+        if waiter is None or waiter.status != "pending":
+            raise exceptions.ApplicationError(
+                f"no signal node waiting at {address!r}",
+                type="SignalNotWaitingError",
+                non_retryable=True,
+            )
+        step = request.get("step")
+        if step is not None and waiter.frame.steps != step:
+            raise exceptions.ApplicationError(
+                f"signal step mismatch at {address!r}: "
+                f"expected {step}, current {waiter.frame.steps}",
+                type="SignalNotWaitingError",
+                non_retryable=True,
+            )
+        try:
+            validated = axcutor_core.validate_run_contract(
+                dumps({"branch": request.get("branch"), "output": request["output"]}),
+                waiter.output_schema_json,
+                waiter.branches_contract_json,
+            )
+        except (
+            axcutor_core.ContractError,
+            ValueError,
+            TypeError,
+            RecursionError,
+            OverflowError,
+        ) as e:
+            raise exceptions.ApplicationError(
+                str(e), type="SignalValidationError", non_retryable=True
+            ) from e
+        except RuntimeError as error:
+            raise exceptions.ApplicationError(
+                str(error), type="EngineError", non_retryable=True
+            ) from error
+        return waiter, validated
+
+    @workflow.update
+    def deliver_signal(self, request_json: str) -> str:
+        """Atomically claim a validated waiter, returning lossless response JSON."""
+        # Revalidate on replay; validator memory must never carry execution state.
+        waiter, validated = self._validate_signal_request(request_json)
+        waiter.response = loads(validated)
+        waiter.status = "delivered"
+        del self._waiters[waiter.address]
+        self._signal_initialized = True  # This accepted Update is itself durable.
+        return validated
+
+    @deliver_signal.validator
+    def validate_deliver_signal(self, request_json: str) -> None:
+        self._validate_signal_request(request_json)
+
+    async def _wait_signal(self, frame: Frame, node: JsonObject, address: str) -> JsonObject:
+        body = node["body"]
+        waiter = _SignalWaiter(frame, address, dumps(body["output"]), dumps(body["branches"]))
+        self._waiters[address] = waiter
+        try:
+            try:
+                if not self._signal_initialized and not self._deadline_scope.get():
+                    # SDK issue #2080: a command-less first task can validate a
+                    # cold Update before replay rebuilds the waiter. One shared
+                    # command suffices; its firing time must not gate delivery.
+                    self._signal_initialized = True
+                    self._signal_init_timer = asyncio.create_task(
+                        workflow.sleep(timedelta(milliseconds=1))
+                    )
+                await workflow.wait_condition(lambda: waiter.status == "delivered")
+            except (asyncio.CancelledError, exceptions.CancelledError) as error:
+                if waiter.status != "delivered" or error.args != ("signal attempt timeout",):
+                    raise
+                # Only our own deadline may retain a claim. External/fail-fast
+                # cancellation must unwind even for an already delivered waiter.
+            # The SDK may batch a claim and a server cancel before injecting
+            # task cancellation. Enforce the same outcome during live execution
+            # and replay.
+            if workflow.cancellation_reason() is not None:
+                raise asyncio.CancelledError
+            assert waiter.response is not None
+            return waiter.response
+        finally:
+            if waiter.status == "pending":
+                waiter.status = "expired"
+            if self._waiters.get(address) is waiter:
+                del self._waiters[address]
 
     def _frame(
         self,
@@ -479,10 +638,12 @@ class AxcutorInterpreterWorkflow:
                 )
             )
         retry = modifiers["retry"]
+        is_signal = body["kind"] == "run" and body["run"]["executor"] == "signal"
+        is_activity = body["kind"] == "run" and not is_signal
         # Contract validation also runs after Activity success in this Workflow.
         # If it can retry, this loop must own the entire node attempt budget.
         native = (
-            body["kind"] == "run"
+            is_activity
             and retry is not None
             and "timeout" in retry["on"]
             and "contract" not in retry["on"]
@@ -494,10 +655,16 @@ class AxcutorInterpreterWorkflow:
             try:
                 operation = self._attempt(frame, node, snapshot, symbols, injected, address, native)
                 timeout = modifiers["timeout_ms"]
-                if timeout is not None and body["kind"] != "run":
-                    return await _with_timeout(operation, timeout)
+                if timeout is not None and not is_activity:
+                    token = self._deadline_scope.set(True)
+                    try:
+                        return await _with_timeout(operation, timeout, signal=is_signal)
+                    finally:
+                        self._deadline_scope.reset(token)
                 return await operation
             except Recoverable as error:
+                if error.selector == "timeout":
+                    self._signal_initialized = True  # A durable deadline has fired.
                 if attempt < attempts and error.selector in retry["on"]:
                     if retry["backoff_ms"] > 0:
                         await workflow.sleep(timedelta(milliseconds=retry["backoff_ms"]))
@@ -520,6 +687,8 @@ class AxcutorInterpreterWorkflow:
     ) -> JsonObject:
         body = node["body"]
         if body["kind"] == "run":
+            if body["run"]["executor"] == "signal":
+                return await self._wait_signal(frame, node, address)
             return await self._run_activity(node, snapshot, native_retry)
         depth = frame.call_depth + 1
         if depth > self._options["max_call_depth"]:
@@ -580,6 +749,7 @@ class AxcutorInterpreterWorkflow:
                     cancellation_type=workflow.ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED,
                     parent_close_policy=workflow.ParentClosePolicy.REQUEST_CANCEL,
                 )
+                self._signal_initialized = True
                 remote.child_execution = {
                     "workflow_id": child.id,
                     "run_id": child.first_execution_run_id,
@@ -641,4 +811,5 @@ class AxcutorInterpreterWorkflow:
             )
         except exceptions.FailureError as error:
             raise boundary_error(error) from error
+        self._signal_initialized = True
         return _contract(response, body)

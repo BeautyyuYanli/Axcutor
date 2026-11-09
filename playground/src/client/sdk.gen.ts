@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CancelExecutionData, CancelExecutionErrors, CancelExecutionResponses, GetExecutionData, GetExecutionErrors, GetExecutionResponses, GetWorkspaceData, GetWorkspaceErrors, GetWorkspaceResponses, RunWorkspaceData, RunWorkspaceErrors, RunWorkspaceResponses, SaveWorkspaceData, SaveWorkspaceErrors, SaveWorkspaceResponses } from './types.gen';
+import type { CancelExecutionData, CancelExecutionErrors, CancelExecutionResponses, GetExecutionData, GetExecutionErrors, GetExecutionResponses, GetWorkspaceData, GetWorkspaceErrors, GetWorkspaceResponses, RunWorkspaceData, RunWorkspaceErrors, RunWorkspaceResponses, SaveWorkspaceData, SaveWorkspaceErrors, SaveWorkspaceResponses, SignalExecutionData, SignalExecutionErrors, SignalExecutionResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -21,6 +21,15 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 export const getExecution = <ThrowOnError extends boolean = false>(options: Options<GetExecutionData, ThrowOnError>): RequestResult<GetExecutionResponses, GetExecutionErrors, ThrowOnError> => (options.client ?? client).get<GetExecutionResponses, GetExecutionErrors, ThrowOnError>({ url: '/v1/executions/{execution_id}', ...options });
 
 export const cancelExecution = <ThrowOnError extends boolean = false>(options: Options<CancelExecutionData, ThrowOnError>): RequestResult<CancelExecutionResponses, CancelExecutionErrors, ThrowOnError> => (options.client ?? client).post<CancelExecutionResponses, CancelExecutionErrors, ThrowOnError>({ url: '/v1/executions/{execution_id}:cancel', ...options });
+
+export const signalExecution = <ThrowOnError extends boolean = false>(options: Options<SignalExecutionData, ThrowOnError>): RequestResult<SignalExecutionResponses, SignalExecutionErrors, ThrowOnError> => (options.client ?? client).post<SignalExecutionResponses, SignalExecutionErrors, ThrowOnError>({
+    url: '/v1/executions/{execution_id}:signal',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 export const getWorkspace = <ThrowOnError extends boolean = false>(options?: Options<GetWorkspaceData, ThrowOnError>): RequestResult<GetWorkspaceResponses, GetWorkspaceErrors, ThrowOnError> => (options?.client ?? client).get<GetWorkspaceResponses, GetWorkspaceErrors, ThrowOnError>({ url: '/v1/workspace', ...options });
 

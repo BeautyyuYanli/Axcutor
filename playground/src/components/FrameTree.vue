@@ -17,6 +17,7 @@ function frameKey(prefix: string | undefined, index: number): string { return pr
           </button>
         </summary>
         <p>call_depth: {{ frame.call_depth }} · steps: {{ frame.steps }} / {{ frame.max_steps ?? 'unlimited' }}</p>
+        <p v-if="frame.waiting.length">Waiting for signal: {{ frame.waiting.join(', ') }}</p>
         <pre><code>{{ slices.frameVariablesRaw.get(frameKey(prefix, index)) ?? '{}' }}</code></pre>
         <FrameTree v-if="frame.children.length" :frames="frame.children" :slices="slices" :prefix="frameKey(prefix, index)" :selected-key="selectedKey" @select="(child, key) => emit('select', child, key)" />
       </details>

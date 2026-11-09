@@ -22,7 +22,7 @@ from axcutor_runtime.worker import create_worker
 from temporalio.client import Client
 
 from .http import create_app
-from .service import ExecutionService
+from .service import ExecutionService, InvalidRequest
 
 
 def _pairs(values: list[str]) -> list[tuple[str, str]]:
@@ -86,6 +86,18 @@ async def _run(args: argparse.Namespace) -> None:
             print(dumps(execution), flush=True)
             if execution["status"] != "completed":
                 raise SystemExit(1)
+    elif args.command == "signal":
+        outputs = loads(args.output.read_text(encoding="utf-8")) if args.output else {}
+        if not isinstance(outputs, dict):
+            raise InvalidRequest("output must be an object")
+        execution = await service.signal(
+            args.execution_id, args.target_address, outputs, args.branch, args.step
+        )
+        if args.wait and execution["status"] == "running":
+            execution = await service.wait(args.execution_id)
+        print(dumps(execution), flush=True)
+        if args.wait and execution["status"] != "completed":
+            raise SystemExit(1)
     elif args.command == "worker":
         mapping = dict(_pairs(args.module_mount)) if args.module_mount else None
         await _worker(client, args.task_queue, mapping)
@@ -115,6 +127,13 @@ def main() -> None:
     run.add_argument("--input", type=Path, help="input JSON file (default: {})")
     run.add_argument("--id", help="Workflow ID (default: a new UUID)")
     run.add_argument("--no-wait", action="store_true", help="exit after submission")
+    deliver = commands.add_parser("signal", parents=[connection], help="resume a signal node")
+    deliver.add_argument("execution_id")
+    deliver.add_argument("target_address", metavar="address", help="address from Frame.waiting")
+    deliver.add_argument("--branch", help="output branch")
+    deliver.add_argument("--output", type=Path, help="output JSON object file (default: {})")
+    deliver.add_argument("--step", type=int, help="expected positive Frame.steps")
+    deliver.add_argument("--wait", action="store_true", help="wait for terminal execution")
     contracts = commands.add_parser("contracts", help="generate module contracts without imports")
     contracts.add_argument("workflow", type=Path)
     contracts.add_argument("--mount", action="append", default=[], metavar="ROOT=DIRECTORY")

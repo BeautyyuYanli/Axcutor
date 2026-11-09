@@ -33,6 +33,7 @@ export type Frame = {
     kind: 'function' | 'block' | 'iteration';
     address: string;
     cursor: string;
+    waiting: Array<string>;
     call_depth: number;
     steps: number;
     max_steps: number | null;
@@ -40,6 +41,15 @@ export type Frame = {
         [key: string]: unknown;
     };
     children: Array<Frame>;
+};
+
+export type SignalExecutionRequest = {
+    address: string;
+    branch?: string | null;
+    output?: {
+        [key: string]: unknown;
+    };
+    step?: number | null;
 };
 
 export type ExecutionResult = {
@@ -172,11 +182,11 @@ export type GetExecutionErrors = {
      */
     405: ErrorResponse;
     /**
-     * Workspace revision conflict or Playground busy
+     * Workspace revision conflict, Playground busy, or signal target is not waiting
      */
     409: ErrorResponse;
     /**
-     * Compilation or input validation failed
+     * Compilation, input or signal validation failed
      */
     422: ErrorResponse;
     /**
@@ -223,11 +233,11 @@ export type CancelExecutionErrors = {
      */
     405: ErrorResponse;
     /**
-     * Workspace revision conflict or Playground busy
+     * Workspace revision conflict, Playground busy, or signal target is not waiting
      */
     409: ErrorResponse;
     /**
-     * Compilation or input validation failed
+     * Compilation, input or signal validation failed
      */
     422: ErrorResponse;
     /**
@@ -255,6 +265,61 @@ export type CancelExecutionResponses = {
 
 export type CancelExecutionResponse = CancelExecutionResponses[keyof CancelExecutionResponses];
 
+export type SignalExecutionData = {
+    body: SignalExecutionRequest;
+    path: {
+        execution_id: string;
+    };
+    query?: never;
+    url: '/v1/executions/{execution_id}:signal';
+};
+
+export type SignalExecutionErrors = {
+    /**
+     * Invalid JSON or request
+     */
+    400: ErrorResponse;
+    /**
+     * Execution not found
+     */
+    404: ErrorResponse;
+    /**
+     * Method not allowed
+     */
+    405: ErrorResponse;
+    /**
+     * Workspace revision conflict, Playground busy, or signal target is not waiting
+     */
+    409: ErrorResponse;
+    /**
+     * Compilation, input or signal validation failed
+     */
+    422: ErrorResponse;
+    /**
+     * Internal server error
+     */
+    500: ErrorResponse;
+    /**
+     * Runtime unavailable
+     */
+    503: ErrorResponse;
+};
+
+export type SignalExecutionError = SignalExecutionErrors[keyof SignalExecutionErrors];
+
+export type SignalExecutionResponses = {
+    /**
+     * Terminal execution after delivery
+     */
+    200: Execution;
+    /**
+     * Delivered; execution is still running
+     */
+    202: Execution;
+};
+
+export type SignalExecutionResponse = SignalExecutionResponses[keyof SignalExecutionResponses];
+
 export type GetWorkspaceData = {
     body?: never;
     path?: never;
@@ -276,11 +341,11 @@ export type GetWorkspaceErrors = {
      */
     405: ErrorResponse;
     /**
-     * Workspace revision conflict or Playground busy
+     * Workspace revision conflict, Playground busy, or signal target is not waiting
      */
     409: ErrorResponse;
     /**
-     * Compilation or input validation failed
+     * Compilation, input or signal validation failed
      */
     422: ErrorResponse;
     /**
@@ -325,11 +390,11 @@ export type SaveWorkspaceErrors = {
      */
     405: ErrorResponse;
     /**
-     * Workspace revision conflict or Playground busy
+     * Workspace revision conflict, Playground busy, or signal target is not waiting
      */
     409: ErrorResponse;
     /**
-     * Compilation or input validation failed
+     * Compilation, input or signal validation failed
      */
     422: ErrorResponse;
     /**
@@ -374,11 +439,11 @@ export type RunWorkspaceErrors = {
      */
     405: ErrorResponse;
     /**
-     * Workspace revision conflict or Playground busy
+     * Workspace revision conflict, Playground busy, or signal target is not waiting
      */
     409: ErrorResponse;
     /**
-     * Compilation or input validation failed
+     * Compilation, input or signal validation failed
      */
     422: ErrorResponse;
     /**

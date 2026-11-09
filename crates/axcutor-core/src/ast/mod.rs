@@ -122,7 +122,7 @@ pub fn workflow_visible(caller: &str, target: &str) -> bool {
     })
 }
 
-/// Builtin and module are closed; extensions retain opaque, ordered JSON configuration.
+/// Builtin, module and signal are closed; extensions retain ordered JSON configuration.
 /// The executor tag is an Identifier, not a restricted graph symbol.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunSpec {
@@ -132,6 +132,7 @@ pub enum RunSpec {
     Module {
         content: String,
     },
+    Signal,
     Extension {
         executor: String,
         /// Executor-specific fields, excluding the discriminator itself.
@@ -152,6 +153,7 @@ impl Serialize for RunSpec {
                 map.serialize_entry("executor", "module")?;
                 map.serialize_entry("content", content)?;
             }
+            Self::Signal => map.serialize_entry("executor", "signal")?,
             Self::Extension { executor, config } => {
                 map.serialize_entry("executor", executor)?;
                 for (key, value) in config {

@@ -250,7 +250,7 @@ pub(super) fn root(
         let timeout_ms = m
             .get("timeout_ms")
             .and_then(|v| integer(Some(v), 1, None, &a.at("timeout_ms"), ds));
-        let retry = retry(m.get("retry"), true, &a.at("retry"), ds);
+        let retry = retry(m.get("retry"), recoverable_selectors(m), &a.at("retry"), ds);
         run.map(|run| RootBody::Run {
             workflow_id: a.workflow.clone(),
             input_schema: input.clone(),
@@ -284,6 +284,10 @@ fn run(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<RunSpec> {
             "executor must be an Identifier",
         );
         return None;
+    }
+    if executor == "signal" {
+        closed(m, &["executor"], a, ds);
+        return Some(RunSpec::Signal);
     }
     if executor != "builtin" && executor != "module" {
         return Some(RunSpec::Extension {
@@ -518,13 +522,13 @@ fn node(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedNode> {
         }
     };
     // Modifiers are still checked if the body failed, so unrelated errors survive.
-    let atomic = m.contains_key("run");
+    let allowed = recoverable_selectors(m);
     let for_each = for_each(m.get("for_each"), &a.at("for_each"), ds);
     let timeout_ms = m
         .get("timeout_ms")
         .and_then(|v| integer(Some(v), 1, None, &a.at("timeout_ms"), ds));
-    let retry = retry(m.get("retry"), atomic, &a.at("retry"), ds);
-    let catch = catches(m.get("catch"), atomic, &a.at("catch"), ds);
+    let retry = retry(m.get("retry"), allowed, &a.at("retry"), ds);
+    let catch = catches(m.get("catch"), allowed, &a.at("catch"), ds);
     let body = body?;
     let node = NormalizedNode {
         body,
@@ -653,7 +657,17 @@ fn for_each(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<ForEach> {
     })
 }
 
-fn selectors(v: &Value, atomic: bool, a: &Address, ds: &mut Ds) -> Vec<String> {
+// Signal requests are validated outside node execution; only its timer can fail.
+// Inspect the discriminator even on invalid bodies to retain sibling diagnostics.
+fn recoverable_selectors(m: &Map<String, Value>) -> &'static [&'static str] {
+    match m.get("run") {
+        Some(run) if run.get("executor").and_then(Value::as_str) == Some("signal") => &["timeout"],
+        Some(_) => &["execution", "timeout", "contract"],
+        None => &["execution", "timeout", "contract", "max_steps"],
+    }
+}
+
+fn selectors(v: &Value, allowed: &[&str], a: &Address, ds: &mut Ds) -> Vec<String> {
     let Some(values) = v.as_array().filter(|a| !a.is_empty()) else {
         a.error(
             ds,
@@ -665,9 +679,7 @@ fn selectors(v: &Value, atomic: bool, a: &Address, ds: &mut Ds) -> Vec<String> {
     };
     let mut result = vec![];
     for v in values {
-        if let Some(s) = v.as_str().filter(|s| {
-            matches!(*s, "execution" | "timeout" | "contract") || (!atomic && *s == "max_steps")
-        }) {
+        if let Some(s) = v.as_str().filter(|s| allowed.contains(s)) {
             if result.iter().any(|r| r == s) {
                 a.error(ds, "port", "schema.selectors", "duplicate selector");
             } else {
@@ -684,22 +696,28 @@ fn selectors(v: &Value, atomic: bool, a: &Address, ds: &mut Ds) -> Vec<String> {
     }
     result
 }
-fn retry(v: Option<&Value>, atomic: bool, a: &Address, ds: &mut Ds) -> Option<Retry> {
+fn retry(v: Option<&Value>, allowed: &[&str], a: &Address, ds: &mut Ds) -> Option<Retry> {
     let m = object(v?, a, ds)?;
     closed(m, &["max_attempts", "backoff_ms", "on"], a, ds);
     let max_attempts = integer(m.get("max_attempts"), 2, None, &a.at("max_attempts"), ds);
     let backoff_ms = integer(m.get("backoff_ms"), 0, Some(0), &a.at("backoff_ms"), ds);
     let on = m
         .get("on")
-        .map(|v| selectors(v, atomic, &a.at("on"), ds))
-        .unwrap_or_else(|| vec!["execution".into(), "timeout".into()]);
+        .map(|v| selectors(v, allowed, &a.at("on"), ds))
+        .unwrap_or_else(|| {
+            ["execution", "timeout"]
+                .into_iter()
+                .filter(|s| allowed.contains(s))
+                .map(str::to_owned)
+                .collect()
+        });
     Some(Retry {
         max_attempts: max_attempts?,
         backoff_ms: backoff_ms?,
         on,
     })
 }
-fn catches(v: Option<&Value>, atomic: bool, a: &Address, ds: &mut Ds) -> Ordered<Vec<String>> {
+fn catches(v: Option<&Value>, allowed: &[&str], a: &Address, ds: &mut Ds) -> Ordered<Vec<String>> {
     let mut result = Ordered::new();
     let Some(v) = v else {
         return result;
@@ -727,7 +745,7 @@ fn catches(v: Option<&Value>, atomic: bool, a: &Address, ds: &mut Ds) -> Ordered
             wildcard = Some(b.clone());
             result.insert(b.clone(), vec![]);
         } else {
-            let ss = selectors(v, atomic, &at, ds);
+            let ss = selectors(v, allowed, &at, ds);
             for s in &ss {
                 if used.contains(s) {
                     at.error(ds, "port", "schema.catch", "catch selectors overlap");
@@ -738,13 +756,9 @@ fn catches(v: Option<&Value>, atomic: bool, a: &Address, ds: &mut Ds) -> Ordered
         }
     }
     if let Some(b) = wildcard {
-        let universe = if atomic {
-            vec!["execution", "timeout", "contract"]
-        } else {
-            vec!["execution", "timeout", "contract", "max_steps"]
-        };
-        let remainder: Vec<_> = universe
-            .into_iter()
+        let remainder: Vec<_> = allowed
+            .iter()
+            .copied()
             .filter(|s| !used.iter().any(|x| x == s))
             .map(str::to_owned)
             .collect();

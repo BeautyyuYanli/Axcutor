@@ -24,7 +24,9 @@ _STATUS = {
     "invalid_request": 400,
     "execution_not_found": 404,
     "execution_already_exists": 409,
+    "signal_not_waiting": 409,
     "input_validation_failed": 422,
+    "signal_validation_failed": 422,
     "runtime_unavailable": 503,
 }
 
@@ -100,6 +102,7 @@ def openapi_schema() -> dict[str, object]:
                 "kind",
                 "address",
                 "cursor",
+                "waiting",
                 "call_depth",
                 "steps",
                 "max_steps",
@@ -111,11 +114,23 @@ def openapi_schema() -> dict[str, object]:
                 "kind": {"type": "string", "enum": ["function", "block", "iteration"]},
                 "address": {"type": "string"},
                 "cursor": {"type": "string"},
+                "waiting": {"type": "array", "items": {"type": "string"}},
                 "call_depth": {"type": "integer", "minimum": 1},
                 "steps": {"type": "integer", "minimum": 0},
                 "max_steps": {"type": ["integer", "null"]},
                 "variables": {"type": "object", "additionalProperties": True},
                 "children": {"type": "array", "items": ref("Frame")},
+            },
+        },
+        "SignalExecutionRequest": {
+            "type": "object",
+            "required": ["address"],
+            "additionalProperties": False,
+            "properties": {
+                "address": {"type": "string", "minLength": 1},
+                "branch": {"type": ["string", "null"], "minLength": 1},
+                "output": {"type": "object", "additionalProperties": True, "default": {}},
+                "step": {"type": ["integer", "null"], "minimum": 1},
             },
         },
         "ExecutionResult": {
@@ -239,8 +254,8 @@ def openapi_schema() -> dict[str, object]:
             400: "Invalid JSON or request",
             404: "Execution not found",
             405: "Method not allowed",
-            409: "Execution ID already exists",
-            422: "Compilation or input validation failed",
+            409: "Execution ID already exists or signal target is not waiting",
+            422: "Compilation, input or signal validation failed",
             503: "Runtime unavailable",
             500: "Internal server error",
         }.items()
@@ -295,9 +310,49 @@ def openapi_schema() -> dict[str, object]:
                     ),
                 }
             },
+            "/v1/executions/{execution_id}:signal": {
+                "post": {
+                    "operationId": "signalExecution",
+                    "parameters": [parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": ref("SignalExecutionRequest")}},
+                    },
+                    "responses": responses(
+                        {
+                            "200": response("Execution", "Terminal execution after delivery"),
+                            "202": response("Execution", "Delivered; execution is still running"),
+                        }
+                    ),
+                }
+            },
         },
         "components": {"schemas": schemas},
     }
+
+
+async def signal_execution(request: Request, service: ExecutionService) -> Response:
+    """Shared Execution/Playground signal controller with strict, lossless JSON."""
+    try:
+        body = loads((await request.body()).decode("utf-8"))
+    except (ValueError, UnicodeError, RecursionError, OverflowError) as error:
+        return _error("invalid_json", str(error), 400)
+    if not isinstance(body, dict):
+        raise InvalidRequest("request body must be an object")
+    if "address" not in body:
+        raise InvalidRequest("address is required")
+    if body.keys() - {"address", "branch", "output", "step"}:
+        raise InvalidRequest("unknown request fields")
+    if "output" in body and not isinstance(body["output"], dict):
+        raise InvalidRequest("output must be an object")
+    execution = await service.signal(
+        request.path_params["execution_id"],
+        body["address"],
+        body.get("output", {}),
+        body.get("branch"),
+        body.get("step"),
+    )
+    return _json(execution, 202 if execution["status"] == "running" else 200)
 
 
 def create_app(service: ExecutionService) -> Starlette:
@@ -338,6 +393,9 @@ def create_app(service: ExecutionService) -> Starlette:
         execution = await service.cancel(request.path_params["execution_id"])
         return _json(execution, 202 if execution["status"] == "running" else 200)
 
+    async def signal(request: Request) -> Response:
+        return await signal_execution(request, service)
+
     async def host_error(request: Request, error: Exception) -> Response:
         assert isinstance(error, HostError)
         return _error(error.code, str(error), _STATUS[error.code], error.details)
@@ -359,6 +417,7 @@ def create_app(service: ExecutionService) -> Starlette:
             Route("/openapi.json", schema, methods=["GET"]),
             Route("/v1/executions", submit, methods=["POST"]),
             Route("/v1/executions/{execution_id:execution_id}:cancel", cancel, methods=["POST"]),
+            Route("/v1/executions/{execution_id:execution_id}:signal", signal, methods=["POST"]),
             Route("/v1/executions/{execution_id:execution_id}", get, methods=["GET"]),
         ],
         exception_handlers={

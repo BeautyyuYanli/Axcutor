@@ -88,11 +88,11 @@ graph:
 
 ### 1. `run`（结构化业务执行体配置）
 
-`run` 字段必须是一个以 `executor` 为鉴别键的映射对象（不支持裸字符串简写）。标准内建支持两种强类型 Python 执行器（`executor: builtin` 与 `executor: module`），均为只含 `executor` 和 `content` 的闭合对象：
+`run` 字段必须是一个以 `executor` 为鉴别键的映射对象（不支持裸字符串简写）。两种 Python 执行器（`builtin` 与 `module`）只含 `executor` 和 `content`；纯等待执行器 `signal` 只含 `executor`，均为闭合对象：
 
 | 字段 | 必填/可选 | 格式 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `executor` | **必填** | `Identifier` | 执行器类型鉴别键：`builtin` 与 `module` 使用下述闭合配置，其他合法标识符对应宿主注册的扩展执行器，其特定配置字段保留并交给对应后端。此处使用通用标识符，不排除 Python 关键字。 |
+| `executor` | **必填** | `Identifier` | 执行器类型鉴别键：`builtin`、`module` 与 `signal` 使用闭合配置，其他合法标识符对应宿主注册的扩展执行器，其特定配置字段保留并交给对应后端。此处使用通用标识符，不排除 Python 关键字。 |
 | `content`（当 `executor: builtin` 时） | **必填** | 非空多行 Python 代码字符串 | 作为 `async def execute(input: Input) -> ReturnType:` 的函数体执行。通过只读冻结模型 `input.<var>` 读取输入快照（其中 `type: number` 自动映射为原生 `float`）；无分支节点返回 `Output(...)`，有分支节点返回 `Branch.<branch_id>(...)`。 |
 | `content`（当 `executor: module` 时） | **必填** | `LocalModuleSpec`（`"."` 或 `".<local_path>"`） | 指向当前具名工作流包内的 Python 实现；匿名入口 `"__main__"` 禁用，禁止绝对模块名与上级跳转。顶层 `run` 与图内节点均支持 `".validate"`（对应 `validate_contract.py`）或 `"."`（对应包的 `__init__.py` 与 `_contract.py`）。目标模块须从同一模板导入 `Input`、`Output` 或 `Branch`，并实现异步 `execute`；`ReturnType` 可用于返回值注解。 |
 
@@ -104,6 +104,21 @@ return Output(user=Output_user(id=1, note=None))  # 输出省略 nickname，保�
 ```
 
 Python Worker 默认同时提供 `builtin` 与 `module` 执行器；`options.task_queues` 按执行器名路由。
+
+`signal` 在 Workflow 内等待外部信号，无 Activity 和心跳，也不生成 Python 契约文件。局部节点示例：
+
+```yaml
+decision:
+  output:
+    reviewer: { type: string }
+  timeout_ms: 86400000
+  catch:
+    expired: [timeout]
+  run:
+    executor: signal
+```
+
+用 [HTTP `:signal`](./04-execution-http-api.md#投递外部信号) 或 [CLI `signal`](../guide/00-run-with-docker.md#使用-cli-恢复等待节点) 提交符合 `output` / `branches` 的响应。输入声明仍参与必达定值分析，等待上下文通过帧变量观察。省略 `timeout_ms` 时无限期等待，不使用 Activity 默认期限。非法输出被拒绝，节点继续等待；`signal` 的 `retry.on` 默认 `[timeout]`，`catch` 的 `"*"` 也只对 `{timeout}` 求补，其他选择器编译报错。并发与迭代的输出仍在屏障处统一提交，迭代等待期间持有并发许可。
 
 - 对于 `executor: builtin`，需要导出独立 Python 源码进行类型检查时，可调用 `axcutor_runtime.builtin.synthesize_module(input_schema, output_schema, branches_contract, content)`，其结果包含 `source` 与 `line_offset`。
 - 对于 `executor: module`，`axcutor contracts`（或 `synthesize_contract_module`）生成包含确定性契约哈希 `__axcutor_contract_sha256__` 的契约桩 `*_contract.py` / `_contract.py`。运行时通过 `mod.Input.__module__` 反查契约模块并强制比对 SHA-256 指纹；命令及挂载说明见 [包与模块](../guide/01-foundations/04-packages-and-modules.md)。
@@ -147,5 +162,5 @@ Python Worker 默认同时提供 `builtin` 与 `module` 执行器；`options.tas
 | :--- | :--- | :--- |
 | `retry.max_attempts` | 整数 `>= 2`（必填） | 最大尝试总次数（含首次执行）。 |
 | `retry.backoff_ms` | 非负整数（默认 `0`） | 两次尝试之间的退避等待毫秒数。 |
-| `retry.on` | `[execution, timeout, contract, max_steps]` 子集 | 触发重试的可恢复异常列表（默认 `[execution, timeout]`；`run` 节点与顶层 `run` 根节点禁止包含 `max_steps`）。 |
-| `catch.<branch_name>` | `[<selector>, ...]` \| `"*"` | 拦截指定异常（或使用 `"*"` 拦截其余所有可恢复异常），物化为异常出边 `<node>.<branch_name>`（等价于 `output: []`；`run` 节点的显式选择器列表中禁止包含 `max_steps`）。 |
+| `retry.on` | `[execution, timeout, contract, max_steps]` 子集 | 普通节点默认 `[execution, timeout]`；`run` 禁止 `max_steps`；`signal` 仅允许 `[timeout]`，也以此为默认值。 |
+| `catch.<branch_name>` | `[<selector>, ...]` \| `"*"` | 拦截指定异常，`"*"` 对当前节点的允许集合求补；异常出边无输出。`run` 禁止 `max_steps`；`signal` 的允许集合为 `{timeout}`。 |

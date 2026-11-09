@@ -11,6 +11,8 @@ from .service import (
     InputValidationError,
     InvalidRequest,
     RuntimeUnavailable,
+    SignalNotWaiting,
+    SignalValidationError,
 )
 
 __all__ = [
@@ -23,4 +25,6 @@ __all__ = [
     "InputValidationError",
     "InvalidRequest",
     "RuntimeUnavailable",
+    "SignalNotWaiting",
+    "SignalValidationError",
 ]
