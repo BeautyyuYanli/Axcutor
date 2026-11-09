@@ -1,4 +1,4 @@
-"""Independent workspace HTTP, Execution reads/cancellation and static assets.
+"""Independent workspace HTTP, Execution controls and static assets.
 
 The serve command never installs these writable routes. Business input is read
 from workspace files using the Python codec, never parsed by the browser or an
@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import quote
 
 from axcutor_host.http import openapi_schema as execution_schema
+from axcutor_host.http import signal_execution
 from axcutor_host.service import HostError, InvalidRequest
 from axcutor_runtime.bundle import CompilationError
 from axcutor_runtime.codec import dumps, loads
@@ -30,7 +31,9 @@ _STATUS = {
     "invalid_request": 400,
     "execution_not_found": 404,
     "execution_already_exists": 409,
+    "signal_not_waiting": 409,
     "input_validation_failed": 422,
+    "signal_validation_failed": 422,
     "runtime_unavailable": 503,
     "workspace_conflict": 409,
 }
@@ -61,7 +64,9 @@ def openapi_schema() -> dict[str, Any]:
     paths = schema["paths"]
     base_responses = paths.pop("/v1/executions")["post"]["responses"]
     errors = {code: body for code, body in base_responses.items() if code != "202"}
-    errors["409"]["description"] = "Workspace revision conflict or Playground busy"
+    errors["409"]["description"] = (
+        "Workspace revision conflict, Playground busy, or signal target is not waiting"
+    )
     schemas = schema["components"]["schemas"]
 
     def ref(name: str) -> dict[str, str]:
@@ -215,6 +220,9 @@ def create_playground_app(playground: Playground, static: Path | None = None) ->
         execution = await playground.executions.cancel(request.path_params["execution_id"])
         return _json(execution, 202 if execution["status"] == "running" else 200)
 
+    async def signal(request: Request) -> Response:
+        return await signal_execution(request, playground.executions)
+
     async def host_error(request: Request, error: Exception) -> Response:
         assert isinstance(error, HostError)
         return _error(error.code, str(error), _STATUS[error.code], error.details)
@@ -240,6 +248,11 @@ def create_playground_app(playground: Playground, static: Path | None = None) ->
             Route(
                 "/v1/executions/{execution_id:playground_execution_id}:cancel",
                 cancel,
+                methods=["POST"],
+            ),
+            Route(
+                "/v1/executions/{execution_id:playground_execution_id}:signal",
+                signal,
                 methods=["POST"],
             ),
             Route("/v1/executions/{execution_id:playground_execution_id}", get, methods=["GET"]),

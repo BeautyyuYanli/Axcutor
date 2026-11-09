@@ -1,8 +1,90 @@
-//! Builtin has a closed contract; extensions retain opaque JSON configuration.
+//! Builtin/module/signal are closed; extensions retain opaque JSON configuration.
 mod support;
 use axcutor_core::ast::*;
 use serde_json::json;
 use support::*;
+
+#[test]
+fn signal_is_closed_and_serializes_without_activity_content() {
+    let out = compile(json!({
+        "input":{}, "output":{}, "run":{"executor":"signal"},
+        "retry":{"max_attempts":2}
+    }));
+    ok(&out);
+    let root = &out.bundle.as_ref().unwrap().workflows["main"];
+    let RootBody::Run { run, retry, .. } = &root.body else {
+        panic!()
+    };
+    assert_eq!(run, &RunSpec::Signal);
+    assert_eq!(retry.as_ref().unwrap().on, ["timeout"]);
+    assert_eq!(
+        serde_json::to_value(run).unwrap(),
+        json!({"executor":"signal"})
+    );
+    for field in ["content", "settings"] {
+        let mut run = json!({"executor":"signal"});
+        run[field] = json!("not allowed");
+        only_error(
+            &compile(json!({"input":{},"output":{},"run":run})),
+            "schema.unknown_field",
+            &format!("/run/{field}"),
+        );
+        only_error(
+            &compile(graph(
+                json!({"wait": {"run":run}}),
+                json!(["start -> wait", "wait -> end"]),
+            )),
+            "schema.unknown_field",
+            &format!("/graph/nodes/wait/run/{field}"),
+        );
+    }
+}
+
+#[test]
+fn signal_retry_and_catch_only_accept_timeout_and_expand_wildcard() {
+    let node = json!({
+        "run":{"executor":"signal"},
+        "retry":{"max_attempts":2}, "catch":{"late":"*"}
+    });
+    let document = graph(
+        json!({"wait":node}),
+        json!(["start -> wait", "wait -> end", "wait.late -> end"]),
+    );
+    let out = compile(document.clone());
+    ok(&out);
+    let value = serde_json::to_value(out.bundle.unwrap()).unwrap();
+    let modifiers = &value["workflows"]["main"]["body"]["graph"]["nodes"]["wait"]["modifiers"];
+    assert_eq!(modifiers["retry"]["on"], json!(["timeout"]));
+    assert_eq!(modifiers["catch"]["late"], json!(["timeout"]));
+    for selector in ["execution", "contract", "max_steps"] {
+        let root = json!({
+            "input":{}, "output":{}, "run":{"executor":"signal"},
+            "retry":{"max_attempts":2,"on":[selector]}
+        });
+        only_error(&compile(root), "schema.selectors", "/retry/on");
+        let mut invalid = document.clone();
+        invalid["graph"]["nodes"]["wait"]["retry"]["on"] = json!([selector]);
+        only_error(
+            &compile(invalid),
+            "schema.selectors",
+            "/graph/nodes/wait/retry/on",
+        );
+        let mut invalid = document.clone();
+        invalid["graph"]["nodes"]["wait"]["catch"]["late"] = json!([selector]);
+        only_error(
+            &compile(invalid),
+            "schema.selectors",
+            "/graph/nodes/wait/catch/late",
+        );
+    }
+    let mut invalid = document;
+    invalid["graph"]["nodes"]["wait"]["catch"]["timed"] = json!(["timeout"]);
+    only_error(
+        &compile(invalid),
+        "schema.catch",
+        "/graph/nodes/wait/catch/late",
+    );
+}
 
 #[test]
 fn builtin_run_spec_is_closed_and_rejects_legacy_strings() {

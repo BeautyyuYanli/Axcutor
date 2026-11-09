@@ -31,12 +31,13 @@ docker compose run --rm cli run /examples/workflows/demo/main --mount demo=/exam
 
 文件提交规则、实时查询和停止方式见 [Docker 运行指南](manual/docs/guide/00-run-with-docker.md)。语言教程与规范见 [文档中心](manual/index.md)。
 
-HTTP API 默认地址为 `http://localhost:8000`，提供提交、查询和协同取消三个接口：
+HTTP API 默认地址为 `http://localhost:8000`，提供提交、查询、协同取消和信号恢复接口：
 
 ```text
 POST /v1/executions
 GET  /v1/executions/{execution_id}
 POST /v1/executions/{execution_id}:cancel
+POST /v1/executions/{execution_id}:signal
 ```
 
 请求字段、执行状态与错误码见 [HTTP API 参考](manual/docs/reference/04-execution-http-api.md)。本机安装使用 `uv sync --locked`，随后分别运行 `PYTHONPATH=examples/workflows uv run --locked axcutor worker` 和 `uv run --locked axcutor serve`。CLI 与 HTTP 均通过 `axcutor-host` 包中的同一执行服务完成编译、输入预检与状态查询；执行历史由 Temporal 保存。

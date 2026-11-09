@@ -427,6 +427,13 @@ def test_mount_conflicts_and_generation_never_import_python(installed):
 
 
 @pytest.mark.parametrize("check", [False, True])
+def test_signal_contract_generation_needs_no_mount_and_creates_no_python(check):
+    doc = {"input": {}, "output": {}, "run": {"executor": "signal"}}
+    packages = {"__main__": {"format": "json", "text": dumps(doc)}}
+    assert generate_contracts("__main__", packages, [], check=check) == []
+
+
+@pytest.mark.parametrize("check", [False, True])
 @pytest.mark.parametrize("conflict", ["template", "alias", "package", "implementation"])
 def test_contract_generation_plans_conflicts_before_writing(installed, check, conflict):
     _, owner, _, flow, mount, prepare = installed

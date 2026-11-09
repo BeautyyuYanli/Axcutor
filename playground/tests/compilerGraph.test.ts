@@ -17,7 +17,7 @@ function compile(document: object, entry = 'folder.demo.main') {
 }
 const run = { run: { executor: 'builtin', content: 'return Output()' } };
 const frame = (address: string, kind: Frame['kind'] = 'function', cursor = 'start', children: Frame[] = []): Frame => ({
-  address, kind, cursor, children, call_depth: 1, steps: 0, max_steps: null, variables: {},
+  address, kind, cursor, children, waiting: [], call_depth: 1, steps: 0, max_steps: null, variables: {},
 });
 
 describe('real WASM serialization and CFG', () => {

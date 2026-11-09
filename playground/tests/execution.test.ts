@@ -48,10 +48,11 @@ describe('generated Hey API execution boundary', () => {
     expect(gets).toHaveLength(1);
     expect(gets[0].signal.aborted).toBe(false);
 
-    const running = view().replace('"frames":[]', '"frames":[{"kind":"function","address":"main","cursor":"work","call_depth":1,"steps":1,"max_steps":1000,"variables":{},"children":[]}]');
+    const running = view().replace('"frames":[]', '"frames":[{"kind":"function","address":"main","cursor":"work","waiting":["main/work"],"call_depth":1,"steps":1,"max_steps":1000,"variables":{},"children":[]}]');
     replies[0](response(running));
     await vi.advanceTimersByTimeAsync(0);
     expect(state.execution.value?.frames[0]?.cursor).toBe('work');
+    expect(state.execution.value?.frames[0]?.waiting).toEqual(['main/work']);
     await vi.advanceTimersByTimeAsync(299);
     expect(gets).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);

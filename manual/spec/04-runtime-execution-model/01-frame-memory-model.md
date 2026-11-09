@@ -53,5 +53,5 @@ $$\rho : \text{dom}(\Sigma_G) \to \text{JSONValue} \cup \{\text{Unbound}\}$$
 1. **只读输入提取（Read-Only Snapshot Extraction）**：
    * 任意节点激活时，运行时仅按其声明的读取集合提取变量快照（不可变视图或深拷贝）传入执行器；执行器在运行期间对传入对象的原地修改不影响栈帧中的 $\rho$。
 2. **原子校验写回（Atomic Validated Commit）**：
-   * 节点正常返回 `(branch, raw_output)` 后，运行时首先验证 `branch` 合法，且 `raw_output` 中包含该 `branch` 契约要求的全部字段并逐一通过 `TypeSpec` Schema 校验（若违约则抛出 `contract` 异常并丢弃 `raw_output`）；
+   * 节点正常返回 `(branch, raw_output)` 后，运行时首先验证 `branch` 合法，且 `raw_output` 中包含该 `branch` 契约要求的全部字段并逐一通过 `TypeSpec` Schema 校验（Activity 或子图违约产生 `contract`；`signal` 的外部输入在 Update Validator 中拒绝，保持等待状态）；
    * 校验全部通过后，仅将该分支契约允许的字段子集 $\Delta_{\text{valid}}$ 一次性通过右优先覆盖算子 $\rho \leftarrow \rho \triangleleft \Delta_{\text{valid}}$ 原子更新至所属栈帧的 $\rho$（或写入 `for_each` 的当次迭代槽位缓冲）。

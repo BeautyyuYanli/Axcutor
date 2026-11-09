@@ -14,6 +14,8 @@ from axcutor_host import (
     InputValidationError,
     InvalidRequest,
     RuntimeUnavailable,
+    SignalNotWaiting,
+    SignalValidationError,
 )
 from axcutor_runtime import AxcutorInterpreterWorkflow
 from axcutor_runtime.codec import dumps, loads
@@ -22,6 +24,7 @@ from helpers import INTEGER, N, action, array, assign, builtin, call, graph, inl
 from temporalio import workflow
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 
@@ -54,7 +57,7 @@ def service(client, queue=None, **kwargs):
 
 async def assert_not_public(host, handle):
     assert (await handle.describe()).status == WorkflowExecutionStatus.RUNNING
-    for method in (host.get, host.cancel):
+    for method in (host.get, host.cancel, lambda execution_id: host.signal(execution_id, "main")):
         with pytest.raises(ExecutionNotFound):
             await method(handle.id)
     assert (await handle.describe()).status == WorkflowExecutionStatus.RUNNING
@@ -236,6 +239,7 @@ async def test_live_frame_tree_and_cooperative_cancel_include_all_descendants(se
                     "kind": "function",
                     "address": f"demo.main/batch[{i}]/invoke",
                     "cursor": "run",
+                    "waiting": [],
                     "call_depth": 3,
                     "steps": 0,
                     "max_steps": None,
@@ -487,3 +491,197 @@ async def test_completion_racing_cancel_is_idempotent(server, monkeypatch):
             assert final["status"] == "completed" and final["frames"] == []
         finally:
             release.set()
+
+
+async def signal_view(host, execution_id, addresses):
+    async with asyncio.timeout(10):
+        while True:
+            view = await host.get(execution_id)
+            nodes = list(view["frames"])
+            waiting = []
+            while nodes:
+                frame = nodes.pop(0)
+                waiting.extend(frame["waiting"])
+                nodes.extend(frame["children"])
+            if set(waiting) == set(addresses):
+                return view
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize("child", [False, True])
+async def test_signal_routes_multiple_child_levels_and_rewrites_waiting_addresses(server, child):
+    queue = str(uuid4())
+    host = ExecutionService(
+        server.client, queue, options={"child_workflow_history_events": 1 if child else None}
+    )
+    leaf = {"input": {"n": INTEGER}, "output": {"value": N}, "run": {"executor": "signal"}}
+    middle = graph(
+        {"invoke": call("demo.leaf", {"n": "n"}, {"value": "answer"})},
+        ["start -> invoke", "invoke -> end"],
+        inputs={"n": INTEGER},
+        outputs={"answer": N},
+    )
+    doc = graph(
+        {"invoke": call("demo.middle", {"n": "n"}, {"answer": "result"})},
+        ["start -> invoke", "invoke -> end"],
+        inputs={"n": INTEGER},
+        outputs={"result": N},
+    )
+    sources = packages(doc, **{"demo.middle": middle, "demo.leaf": leaf})
+    async with create_worker(server.client, queue):
+        first = await host.submit("demo.main", sources, {"n": 10**40})
+        execution_id = first["execution_id"]
+        address = "demo.main/invoke/invoke"
+        view = await signal_view(host, execution_id, [address])
+        leaf_frame = view["frames"][0]["children"][0]["children"][0]
+        assert leaf_frame["address"] == address and leaf_frame["variables"] == {"n": 10**40}
+        with pytest.raises(SignalNotWaiting):
+            await host.signal(execution_id, "elsewhere")
+        with pytest.raises(SignalValidationError):
+            await host.signal(execution_id, address, {"value": True})
+        assert (await signal_view(host, execution_id, [address]))["frames"] == view["frames"]
+        value = Decimal("1.00000000000000000000000000001")
+        response = await host.signal(execution_id, address, {"value": value})
+        assert response["status"] in ("running", "completed")
+        final = await host.wait(execution_id)
+        assert final["result"]["output"] == {"result": value}
+        with pytest.raises(SignalNotWaiting):
+            await host.signal(execution_id, address, {"value": value})
+
+
+async def test_signal_child_routing_requires_path_segment_boundary(server):
+    queue = str(uuid4())
+    host = ExecutionService(server.client, queue, options={"child_workflow_history_events": 1})
+    leaf = {"input": {}, "output": {}, "run": {"executor": "signal"}}
+    doc = graph(
+        {"call": call("leaf"), "call_other": {"run": {"executor": "signal"}}},
+        ["start -> [call, call_other] -> end"],
+    )
+    async with create_worker(server.client, queue):
+        first = await host.submit("demo.main", packages(doc, leaf=leaf))
+        execution_id = first["execution_id"]
+        await signal_view(host, execution_id, ["demo.main/call", "demo.main/call_other"])
+        response = await host.signal(execution_id, "demo.main/call_other")
+        assert response["status"] == "running"
+        await signal_view(host, execution_id, ["demo.main/call"])
+        with pytest.raises(SignalNotWaiting):
+            await host.signal(execution_id, "demo.main/call[0]")
+        await host.signal(execution_id, "demo.main/call")
+        assert (await host.wait(execution_id))["status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"address": ""},
+        {"address": None},
+        {"address": 1},
+        {"output": []},
+        {"branch": ""},
+        {"branch": 1},
+        {"step": True},
+        {"step": 0},
+        {"step": -1},
+        {"step": Decimal("1.0")},
+        {"output": {"bad": float("inf")}},
+    ],
+)
+async def test_signal_preflight_rejects_invalid_shapes_without_backend(kwargs):
+    client = await Client.connect("127.0.0.1:1", lazy=True)
+    host = service(client, rpc_timeout=timedelta(milliseconds=100))
+    with pytest.raises(InvalidRequest):
+        await host.signal("missing", **{"address": "main/wait", **kwargs})
+
+
+async def test_signal_missing_root_is_not_found(server):
+    with pytest.raises(ExecutionNotFound):
+        await service(server.client).signal(str(uuid4()), "main/wait")
+
+
+@pytest.mark.parametrize("operation", ["query", "execute_update"])
+async def test_close_racing_signal_is_conflict_after_root_existence(server, monkeypatch, operation):
+    queue = str(uuid4())
+    host = service(server.client, queue)
+    doc = {"input": {}, "output": {}, "run": {"executor": "signal"}}
+    async with create_worker(server.client, queue):
+        first = await host.submit("demo.main", packages(doc))
+        execution_id = first["execution_id"]
+        await signal_view(host, execution_id, ["demo.main"])
+        original = getattr(WorkflowHandle, operation)
+
+        async def close_before_operation(handle, *args, **kwargs):
+            await handle.terminate()
+            return await original(handle, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(WorkflowHandle, operation, close_before_operation)
+            with pytest.raises(SignalNotWaiting):
+                await host.signal(execution_id, "demo.main")
+        assert (await host.get(execution_id))["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "status",
+    [RPCStatusCode.NOT_FOUND, RPCStatusCode.FAILED_PRECONDITION, RPCStatusCode.UNAVAILABLE],
+)
+async def test_signal_update_rpc_errors_distinguish_close_from_outage(server, monkeypatch, status):
+    queue = str(uuid4())
+    host = service(server.client, queue)
+    doc = {"input": {}, "output": {}, "run": {"executor": "signal"}}
+    async with create_worker(server.client, queue):
+        first = await host.submit("demo.main", packages(doc))
+        execution_id = first["execution_id"]
+        await signal_view(host, execution_id, ["demo.main"])
+
+        async def rpc_failure(handle, *args, **kwargs):
+            raise RPCError("closed or unavailable", status, b"")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(WorkflowHandle, "execute_update", rpc_failure)
+            expected = (
+                RuntimeUnavailable if status == RPCStatusCode.UNAVAILABLE else SignalNotWaiting
+            )
+            with pytest.raises(expected):
+                await host.signal(execution_id, "demo.main")
+        await host.cancel(execution_id)
+        assert (await host.wait(execution_id))["status"] == "cancelled"
+
+
+@pytest.mark.parametrize("cancel_caller", [False, True])
+async def test_signal_real_update_deadline_and_caller_cancellation(
+    server, monkeypatch, cancel_caller
+):
+    queue = str(uuid4())
+    host = service(server.client, queue, rpc_timeout=timedelta(milliseconds=300))
+    doc = {"input": {}, "output": {}, "run": {"executor": "signal"}}
+    async with create_worker(server.client, queue) as worker:
+        first = await host.submit("demo.main", packages(doc))
+        execution_id = first["execution_id"]
+        await signal_view(host, execution_id, ["demo.main"])
+        original_query = WorkflowHandle.query
+        stopped = asyncio.Event()
+
+        async def stop_after_query(handle, *args, **kwargs):
+            snapshot = await original_query(handle, *args, **kwargs)
+            await worker.shutdown()
+            stopped.set()
+            return snapshot
+
+        with monkeypatch.context() as patch:
+            patch.setattr(WorkflowHandle, "query", stop_after_query)
+            task = asyncio.create_task(host.signal(execution_id, "demo.main"))
+            await asyncio.wait_for(stopped.wait(), 5)
+            if cancel_caller:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                with pytest.raises(RuntimeUnavailable):
+                    await asyncio.wait_for(task, 5)
+        handle = server.client.get_workflow_handle(execution_id)
+        assert (await handle.describe()).status == WorkflowExecutionStatus.RUNNING
+        assert not any(
+            e.event_type == EventType.EVENT_TYPE_WORKFLOW_EXECUTION_CANCEL_REQUESTED
+            for e in (await handle.fetch_history()).events
+        )
+        await handle.terminate()

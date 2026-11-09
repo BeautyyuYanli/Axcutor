@@ -86,6 +86,17 @@ AXCUTOR_API_URL=http://127.0.0.1:9000 npm --prefix playground run dev
 
 Canvas source 的 Submitted snapshot 始终对应提交时的编译结果。清理结束后编辑源码会切换到 Editor compilation；点击帧可返回执行快照。离开页面只停止观察，不会取消已提交的执行。
 
+`signal` 节点挂起时，帧树显示 `Waiting for signal` 及精确等待地址，workspace 继续保持忙状态。通过 [Execution 信号接口](../reference/04-execution-http-api.md#投递外部信号) 选择地址并提交输出，例如：
+
+```http
+POST /v1/executions/order-001:signal
+Content-Type: application/json
+
+{"address":"__main__/decision","output":{"reviewer":"alice"},"step":2}
+```
+
+接口沿用宿主的 `400`、`409`、`422`、`503` 错误契约，浏览器的后续轮询会展示恢复后的状态。工作流终态及本地清理结束后恢复文件编辑。
+
 匿名入口 `__main__` 中的 `module` 仍在编译期被拒绝，包挂载、私有可见性与模块布局沿用 [包与模块](./01-foundations/04-packages-and-modules.md)。
 
 ## 常驻 Worker 与再次运行
@@ -116,6 +127,7 @@ Submitted snapshot 保留实际提交的工作流 `entry + packages`，Python �
 | `POST /v1/workspace/executions` | 接收 entry、可选 input 文件路径和 revision，返回 Execution、实际 source 与生成后的 workspace；忙时返回 409。 |
 | `GET /v1/executions/{id}` | 沿用现有状态投影。 |
 | `POST /v1/executions/{id}:cancel` | 沿用现有协同取消。 |
+| `POST /v1/executions/{id}:signal` | 向 `Frame.waiting` 地址投递输出和可选分支、步数，沿用宿主信号契约。 |
 
 ```json
 {"entry":"workflows/demo/main/__axcutor__.yaml","input":"inputs/demo.json","revision":"<GET 或保存返回的 revision>"}

@@ -18,6 +18,8 @@
 
 > **内建算子无运行时可恢复异常**：内建算子（`use: builtin:<op>`）属于引擎内部纯确定性同步求值原语，其输出类型契约与合法分支在编译期已完全静态锁定，且禁止挂载 `timeout_ms`、`retry` 与 `catch`。因此在运行期，内建算子**永不产生可恢复运行时异常**（`execution` / `timeout` / `contract` / `max_steps`）；其运行期求值语义详见 [`05-builtin-operational-semantics.md`](./05-builtin-operational-semantics.md)。
 
+`run.executor: signal` 的可恢复异常全集仅为 `{timeout}`。地址、步数或外部输出契约错误均在只读 Update Validator 中拒绝，工作流继续等待，不进入 `retry` / `catch`；其 `"*"` 捕获分支仅对 `{timeout}` 求补。其他节点按自身允许的选择器集合求补。
+
 ---
 
 ## 二、 节点级执行、重试与捕获状态机（Node Execution State Machine）
@@ -43,7 +45,7 @@ stateDiagram-v2
 
 ### `catch` 分支匹配规则
 
-* 节点的 `catch` 声明中，各分支的显式选择器集合两两互斥，且最多有一个分支声明通配符 `"*"`（代表差集 $\{ \texttt{execution}, \texttt{timeout}, \texttt{contract}, \texttt{max\_steps} \} \setminus \bigcup \text{ExplicitSelectors}$）。
+* 节点的 `catch` 声明中，各分支的显式选择器集合两两互斥，且最多有一个分支声明通配符 `"*"`（代表节点允许的选择器集合与全部显式选择器集合的差集）。
 * 当可恢复异常 $E$ 从重试控制器逃逸时，若存在分支 $c \in \text{dom}(N.\text{catch})$ 使得 $E \in \text{Selectors}(c)$，则异常被消费，控制令牌以空输出（$\Delta = \emptyset$）转入异常出边 $N.c$。
 
 ---
