@@ -1,6 +1,6 @@
 /** Rust's serialized, checked contract (ast/mod.rs and compiler/mod.rs).
- * Numeric/constant/enum values are only a metadata view here. Keep compiler JSON
- * text for probe calls and display; never round-trip this view back into WASM.
+ * Numeric/constant/enum values are only a metadata view here. Exact queries
+ * must use the original WASM JSON, never a round-trip through this view.
  */
 export type SourceFormat = 'yaml' | 'json';
 export interface SourceDocument { format: SourceFormat; text: string }

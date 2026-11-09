@@ -80,10 +80,9 @@ export function layoutGraph(bundle: WorkflowBundle | null, scope: Scope, analysi
     for (const [cursor, route] of Object.entries(body.graph.routes)) {
       const source = route.source.kind === 'start' ? 'start' : route.source.node_id;
       const branch = route.source.kind === 'branch' ? route.source.branch_id : null;
-      const label = [branch, route.kill_vars.length ? `(kill: ${route.kill_vars.join(', ')})` : null].filter(Boolean).join(' ');
       const edge = (suffix: string, from: string, target: string, sourceHandle?: string) => edges.push({
         id: `route-${route.edge_index}-${suffix}`, source: from, target, sourceHandle,
-        label: from === source ? label || undefined : undefined, data: { cursor },
+        label: from === source ? branch ?? undefined : undefined, data: { cursor },
       });
       if (route.edge.kind === 'direct') {
         let target: string;

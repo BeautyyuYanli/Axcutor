@@ -1,26 +1,18 @@
 <script setup lang="ts">
 import type { Frame } from '../client/types.gen';
-import type { RawExecutionSlices } from '../utils/losslessJson';
+import type { ExecutionStep } from '../utils/executionView';
 
-defineProps<{ frames: Frame[]; slices: RawExecutionSlices; prefix?: string; selectedKey: string | null }>();
+defineProps<{ steps: ExecutionStep[]; selectedKey: string | null }>();
 const emit = defineEmits<{ select: [frame: Frame, key: string] }>();
-function frameKey(prefix: string | undefined, index: number): string { return prefix ? `${prefix}.${index}` : String(index); }
 </script>
 
 <template>
   <ul class="frame-tree">
-    <li v-for="(frame, index) in frames" :key="`${frame.kind}:${frame.address}:${index}`" :data-frame-kind="frame.kind">
-      <details open>
-        <summary>
-          <button type="button" :aria-pressed="selectedKey === `${frame.kind}:${frame.address}`" @click.stop="emit('select', frame, `${frame.kind}:${frame.address}`)">
-            {{ frame.kind }} / {{ frame.address }} / {{ frame.cursor }}
-          </button>
-        </summary>
-        <p>call_depth: {{ frame.call_depth }} · steps: {{ frame.steps }} / {{ frame.max_steps ?? 'unlimited' }}</p>
-        <p v-if="frame.waiting.length">Waiting for signal: {{ frame.waiting.join(', ') }}</p>
-        <pre><code>{{ slices.frameVariablesRaw.get(frameKey(prefix, index)) ?? '{}' }}</code></pre>
-        <FrameTree v-if="frame.children.length" :frames="frame.children" :slices="slices" :prefix="frameKey(prefix, index)" :selected-key="selectedKey" @select="(child, key) => emit('select', child, key)" />
-      </details>
+    <li v-for="step in steps" :key="step.key" :data-frame-kind="step.frame.kind">
+      <button type="button" :aria-pressed="selectedKey === step.key" @click="emit('select', step.frame, step.key)">
+        {{ step.label }}{{ step.frame.waiting.length ? ' · Waiting for signal' : '' }}
+      </button>
+      <FrameTree v-if="step.children.length" :steps="step.children" :selected-key="selectedKey" @select="(child, key) => emit('select', child, key)" />
     </li>
   </ul>
 </template>

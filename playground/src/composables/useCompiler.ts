@@ -1,36 +1,29 @@
-/** WASM owns compilation and all type reasoning. Keep its original analysis
- * JSON for subsequent queries: enum literals and object order must not pass
- * through JavaScript's numeric/object serialization.
+/** WASM owns compilation and type reasoning. The UI consumes this metadata
+ * view for topology and diagnostics only; exact business values stay in the
+ * execution JSON slices, independently of compilation.
  */
-import { computed, onMounted, ref, shallowRef, watch, type Ref } from 'vue';
-import init, { compile_workflow, get_available_vars_at_node } from '../wasm-pkg/axcutor_wasm';
-import type { CompileOutput, CompileRequest, SourceDocument, VariableCandidate } from '../types/compiler';
-import { JsonText } from '../utils/losslessJson';
+import { onMounted, ref, shallowRef, watch, type Ref } from 'vue';
+import init, { compile_workflow } from '../wasm-pkg/axcutor_wasm';
+import type { CompileOutput, CompileRequest, SourceDocument } from '../types/compiler';
 
 let initialization: Promise<unknown> | undefined;
 
-export function compileSource(source: CompileRequest): { output: CompileOutput; raw: JsonText } {
-  const raw = new JsonText(compile_workflow(JSON.stringify(source)));
-  return { raw, output: JSON.parse(raw.text) as CompileOutput };
+export function compileSource(source: CompileRequest): CompileOutput {
+  return JSON.parse(compile_workflow(JSON.stringify(source))) as CompileOutput;
 }
 
 export function useCompiler(entry: Ref<string>, packages: Ref<Record<string, SourceDocument>>) {
   const ready = ref(false);
   const error = ref<string | null>(null);
   const compileOutput = shallowRef<CompileOutput | null>(null);
-  const rawOutput = shallowRef<JsonText | null>(null);
-  const analyses = computed(() => compileOutput.value?.analysis ?? []);
 
   const compile = () => {
     if (!ready.value) return;
     try {
-      const compiled = compileSource({ entry: entry.value, packages: packages.value });
-      rawOutput.value = compiled.raw;
-      compileOutput.value = compiled.output;
+      compileOutput.value = compileSource({ entry: entry.value, packages: packages.value });
       error.value = null;
     } catch (cause) {
       compileOutput.value = null;
-      rawOutput.value = null;
       error.value = String(cause);
     }
   };
@@ -45,17 +38,5 @@ export function useCompiler(entry: Ref<string>, packages: Ref<Record<string, Sou
   });
   watch([entry, packages], compile, { deep: true });
 
-  function availableVariables(analysisJson: string, nodeId: string, expected: string): {
-    candidate: VariableCandidate; typespecRaw: string;
-  }[] {
-    if (!ready.value) return [];
-    const result = get_available_vars_at_node(analysisJson, nodeId, expected ? JSON.stringify({ type: expected }) : undefined);
-    const tokens = new JsonText(result);
-    const candidates = JSON.parse(result) as VariableCandidate[];
-    return candidates.map((candidate, i) => ({
-      candidate, typespecRaw: tokens.format([i, 'typespec']) ?? '',
-    }));
-  }
-
-  return { ready, error, compileOutput, rawOutput, analyses, availableVariables };
+  return { ready, error, compileOutput };
 }
