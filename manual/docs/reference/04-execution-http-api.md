@@ -10,7 +10,7 @@
 uv run --locked python -m axcutor_host.http --output openapi.json
 ```
 
-`input`、帧变量和输出为任意业务 JSON；生成的客户端类型不能替代无损 JSON 处理。[Web Playground](../guide/00-web-playground.md) 展示原始文本序列化与响应切片的集成方式。
+`input`、帧变量和输出为任意业务 JSON；生成的客户端类型不能替代无损 JSON 处理。
 
 ## 提交执行
 

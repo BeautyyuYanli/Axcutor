@@ -1,9 +1,5 @@
 # 渐进式教程（Guide）
 
-实际运行入口见 [使用 Docker 执行工作流](./00-run-with-docker.md)，包含基础设施启动、CLI 文件提交、HTTP 调用与 Temporal Web UI 查询方式。接口字段与状态模型见 [Execution HTTP API](../reference/04-execution-http-api.md)。
-
-浏览器内编辑、静态分析与执行调试见 [Web Playground](./00-web-playground.md)。
-
 Axcutor 是一套将**显式控制流图（Control-Flow Graph）**与**强类型数据流契约（Data-Flow Contract）**相结合的声明式工作流编排语言。在编写工作流时，开发者无需关注底层异步状态机与并发锁的维护，只需围绕**控制流拓扑**与**栈帧变量表**构建清晰的计算模型。
 
 ---

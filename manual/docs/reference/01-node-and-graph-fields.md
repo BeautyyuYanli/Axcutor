@@ -109,7 +109,7 @@ graph:
   - **Worker 路由与源码合成**：Python Worker 默认同时提供 `builtin` 与 `module` 执行器；`options.task_queues` 按执行器名路由。需要导出 `builtin` 节点独立 Python 源码进行类型检查时，可调用 `axcutor_runtime.builtin.synthesize_module(input_schema, output_schema, branches_contract, content)`（返回 `source` 与 `line_offset`）；对于 `module` 节点，`axcutor contracts`（或 `synthesize_contract_module`）生成含 `__axcutor_contract_sha256__` 指纹的契约桩，运行时强制比对指纹（见 [04. 包挂载与 Python 模块](../guide/01-foundations/04-packages-and-modules.md)）。
   - **生成模型边界**：生成源码统一使用 Python 3.11 支持的 `TypeAlias` 表达返回联合类型；数值枚举由严格数值注解与枚举校验器共同约束（因 Python `Literal` 不支持小数字面量）。超过原生有限 `float` 范围的 `number` 输入在模型边界产生 `contract` 异常。
 - **`signal` 协作式等待执行器补充约定**：
-  - **信号投递与契约校验**：通过 [HTTP `:signal`](./04-execution-http-api.md#投递外部信号) 或 [CLI `axcutor signal`](../guide/00-run-with-docker.md#使用-cli-恢复等待节点) 按 `Frame.waiting` 中的规范地址提交符合节点 `output` / `branches` 契约的响应。节点的 `input` 声明仍参与编译期必达定值分析，外部调用方通过观察所属栈帧的 `variables` 获取上下文。
+  - **信号投递与契约校验**：通过 [HTTP `:signal`](./04-execution-http-api.md#投递外部信号) 或 CLI `axcutor signal` 按 `Frame.waiting` 中的规范地址提交符合节点 `output` / `branches` 契约的响应。节点的 `input` 声明仍参与编译期必达定值分析，外部调用方通过观察所属栈帧的 `variables` 获取上下文。
   - **超时、异常域与并发屏障**：省略 `timeout_ms` 时无限期等待（不套用 Activity 默认期限）。非法外部信号在投递边界被拒绝（`422`），节点保持等待且不消耗重试预算；`retry.on` 默认且仅允许 `[timeout]`，`catch` 的 `"*"` 仅对 `{timeout}` 求补，声明其他选择器将触发编译错误。在 Fork-Join 与 `for_each` 中，单分支或单元素的信号输出仍在汇合屏障处统一提交，迭代等待期间持续持有 `concurrency` 并发许可：
     ```yaml
     decision:

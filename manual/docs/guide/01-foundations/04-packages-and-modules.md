@@ -113,8 +113,6 @@ uv run --locked axcutor worker --module-mount billing=company.billing
 
 工作流文档在提交时形成不可变快照；Python 模块使用宿主部署与导入缓存，代码版本由宿主管理，不嵌入执行历史。进行中的执行需要匹配快照 SHA 的契约，不能通过修改模板跳过部署一致性。
 
-[Playground](../00-web-playground.md) 使用一个常驻 Worker，在两次 Run 之间清除 workspace 自有模块与字节码缓存，再普通导入当前文件。例如，当前执行清理完成后把 `value * 2` 改成 `value * 3` 并保存，下一次 Run 导入新文件。提交、运行和清理期间禁止文件编辑、新建、删除、保存和再次 Run；后端在忙时拒绝保存和新 Run，返回 `409`。单次图内并发保持原样。此边界由独立 Playground 后端负责，通用 `module` 执行器仍使用 Python 标准导入缓存。
-
 仓库的 `examples/workflows/demo/module_double/` 提供可运行示例：
 
 ```sh
