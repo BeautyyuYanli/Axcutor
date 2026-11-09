@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { WorkspaceFile } from '../client/types.gen';
-import type { JsonText } from '../utils/losslessJson';
 
 const props = defineProps<{
-  files: WorkspaceFile[]; entry: string; selectedFile: string;
-  readOnly: boolean; compilerRaw: JsonText | null;
+  files: WorkspaceFile[]; selectedFile: string;
+  readOnly: boolean; filesOpen: boolean; editorOpen: boolean;
 }>();
 const emit = defineEmits<{
   file: [path: string];
@@ -28,12 +27,6 @@ const rows = computed(() => {
     return [...parents, { path: file.path, depth: parts.length - 1, name: parts.at(-1)!, file }];
   });
 });
-const contract = computed(() => {
-  const path = ['bundle', 'workflows', props.entry, 'input'];
-  return [...(props.compilerRaw?.at(path)?.entries?.keys() ?? [])].map(name => ({
-    name, schema: props.compilerRaw?.format([...path, name]),
-  }));
-});
 function add() {
   if (props.readOnly) return;
   emit('add', newPath.value);
@@ -42,7 +35,7 @@ function add() {
 </script>
 
 <template>
-  <section class="file-sidebar" aria-label="File browser">
+  <section id="workspace-files" v-show="filesOpen" class="file-sidebar" aria-label="File browser">
     <h2>Workspace files</h2>
     <nav aria-label="Workspace files" class="file-tree">
       <div v-for="row in rows" :key="row.path" class="file-row" :style="{ paddingLeft: `${Math.min(row.depth, 6) * 0.65}rem` }">
@@ -55,7 +48,7 @@ function add() {
       <button type="submit" :disabled="readOnly">Create file</button>
     </form>
   </section>
-  <section class="source-editor" aria-label="Source workspace">
+  <section id="workspace-editor" v-show="editorOpen" class="source-editor" aria-label="Source workspace">
     <div class="source-toolbar">
       <h2>Source</h2>
       <button v-if="document" type="button" :disabled="document.generated || readOnly" @click="emit('remove', selectedFile)">Delete file</button>
@@ -66,14 +59,5 @@ function add() {
       <textarea id="source-text" :value="document.text" :readonly="document.generated || readOnly" rows="10" spellcheck="false" wrap="off" @input="emit('text', selectedFile, ($event.target as HTMLTextAreaElement).value)" />
     </template>
     <p v-else>Select or create a source file.</p>
-    <details v-if="compilerRaw?.at(['bundle', 'workflows', entry])" class="entry-contract">
-      <summary>Entry input contract ({{ contract.length }} fields)</summary>
-      <div class="table-scroll">
-        <table>
-          <thead><tr><th>Field</th><th>TypeSpec</th></tr></thead>
-          <tbody><tr v-for="field in contract" :key="field.name"><th>{{ field.name }}</th><td><pre><code>{{ field.schema }}</code></pre></td></tr></tbody>
-        </table>
-      </div>
-    </details>
   </section>
 </template>
