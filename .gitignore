@@ -7,4 +7,6 @@ __pycache__/
 /playground/dist/
 /playground/src/wasm-pkg/
 /playground/.browser-test/
+/playground/workspace/*
+!/playground/workspace/.gitkeep
 /.axcutor/

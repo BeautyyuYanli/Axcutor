@@ -11,7 +11,7 @@ docker compose up
 
 打开 [Playground](http://localhost:8080)，即可编辑真实 YAML/JSON/Python 文件、选择入口与输入文件、运行 module 工作流，并查看 CFG、变量探针和活跃帧。默认示例将 `[3,1,2]` 并发倍增为 `[6,2,4]`，汇总得到 `12`。
 
-`examples/` 是只读模板；首次启动复制到 `playground-data` 卷中的 `/data/workspace`。网页修改持久保存，不改动仓库。后端启动一个常驻 Worker，同一时间运行一个根工作流，图内仍可并发。提交、运行和清理期间，文件内容只读，新建、删除、保存与 Run 不可用；结束后可编辑并重跑，下一次 Run 重新导入当前 Python。多个页面共享 workspace，revision 冲突或运行忙时返回 `409`。详见 [Web Playground](manual/docs/guide/00-web-playground.md)。
+`examples/` 是只读模板；`playground/workspace/` 挂载到容器 `/workspace`。首次启动将示例初始化到 `playground/workspace/`，后续可在网页或宿主机直接编辑该目录下的文件，修改不被纳入 Git 跟踪。后端启动一个常驻 Worker，同一时间运行一个根工作流，图内仍可并发。提交、运行和清理期间，文件内容只读，新建、删除、保存与 Run 不可用；结束后可编辑并重跑，下一次 Run 重新导入当前 Python。多个页面共享 workspace，revision 冲突或运行忙时返回 `409`。详见 [Web Playground](manual/docs/guide/00-web-playground.md)。
 
 ## 使用 Docker CLI 执行工作流
 

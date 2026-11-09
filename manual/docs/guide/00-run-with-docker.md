@@ -109,9 +109,9 @@ docker compose restart worker
 docker compose down
 ```
 
-Temporal 的执行与历史数据保存在 `temporal-data` 命名卷中。Playground 使用独立 `playground-data` 卷保存 `/data/workspace`；首次从只读 `/examples` 初始化，后续保留网页修改。Run 直接在该目录生成契约，不保存运行副本、恢复凭据或结果缓存。
+Temporal 的执行与历史数据保存在 `temporal-data` 命名卷中。Playground 将 `playground/workspace/` 挂载到容器 `/workspace`；目录在仓库中仅保留 `.gitkeep`，首次启动从只读 `/examples` 初始化，后续在网页或宿主机可直接编辑其中的文件。Run 直接在该目录生成契约，不保存运行副本、恢复凭据或结果缓存。
 
-`docker compose down` 保留两个卷；`docker compose down -v` 删除两个卷。Playground 正常关闭时尽力取消当前演示并等待 Worker 清理；每次后端启动创建新队列，不恢复旧演示。提交结果不确定时保留原 ID 供查询或取消，不自动重新提交。该配置用于本地开发；Temporal 开发服务器的运行选项见 [官方命令参考](https://docs.temporal.io/cli/command-reference/server)。
+`docker compose down` 保留 `temporal-data` 卷与 `playground/workspace/` 中的文件；`docker compose down -v` 删除 `temporal-data` 卷。Playground 正常关闭时尽力取消当前演示并等待 Worker 清理；每次后端启动创建新队列，不恢复旧演示。提交结果不确定时保留原 ID 供查询或取消，不自动重新提交。该配置用于本地开发；Temporal 开发服务器的运行选项见 [官方命令参考](https://docs.temporal.io/cli/command-reference/server)。
 
 在宿主机运行时，可使用同样的命令行入口：
 
@@ -134,7 +134,7 @@ uv run --locked axcutor serve
 
 ```sh
 # 先按 Web Playground 指南生成、构建静态页面；默认监听 127.0.0.1:8080。
-uv run --locked axcutor-playground --data .axcutor --examples examples --static playground/dist
+uv run --locked axcutor-playground --workspace playground/workspace --examples examples --static playground/dist
 ```
 
 独立 YAML/JSON 入口文件使用匿名标识 `__main__`，也可通过 `--mount` 引用公开包。`module` 实现与生成契约需另行安装在 Worker 环境；只挂载提交端的工作流目录不会部署 Python 模块。契约生成、Worker 根映射和私有可见性见 [包与模块指南](./01-foundations/04-packages-and-modules.md)。

@@ -47,8 +47,8 @@ COPY examples /app/examples
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/examples/workflows
-RUN useradd --create-home --uid 10001 axcutor \
-    && mkdir /data && chown axcutor:axcutor /data
+RUN useradd --create-home --uid 1000 axcutor \
+    && mkdir /workspace && chown axcutor:axcutor /workspace
 USER axcutor
 ENTRYPOINT ["axcutor"]
 CMD ["worker"]

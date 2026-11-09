@@ -22,7 +22,10 @@ def edits(view):
 @pytest.fixture
 async def workspace_client(tmp_path):
     backend = await Client.connect("127.0.0.1:1", lazy=True)
-    workspace = Workspace(tmp_path / "data", EXAMPLES)
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / ".gitkeep").write_text("", encoding="utf-8")
+    workspace = Workspace(root, EXAMPLES)
     playground = Playground(backend, workspace)
     # File/preflight tests need no Worker or Temporal connection.
     workspace.open()
@@ -38,6 +41,8 @@ async def workspace_client(tmp_path):
 async def test_revision_conflicts_prevent_saves_and_runs_and_preserve_templates(workspace_client):
     workspace, playground, client = workspace_client
     initial = loads((await client.get("/v1/workspace")).text)
+    assert not any(file["path"].startswith(".") for file in initial["files"])
+    assert (workspace.root / ".gitkeep").is_file()
     files = edits(initial)
     files.append({"path": "nested/input.json", "text": '{"number":1.0}\r\n'})
     response = await client.put(
@@ -53,6 +58,7 @@ async def test_revision_conflicts_prevent_saves_and_runs_and_preserve_templates(
     saved = loads(response.text)
     assert saved["revision"] != initial["revision"]
     assert (workspace.root / "nested/input.json").read_bytes() == b'{"number":1.0}\r\n'
+    assert (workspace.root / ".gitkeep").is_file()
     for method, path, body in [
         (client.put, "/v1/workspace", {"revision": initial["revision"], "files": edits(initial)}),
         (
@@ -75,6 +81,7 @@ async def test_revision_conflicts_prevent_saves_and_runs_and_preserve_templates(
     files = [file for file in files if file["path"] != "nested/input.json"]
     await workspace.save(saved["revision"], files)
     assert not (workspace.root / "nested/input.json").exists()
+    assert (workspace.root / ".gitkeep").is_file()
 
 
 @pytest.mark.parametrize(
@@ -89,6 +96,10 @@ async def test_revision_conflicts_prevent_saves_and_runs_and_preserve_templates(
         "a.txt",
         "a.py/",
         "a\0.py",
+        ".gitkeep",
+        ".host.lock",
+        ".workspace-stage/a.py",
+        ".workspace-backup/a.py",
     ],
 )
 async def test_invalid_paths_do_not_change_any_files(workspace_client, path):
@@ -219,7 +230,7 @@ async def test_workspace_persists_and_only_one_host_can_own_it(workspace_client)
     workspace, _, _ = workspace_client
     view = await workspace.get()
     await workspace.save(view["revision"], edits(view) + [{"path": "kept.py", "text": "# kept"}])
-    other = Workspace(workspace.data, EXAMPLES)
+    other = Workspace(workspace.root, EXAMPLES)
     with pytest.raises(BlockingIOError):
         other.open()
     workspace.close()

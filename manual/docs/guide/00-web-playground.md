@@ -17,7 +17,7 @@ docker compose up
 
 ## 文件、保存与共享
 
-`examples/` 只读挂载到 `/examples`。首次启动复制到 `playground-data` 卷的 `/data/workspace`，后续保留网页修改，不写回仓库。
+`examples/` 只读挂载到 `/examples`，`playground/workspace/` 挂载到 `/workspace`。目录在仓库中仅保留 `.gitkeep`；首次启动将示例复制到 `playground/workspace/`，后续可在网页或宿主机直接编辑该目录下的文件，修改不被纳入 Git 跟踪。
 
 文件树展示实际目录与文件，YAML、JSON 和 Python 共用文本编辑器。Create file 可同时创建父目录，Delete file 只删除所选普通文件。接口接受 UTF-8 的 `.py`、`.yaml`、`.yml` 和 `.json` 相对路径，拒绝绝对路径、上级跳转、符号链接与特殊文件。Python 编译缓存不属于源文件，模板复制跳过 `__pycache__/`；该目录名不能用于新建源文件。`_contract.py` 和 `*_contract.py` 为只读生成文件。
 
@@ -66,7 +66,7 @@ uv run --locked axcutor-playground
 npm --prefix playground run dev
 ```
 
-后端默认使用 `.axcutor/` 保存数据、`examples/` 提供模板、`playground/dist/` 提供静态网页，可通过 `--data`、`--examples`、`--static` 指定路径。Vite 默认将 `/v1` 和 `/openapi.json` 代理至 `http://127.0.0.1:8080`；更换 API 地址时使用：
+后端默认使用 `playground/workspace/` 保存 workspace、`examples/` 提供模板、`playground/dist/` 提供静态网页，可通过 `--workspace`、`--examples`、`--static` 指定路径。Vite 默认将 `/v1` 和 `/openapi.json` 代理至 `http://127.0.0.1:8080`；更换 API 地址时使用：
 
 ```sh
 AXCUTOR_API_URL=http://127.0.0.1:9000 npm --prefix playground run dev
@@ -97,13 +97,13 @@ Canvas source 的 Submitted snapshot 始终对应提交时的编译结果。清�
 return Output(value=input.value * 3)
 ```
 
-每次 Run 前清除 workspace 自有业务包、辅助模块和契约的导入缓存，包括已删除文件的旧模块；清除 workspace 字节码缓存并使导入查找缓存失效，再按普通 Python 规则导入。host、runtime 和第三方库缓存保持原样。若 workspace 根包名已被非 workspace 模块占用，Run 拒绝该名称。运行中不 reload 模块；持久化文件只由后端写入，外部文件编辑器应停止写入该目录。
+每次 Run 前清除 workspace 自有业务包、辅助模块和契约的导入缓存，包括已删除文件的旧模块；清除 workspace 字节码缓存并使导入查找缓存失效，再按普通 Python 规则导入。host、runtime 和第三方库缓存保持原样。若 workspace 根包名已被非 workspace 模块占用，Run 拒绝该名称。运行中不 reload 模块；运行期间外部文件编辑器应避免并发修改该目录，在宿主机修改文件后可在页面点击 Reload (discard edits) 或刷新页面同步最新内容。
 
 Submitted snapshot 保留实际提交的工作流 `entry + packages`，Python 源码不进入执行历史。工作流与 Python 文件在两次运行之间编辑，修改在后续 Run 生效。通用 module 执行器仍使用标准导入缓存，此 Run 边界由独立 Playground 后端负责。
 
 正常关闭后端会尽力取消当前演示，等待本地清理并关闭 Worker。重启创建新队列，不恢复旧演示，不保存恢复凭据或执行结果。提交结果不确定时，错误详情保留 `execution_id`，可查询或取消原 ID；查询失败不表示执行未创建，也不会自动重新提交。无法确认该 ID 终态时，workspace 保持忙状态，重启后端可开始新的演示。
 
-`playground-data` 只保存持久化 workspace；`temporal-data` 保存执行历史与结果。`docker compose down` 保留二者，`docker compose down -v` 删除二者。Playground 是受信任的本地演示工具，不提供账户、每浏览器独立 workspace 或旧演示恢复保证。
+`playground/workspace/` 保存持久化 workspace 文件；`temporal-data` 保存执行历史与结果。`docker compose down` 保留二者，`docker compose down -v` 删除 `temporal-data` 卷。Playground 是受信任的本地演示工具，不提供账户、每浏览器独立 workspace 或旧演示恢复保证。
 
 ## Workspace HTTP 接口
 
@@ -149,10 +149,10 @@ uv run --locked ruff check python tests/runtime tests/host tests/conftest.py tes
 uv run --locked mypy
 ```
 
-浏览器测试会选择临时 HTTP、页面端口和数据目录，结束时关闭测试 Worker 和 Server。覆盖保存与重载、跨页面冲突、提交和运行期间禁止编辑与文件操作、完成或取消清理后恢复编辑、Python 与契约修改后重跑、工作流提交视图、CFG/帧联动及无损 JSON。Temporal 测试服务器与 Playwright 浏览器首次使用时需要下载；截图位于 `playground/.browser-test/`。
+浏览器测试会选择临时 HTTP、页面端口和 workspace 目录，结束时关闭测试 Worker 和 Server。覆盖保存与重载、跨页面冲突、提交和运行期间禁止编辑与文件操作、完成或取消清理后恢复编辑、Python 与契约修改后重跑、工作流提交视图、CFG/帧联动及无损 JSON。Temporal 测试服务器与 Playwright 浏览器首次使用时需要下载；截图位于 `playground/.browser-test/`。
 
 后端集成测试默认下载并启动 Temporal CLI v1.6.1 的开发服务器，验证 Worker 复用、再次导入、图内并发与取消清理。设置 `AXCUTOR_TEST_TEMPORAL_ADDRESS` 可改用已有的测试专用服务器；测试使用独立执行 ID 和队列。
 
 仅运行独立后端测试时使用 `uv run --locked pytest playground/backend/tests`。根 pytest、mypy 与 CI 已包含该包；CI 的静态检查也覆盖其源码、测试和浏览器辅助脚本。
 
-也可设置 `AXCUTOR_BROWSER_URL=http://127.0.0.1:8080`，对已启动的 Compose 生产网页运行同一套检查。此模式会编辑目标 workspace，应使用隔离的测试项目与数据卷。
+也可设置 `AXCUTOR_BROWSER_URL=http://127.0.0.1:8080`，对已启动的 Compose 生产网页运行同一套检查。此模式会编辑目标 workspace，应使用隔离的测试项目与工作区目录。

@@ -12,4 +12,5 @@ playground/node_modules
 playground/dist
 playground/src/wasm-pkg
 playground/.browser-test
+playground/workspace
 .axcutor

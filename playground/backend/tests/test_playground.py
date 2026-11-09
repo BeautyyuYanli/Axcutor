@@ -60,7 +60,7 @@ def templates(tmp_path):
 
 @pytest.fixture
 async def playground(server, tmp_path, templates):
-    host = Playground(server.client, Workspace(tmp_path / "data", templates))
+    host = Playground(server.client, Workspace(tmp_path / "workspace", templates))
     await host.start()
     try:
         yield host
@@ -167,7 +167,7 @@ async def test_resident_worker_reimports_python_helpers_contracts_and_deleted_mo
     assert "helper" in dumps(failed["error"])
     assert "playground_demo.double.helper" not in sys.modules
     assert host._worker is worker
-    assert not (host.workspace.data / "runs").exists()
+    assert not (host.workspace.root / "runs").exists()
 
 
 async def test_busy_rejects_writes_immediately_but_keeps_graph_concurrency(playground):
@@ -313,7 +313,7 @@ async def execute(input: Input) -> ReturnType:
 
 
 async def test_shutdown_cancels_demo_and_restart_uses_fresh_queue(server, tmp_path, templates):
-    host = Playground(server.client, Workspace(tmp_path / "data", templates))
+    host = Playground(server.client, Workspace(tmp_path / "workspace", templates))
     await host.start()
     view = host.view()
     queue = host.queue
@@ -322,13 +322,13 @@ async def test_shutdown_cancels_demo_and_restart_uses_fresh_queue(server, tmp_pa
     assert (await host.executions.wait(result["execution"]["execution_id"]))[
         "status"
     ] == "cancelled"
-    restarted = Playground(server.client, Workspace(tmp_path / "data", templates))
+    restarted = Playground(server.client, Workspace(tmp_path / "workspace", templates))
     await restarted.start()
     try:
         assert restarted.queue != queue
         assert not restarted.view()["busy"]
         assert restarted.view()["revision"] == result["workspace"]["revision"]
-        assert not (host.workspace.data / "runs").exists()
+        assert not (host.workspace.root / "runs").exists()
     finally:
         await restarted.close()
 
@@ -372,7 +372,7 @@ async def test_ambiguous_submission_retains_id_without_automatic_resubmission(
 async def test_execution_routes_preserve_ids_lossless_frames_and_cancellation(
     server, tmp_path, templates
 ):
-    host = Playground(server.client, Workspace(tmp_path / "data", templates))
+    host = Playground(server.client, Workspace(tmp_path / "workspace", templates))
     queue = str(uuid4())
     service = ExecutionService(server.client, queue)
     execution_id = "订单 / a/../b\n% ? # :cancel"
@@ -429,8 +429,8 @@ async def test_independent_console_entry_starts_http_serves_static_and_runs_modu
             server.client.namespace,
             "--port",
             str(port),
-            "--data",
-            str(tmp_path / "data"),
+            "--workspace",
+            str(tmp_path / "workspace"),
             "--examples",
             str(templates),
             "--static",

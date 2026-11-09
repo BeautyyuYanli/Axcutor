@@ -16,7 +16,7 @@ from .workspace import Workspace
 
 async def _run(args: argparse.Namespace) -> None:
     client = await Client.connect(args.address, namespace=args.namespace)
-    playground = Playground(client, Workspace(args.data, args.examples))
+    playground = Playground(client, Workspace(args.workspace, args.examples))
     await uvicorn.Server(
         uvicorn.Config(
             create_playground_app(playground, args.static), host=args.host, port=args.port
@@ -30,7 +30,7 @@ def main() -> None:
     parser.add_argument("--namespace", default=os.getenv("TEMPORAL_NAMESPACE", "default"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--data", type=Path, default=Path(".axcutor"))
+    parser.add_argument("--workspace", type=Path, default=Path("playground/workspace"))
     parser.add_argument("--examples", type=Path, default=Path("examples"))
     parser.add_argument("--static", type=Path, default=Path("playground/dist"))
     args = parser.parse_args()

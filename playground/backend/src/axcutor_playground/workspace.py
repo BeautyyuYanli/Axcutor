@@ -1,9 +1,8 @@
 """Text-only workspace storage; no Python imports and no execution state.
 
-One backend owns a data directory. Its async lock serializes whole-workspace edits
-with Run preparation; a process lock prevents two backends sharing the volume.
+One backend owns a workspace directory. Its async lock serializes whole-workspace
+edits with Run preparation; a process lock prevents two backends sharing the tree.
 Revisions hash ordered paths and exact UTF-8 contents, including generated files.
-Only the backend writes this tree: external filesystem writers must be stopped.
 """
 
 import asyncio
@@ -17,6 +16,8 @@ from typing import Any, TextIO, TypedDict
 
 from axcutor_host.service import HostError, InvalidRequest
 from axcutor_runtime.packages import PackageMount, package_path
+
+_RESERVED = frozenset({".gitkeep", ".host.lock", ".workspace-backup", ".workspace-stage"})
 
 
 class WorkspaceConflict(HostError):
@@ -44,6 +45,7 @@ def source_path(value: Any) -> str:
         or str(path) != value
         or any(part in (".", "..") for part in path.parts)
         or "__pycache__" in path.parts
+        or path.parts[0] in _RESERVED
         or path.suffix not in (".yaml", ".yml", ".json", ".py")
     ):
         raise InvalidRequest(f"invalid source path: {value!r}")
@@ -58,8 +60,13 @@ def read_files(root: Path) -> list[WorkspaceFile]:
     """Reject symlinks/special files before reading, including directory links."""
     files: list[WorkspaceFile] = []
     for directory, dirs, names in os.walk(root, followlinks=False):
+        current = Path(directory)
         for name in sorted(dirs + names):
-            path = Path(directory) / name
+            if current == root and name in _RESERVED:
+                if name in dirs:
+                    dirs.remove(name)
+                continue
+            path = current / name
             mode = path.lstat().st_mode
             if stat.S_ISDIR(mode):
                 if name == "__pycache__":
@@ -77,12 +84,22 @@ def read_files(root: Path) -> list[WorkspaceFile]:
 
 
 def write_files(root: Path, files: list[WorkspaceFile]) -> None:
-    """Materialize a validated file set into a new, private directory."""
-    root.mkdir(parents=True)
+    """Materialize a validated file set into a directory."""
+    root.mkdir(parents=True, exist_ok=True)
     for file in files:
         target = root / file["path"]
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(file["text"], encoding="utf-8", newline="")
+
+
+def _entries(root: Path) -> list[Path]:
+    return [path for path in root.iterdir() if path.name not in _RESERVED]
+
+
+def _move_entries(source: Path, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for entry in _entries(source):
+        entry.rename(target / entry.name)
 
 
 def discover_mounts(root: Path) -> list[PackageMount]:
@@ -103,38 +120,45 @@ def discover_mounts(root: Path) -> list[PackageMount]:
 class Workspace:
     """Persistent shared source files with optimistic whole-workspace saves.
 
-    Replacements use a staged tree and a backup. Startup restores the backup if
-    interrupted between the two renames; a completed replacement wins otherwise.
-    Generated contracts must be returned unchanged, including on deletions.
+    Replacements use a staged tree and a backup inside the workspace root so the
+    root directory itself can be a bind-mounted volume. Startup restores the
+    backup if interrupted before stage replacement finished. Generated contracts
+    must be returned unchanged, including on deletions.
     """
 
-    def __init__(self, data: Path, examples: Path) -> None:
-        self.data = data.resolve()
+    def __init__(self, root: Path, examples: Path) -> None:
+        self.root = root.resolve()
         self.examples = examples
-        self.root = self.data / "workspace"
         self.lock = asyncio.Lock()
         self._owner: TextIO | None = None
 
     def open(self) -> None:
-        self.data.mkdir(parents=True, exist_ok=True)
-        self._owner = (self.data / ".host.lock").open("a")
+        if self.root.exists() and (self.root.is_symlink() or not self.root.is_dir()):
+            raise InvalidRequest("workspace must be an ordinary directory")
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._owner = (self.root / ".host.lock").open("a")
         try:
             fcntl.flock(self._owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            backup = self.data / ".workspace-backup"
-            if backup.exists() and not self.root.exists():
-                backup.rename(self.root)
+            backup = self.root / ".workspace-backup"
+            stage = self.root / ".workspace-stage"
             if backup.exists():
+                if stage.exists():
+                    # Interrupted before stage completely replaced the workspace.
+                    for entry in _entries(self.root):
+                        if entry.is_dir() and not entry.is_symlink():
+                            shutil.rmtree(entry)
+                        else:
+                            entry.unlink()
+                    _move_entries(backup, self.root)
                 shutil.rmtree(backup)
-            stage = self.data / ".workspace-stage"
             if stage.exists():
                 shutil.rmtree(stage)
-            if not self.root.exists():
+            if not _entries(self.root):
                 if not self.examples.is_dir() or self.examples.is_symlink():
                     raise InvalidRequest("examples must be an ordinary template directory")
                 write_files(stage, read_files(self.examples))
-                stage.rename(self.root)
-            if self.root.is_symlink() or not self.root.is_dir():
-                raise InvalidRequest("workspace must be an ordinary directory")
+                _move_entries(stage, self.root)
+                shutil.rmtree(stage)
             read_files(self.root)
         except BaseException:
             self.close()
@@ -190,15 +214,22 @@ class Workspace:
             original_generated = {f["path"]: f for f in current["files"] if f["generated"]}
             if original_generated != {p: f for p, f in proposed.items() if f["generated"]}:
                 raise InvalidRequest("generated contracts are read-only")
-            stage, backup = self.data / ".workspace-stage", self.data / ".workspace-backup"
+            stage = self.root / ".workspace-stage"
+            backup = self.root / ".workspace-backup"
             try:
                 write_files(stage, list(proposed.values()))
-                self.root.rename(backup)
+                _move_entries(self.root, backup)
                 try:
-                    stage.rename(self.root)
+                    _move_entries(stage, self.root)
                 except OSError:
-                    backup.rename(self.root)
+                    for entry in _entries(self.root):
+                        if entry.is_dir() and not entry.is_symlink():
+                            shutil.rmtree(entry)
+                        else:
+                            entry.unlink()
+                    _move_entries(backup, self.root)
                     raise
+                shutil.rmtree(stage)
                 shutil.rmtree(backup)
             finally:
                 if stage.exists():
