@@ -101,7 +101,7 @@ pub fn validate_run_contract(
         let value = raw
             .get(name)
             .ok_or_else(|| fail(&format!("missing output {name}")))?;
-        if !typespec.accepts(value) {
+        if !typespec.accepts_runtime(value) {
             return Err(fail(&format!("output {name} violates TypeSpec")));
         }
         output.insert(name.into(), value.clone());
@@ -120,7 +120,7 @@ pub fn validate_input(input: &Value, schema: &Symbols) -> Result<Value, KernelEr
     if values.len() != schema.len()
         || !schema
             .iter()
-            .all(|(k, t)| values.get(k).is_some_and(|v| t.accepts(v)))
+            .all(|(k, t)| values.get(k).is_some_and(|v| t.accepts_runtime(v)))
     {
         return Err(fail());
     }
@@ -458,4 +458,22 @@ pub fn validate_run_contract_json(
 }
 pub fn validate_input_json(input: &str, schema: &str) -> Result<String, KernelError> {
     encode(&validate_input(&decode(input)?, &symbols(schema)?)?)
+}
+
+/// Validate the actual host entry separately from compilation of reusable definitions.
+pub fn validate_root_interface_json(input: &str, output: &str) -> Result<String, KernelError> {
+    if symbols(input)?
+        .values()
+        .chain(symbols(output)?.values())
+        .any(TypeSpec::contains_handle)
+    {
+        return Err(KernelError::Input(
+            "root input and output must contain only pure values".into(),
+        ));
+    }
+    Ok("null".into())
+}
+
+pub fn literal_equal_json(left: &str, right: &str) -> Result<bool, KernelError> {
+    Ok(literal_eq(&decode(left)?, &decode(right)?))
 }

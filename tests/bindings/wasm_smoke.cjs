@@ -21,6 +21,12 @@ for (const entry of oracle) {
   }
 }
 console.log('Rejected query groups:', invalidQueries);
+const handleSchema = '{"tx":{"type":"handle","kind":"infra.postgres:Tx"}}';
+const handleValue = '{"tx":{"$handle":"res_1","kind":"infra.postgres:Tx"}}';
+assert.deepEqual(JSON.parse(api.validate_input(handleValue, handleSchema)), JSON.parse(handleValue));
+assert.deepEqual(JSON.parse(api.validate_run_contract('{"output":' + handleValue + '}', handleSchema, '{}')).output, JSON.parse(handleValue));
+assert.throws(() => api.validate_root_interface(handleSchema, '{}'), hostError);
+assert.throws(() => api.validate_input('{"tx":{"$handle":"res_1","kind":"infra.postgres:Other"}}', handleSchema), hostError);
 assert.throws(() => api.compile_workflow('{}'));
 assert.throws(() => api.compile_workflow('not JSON'));
 assert.throws(() => api.get_available_vars_at_node('{}', 'n'));

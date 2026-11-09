@@ -195,6 +195,10 @@ class ExecutionService:
         bundle_json = compile_bundle(entry, packages)
         bundle = loads(bundle_json)
         try:
+            axcutor_core.validate_root_interface(
+                dumps(bundle["workflows"][entry]["input"]),
+                dumps(bundle["workflows"][entry]["output"]),
+            )
             input_json = axcutor_core.validate_input(
                 dumps(inputs), dumps(bundle["workflows"][entry]["input"])
             )

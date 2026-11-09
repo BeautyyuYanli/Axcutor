@@ -90,6 +90,8 @@ async def execute(input: Input) -> ReturnType:
 
 模板只包含契约与模块级 `__axcutor_contract_sha256__`，不包含业务函数。指纹覆盖归一化的输入、输出与分支，包括声明顺序。多个引用指向同一实际实现文件时，全部契约必须一致，包括 `.` 与 `.__init__`。模板目标与已有 Python 包目录同名、覆盖实现文件或共享实现契约不一致时，生成与 `--check` 均在写入前拒绝。模板变更后应重新生成并随业务包部署。
 
+含[资源句柄](../../reference/05-resource-handles.md)时，contracts 同样支持可重复 `--module-mount ROOT=PYTHON_PACKAGE`，生成精确资源类的静态导入。`--mount` 只决定 DSL 发现和文件位置，不推导 Python 包名；纯资源包无需 DSL 挂载。静态检查环境必须能导入映射后的资源类。
+
 ## Worker 绑定与生命周期
 
 默认逻辑根 `billing` 映射到已安装 Python 包 `billing`。宿主也可显式配置前缀：
@@ -107,7 +109,7 @@ uv run --locked axcutor worker --module-mount billing=company.billing
 2. 确认 `Input` 与 `Output` 或 `Branch` 来自同一生成契约模块，并比较 SHA。
 3. 以深拷贝快照构造冻结输入模型，转换传输层数字；列表、映射保持 Python 容器语义，其修改不会影响原快照。
 4. 执行业务协程，严格核对输出类型与分支，再交给 Rust 进行最终输出校验。
-5. 取消或超时时取消业务任务并等待清理完成，丢弃迟到结果。
+5. 取消或超时时请求取消业务及其派生任务，丢弃迟到结果。资源调用的排空与本轮清理共用 30 秒上限；完成收尾或预算耗尽后结束旧调度授权，继续 `retry` / `catch`。Store 对仍未实际排空的本地使用者继续保活，实际排空后再清理；框架不保证迟到副作用与后续尝试的执行顺序或 exactly-once。
 
 导入失败和普通业务异常归为 `execution`，保留物理 Python 文件与行号；契约失配、返回类型错误及本契约输出模型的校验错误归为 `contract`。业务自建 Pydantic 模型的错误仍归为 `execution`。
 

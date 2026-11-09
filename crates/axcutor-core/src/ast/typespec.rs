@@ -1,5 +1,5 @@
 //! Closed TypeSpec algebra, subtype relation and target-directed literal validation.
-use super::{Ordered, Symbols, control_id};
+use super::{Ordered, Symbols, control_id, package_path, package_segment};
 use num_bigint::BigInt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use serde_json::{Value, json, value::RawValue};
@@ -14,6 +14,7 @@ pub enum Scalar {
 
 #[derive(Clone, Debug)]
 pub enum TypeKind {
+    Handle(String),
     Scalar {
         base: Scalar,
         enumeration: Option<Vec<Value>>,
@@ -35,6 +36,28 @@ pub struct TypeSpec {
 }
 
 impl TypeSpec {
+    pub fn handle(kind: &str) -> Result<Self, String> {
+        if !resource_kind(kind) {
+            return Err("handle kind must be <ModulePath>:<PublicClassName>".into());
+        }
+        Ok(Self {
+            kind: TypeKind::Handle(kind.into()),
+            nullable: false,
+            description: None,
+        })
+    }
+
+    pub fn contains_handle(&self) -> bool {
+        match &self.kind {
+            TypeKind::Handle(_) => true,
+            TypeKind::Array(t) | TypeKind::OrderedMap(t) => t.contains_handle(),
+            TypeKind::TypedDict { properties, .. } => {
+                properties.values().any(Self::contains_handle)
+            }
+            TypeKind::Scalar { .. } => false,
+        }
+    }
+
     pub fn scalar(base: Scalar) -> Self {
         Self {
             kind: TypeKind::Scalar {
@@ -71,6 +94,7 @@ impl TypeSpec {
     }
     pub fn base(&self) -> &'static str {
         match self.kind {
+            TypeKind::Handle(_) => "handle",
             TypeKind::Scalar {
                 base: Scalar::String,
                 ..
@@ -107,6 +131,7 @@ impl TypeSpec {
             _ => return Err("description must be a string".into()),
         };
         let fields: &[&str] = match base {
+            "handle" => &["type", "kind", "description"],
             "string" | "integer" | "number" | "boolean" => &["type", "description", "enum"],
             "array" => &["type", "description", "items"],
             "object" if m.contains_key("properties") => {
@@ -119,6 +144,14 @@ impl TypeSpec {
             return Err(format!("field {k} is not allowed on {base}"));
         }
         let kind = match base {
+            "handle" => {
+                Self::handle(
+                    m.get("kind")
+                        .and_then(Value::as_str)
+                        .ok_or("handle requires kind")?,
+                )?
+                .kind
+            }
             "array" => TypeKind::Array(Box::new(Self::parse(
                 m.get("items").ok_or("array requires items")?,
             )?)),
@@ -201,6 +234,7 @@ impl TypeSpec {
             return false;
         }
         match (&self.kind, &expected.kind) {
+            (TypeKind::Handle(a), TypeKind::Handle(b)) => a == b,
             (
                 TypeKind::Scalar {
                     base: a,
@@ -240,10 +274,34 @@ impl TypeSpec {
     }
 
     pub fn accepts(&self, value: &Value) -> bool {
+        self.accepts_runtime(value)
+    }
+
+    /// Literals never confer resource identity, even inside containers.
+    pub fn accepts_literal(&self, value: &Value) -> bool {
+        self.accepts_value(value, false)
+    }
+
+    /// Shape validation grants no permission to dereference a resource.
+    pub fn accepts_runtime(&self, value: &Value) -> bool {
+        self.accepts_value(value, true)
+    }
+
+    fn accepts_value(&self, value: &Value, runtime: bool) -> bool {
         if value.is_null() {
             return self.nullable;
         }
         match &self.kind {
+            TypeKind::Handle(kind) => {
+                runtime
+                    && value.as_object().is_some_and(|m| {
+                        m.len() == 2
+                            && m.get("$handle")
+                                .and_then(Value::as_str)
+                                .is_some_and(|s| !s.is_empty())
+                            && m.get("kind").and_then(Value::as_str) == Some(kind.as_str())
+                    })
+            }
             TypeKind::Scalar { base, enumeration } => {
                 scalar_matches(value, *base)
                     && enumeration
@@ -252,17 +310,20 @@ impl TypeSpec {
             }
             TypeKind::Array(t) => value
                 .as_array()
-                .is_some_and(|a| a.iter().all(|v| t.accepts(v))),
+                .is_some_and(|a| a.iter().all(|v| t.accepts_value(v, runtime))),
             TypeKind::OrderedMap(t) => value
                 .as_object()
-                .is_some_and(|m| m.values().all(|v| t.accepts(v))),
+                .is_some_and(|m| m.values().all(|v| t.accepts_value(v, runtime))),
             TypeKind::TypedDict {
                 properties,
                 required,
             } => value.as_object().is_some_and(|m| {
                 required.iter().all(|k| m.contains_key(k))
-                    && m.iter()
-                        .all(|(k, v)| properties.get(k).is_some_and(|t| t.accepts(v)))
+                    && m.iter().all(|(k, v)| {
+                        properties
+                            .get(k)
+                            .is_some_and(|t| t.accepts_value(v, runtime))
+                    })
             }),
         }
     }
@@ -276,6 +337,7 @@ impl TypeSpec {
             v["description"] = json!(d);
         }
         match &self.kind {
+            TypeKind::Handle(kind) => v["kind"] = json!(kind),
             TypeKind::Scalar {
                 enumeration: Some(e),
                 ..
@@ -293,6 +355,12 @@ impl TypeSpec {
         }
         v
     }
+}
+
+pub fn resource_kind(kind: &str) -> bool {
+    kind.split_once(':').is_some_and(|(module, class)| {
+        package_path(module) && package_segment(class) && !class.starts_with('_')
+    })
 }
 
 impl Serialize for TypeSpec {

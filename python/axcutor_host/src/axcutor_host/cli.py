@@ -64,7 +64,10 @@ async def _run(args: argparse.Namespace) -> None:
     if args.command == "contracts":
         mounts = [PackageMount(name, Path(path)) for name, path in _pairs(args.mount)]
         entry, packages = load_packages(args.workflow, mounts)
-        for path in generate_contracts(entry, packages, mounts, check=args.check):
+        mapping = dict(_pairs(args.module_mount)) if args.module_mount else None
+        for path in generate_contracts(
+            entry, packages, mounts, check=args.check, module_mounts=mapping
+        ):
             print(path)
         return
     # Controllers stay lazy so preflight precedes backend contact. The SDK
@@ -137,6 +140,9 @@ def main() -> None:
     contracts = commands.add_parser("contracts", help="generate module contracts without imports")
     contracts.add_argument("workflow", type=Path)
     contracts.add_argument("--mount", action="append", default=[], metavar="ROOT=DIRECTORY")
+    contracts.add_argument(
+        "--module-mount", action="append", default=[], metavar="ROOT=PYTHON_PACKAGE"
+    )
     contracts.add_argument(
         "--check", action="store_true", help="fail on missing or stale contracts"
     )

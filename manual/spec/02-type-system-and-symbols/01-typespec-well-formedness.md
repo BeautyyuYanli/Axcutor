@@ -7,7 +7,7 @@ Axcutor 的类型系统采用标准 JSON Schema 的**闭合强类型子集（`Ty
 ## 一、 基础类型域与可空性修饰公理
 
 设基础非空类型集合为：
-$$\mathcal{B} = \{\texttt{"string"}, \texttt{"integer"}, \texttt{"number"}, \texttt{"boolean"}, \texttt{"array"}, \texttt{"object"}\}$$
+$$\mathcal{B} = \{\texttt{"string"}, \texttt{"integer"}, \texttt{"number"}, \texttt{"boolean"}, \texttt{"array"}, \texttt{"object"}, \texttt{"handle"}\}$$
 
 1. **禁止 `any`、裸 `"null"` 与多类型联合**：
    * 每个 `TypeSpec` 必须包含 `type` 字段。
@@ -27,9 +27,9 @@ $$\mathcal{B} = \{\texttt{"string"}, \texttt{"integer"}, \texttt{"number"}, \tex
 
 ---
 
-## 二、 四类构造器的递归闭合性公理
+## 二、 五类构造器的递归闭合性公理
 
-设 $b = \text{BaseType}(T) \in \mathcal{B}$。任意良构的 `TypeSpec` $T$ 必须且只能归属于以下**四类构造器**之一，并满足对应的递归闭合性约束。
+设 $b = \text{BaseType}(T) \in \mathcal{B}$。任意良构的 `TypeSpec` $T$ 必须且只能归属于以下五类构造器之一，并满足对应的递归闭合性约束。
 
 > **对象构造器互斥铁律（`TypedDict` vs `OrderedMap`）**：当 $b = \texttt{"object"}$ 时，**构造器 3（`TypedDict`）与构造器 4（`OrderedMap`）严格互斥且完备**——凡基础类型为 `object` 的 `TypeSpec`，必须且只能在声明 `properties`（形态 3）与声明 `additionalProperties`（形态 4）之间二选一，严禁两者同时出现，也严禁两者同时省略。
 
@@ -53,3 +53,13 @@ $$\mathcal{B} = \{\texttt{"string"}, \texttt{"integer"}, \texttt{"number"}, \tex
 ### 4. 强类型有序映射构造器（`OrderedMap`：$b = \texttt{"object"} \land \texttt{additionalProperties} \in \text{dom}(T)$）
 * **必填字段**：`additionalProperties: TypeSpec` 必须是一个递归良构的 `TypeSpec`（禁止将 `additionalProperties` 设为布尔值 `true` 或 `false`）。
 * **互斥与闭合约束**：允许可选字段 `description: String`；禁止出现 `properties`、`required`、`items`、`enum`。
+
+### 5. 不透明句柄（`handle`）
+
+只允许 `type`、`kind` 与可选 `description`。`kind` 必填，形式为 `<ModulePath>:<PublicClassName>`：模块路径复用 package_path，类名复用 package_segment 且不能以 `_` 开头。私有模块段沿用工作流包可见性；编译器不导入 Python 类。可空与容器组合仍递归闭合。
+
+```yaml
+tx: {type: handle, kind: infra.postgres:Tx}
+```
+
+根启动接口和 signal 输出递归禁止 handle。可复用定义的通用编译允许含句柄接口，宿主在启动前独立校验根边界。

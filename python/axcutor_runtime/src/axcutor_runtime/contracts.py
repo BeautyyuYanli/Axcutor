@@ -5,7 +5,7 @@ generation never import implementation modules or execute package initializers.
 Only reachable workflow packages contribute contracts, matching compile_bundle.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 
 from .builtin import synthesize_contract_module
@@ -33,6 +33,7 @@ def generate_contracts(
     mounts: Sequence[PackageMount],
     *,
     check: bool = False,
+    module_mounts: Mapping[str, str] | None = None,
 ) -> list[Path]:
     """Write deterministic module stubs or check them; conflicting contracts fail.
 
@@ -72,7 +73,7 @@ def generate_contracts(
             if (destination.with_suffix("") / "__init__.py").is_file():
                 raise ValueError(f"contract target conflicts with a Python package: {destination}")
             source = synthesize_contract_module(
-                body["input_schema"], body["output"], body["branches"]
+                body["input_schema"], body["output"], body["branches"], module_mounts=module_mounts
             )
             if implementation in implementations and implementations[implementation] != source:
                 raise ValueError(

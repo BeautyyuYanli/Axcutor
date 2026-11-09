@@ -81,7 +81,17 @@ $$T_1.\text{additionalProperties} <: T_2.\text{additionalProperties}$$
 
 ---
 
-## 三、 字面量 Schema 实例兼容性校验（$L \models T$）
+## 三、 名义句柄兼容与运行期校验
+
+句柄等价要求 kind 与可空性分别相同。句柄子类型在满足可空性单调规则时，仅要求 kind 完全相同，不按前缀继承。数组、映射和结构体内递归应用相同规则。
+
+编译期 `accepts_literal` 在句柄位置拒绝非空字面量；可空位置的 null 及空容器合法。运行期 `accepts_runtime` 校验只有 `$handle`、`kind` 的闭合信封，两字段均为非空字符串且 kind 与声明相同。授权和资源属性由 Registry 与 Attempt 核对，类型校验不授予访问权限。
+
+```yaml
+cached: {type: [handle, "null"], kind: infra.postgres:Tx, default: null}
+```
+
+## 四、 字面量 Schema 实例兼容性校验（$L \models T$）
 
 当在 `graph.variables` 初值声明或 `use.with.input` 常量传参中向良构目标类型 $T$ 提供字面量 $L$ 时，基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 定义的 $\text{BaseType}(T)$ 与 $\text{Nullable}(T)$ 执行实例兼容性判定 $L \models T$：
 

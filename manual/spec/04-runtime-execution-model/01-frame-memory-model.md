@@ -50,6 +50,8 @@ $$\rho : \text{dom}(\Sigma_G) \to \text{JSONValue} \cup \{\text{Unbound}\}$$
 
 ## 二、 节点激活的最小权限只读快照与原子写回
 
+含句柄的完整返回值在退帧前登记为待提交根，父调用完成映射后同步替换根；未映射 owned 资源随后回收。实际环境、待提交结果和在途输入构成资源根，迭代诊断帧、快照与 trace 不额外持有资源。跨独立 Child 的借入、移交与回收遵循[资源生命周期](../05-executor-abi/05-resource-lifecycle.md)。
+
 1. **只读输入提取（Read-Only Snapshot Extraction）**：
    * 任意节点激活时，运行时仅按其声明的读取集合提取变量快照（不可变视图或深拷贝）传入执行器；执行器在运行期间对传入对象的原地修改不影响栈帧中的 $\rho$。
 2. **原子校验写回（Atomic Validated Commit）**：

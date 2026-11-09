@@ -122,7 +122,8 @@ export default withMermaid(
               { text: '01. 节点与图字段速查表', link: '/docs/reference/01-node-and-graph-fields' },
               { text: '02. 6 种控制边语法速查表', link: '/docs/reference/02-edge-syntax-cheatsheet' },
               { text: '03. TypeSpec 类型写法速查表', link: '/docs/reference/03-typespec-cheatsheet' },
-              { text: '04. Execution HTTP API', link: '/docs/reference/04-execution-http-api' }
+              { text: '04. Execution HTTP API', link: '/docs/reference/04-execution-http-api' },
+              { text: '05. 资源句柄', link: '/docs/reference/05-resource-handles' }
             ]
           },
           {
@@ -205,7 +206,8 @@ export default withMermaid(
               { text: '01. run 业务执行器标准 ABI 契约', link: '/spec/05-executor-abi/01-run-executor-contract' },
               { text: '02. builtin 受信任 Python 执行器规范', link: '/spec/05-executor-abi/02-builtin-python-executor' },
               { text: '03. module 预置 Python 模块执行器规范', link: '/spec/05-executor-abi/03-module-python-executor' },
-              { text: '04. signal 协作式等待执行器规范', link: '/spec/05-executor-abi/04-signal-cooperative-executor' }
+              { text: '04. signal 协作式等待执行器规范', link: '/spec/05-executor-abi/04-signal-cooperative-executor' },
+              { text: '05. 资源身份、授权与生命周期', link: '/spec/05-executor-abi/05-resource-lifecycle' }
             ]
           }
         ]

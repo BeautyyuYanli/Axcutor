@@ -54,4 +54,14 @@ for callback in [
     expect_host_error(callback)
 
 print(f"Rejected query groups: {invalid_queries}")
+handle_schema = '{"tx":{"type":"handle","kind":"infra.postgres:Tx"}}'
+handle_value = '{"tx":{"$handle":"res_1","kind":"infra.postgres:Tx"}}'
+assert json.loads(axcutor_core.validate_input(handle_value, handle_schema)) == json.loads(handle_value)
+assert json.loads(axcutor_core.validate_run_contract(
+    '{"output":' + handle_value + '}', handle_schema, '{}'
+))["output"] == json.loads(handle_value)
+expect_host_error(lambda: axcutor_core.validate_root_interface(handle_schema, '{}'))
+expect_host_error(lambda: axcutor_core.validate_input(
+    '{"tx":{"$handle":"res_1","kind":"infra.postgres:Other"}}', handle_schema
+))
 print(f"Python native extension: {len(oracle)} compile cases, {queries} canvas queries passed")

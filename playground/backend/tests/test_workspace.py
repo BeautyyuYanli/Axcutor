@@ -226,6 +226,51 @@ async def test_preflight_error_returns_generated_files_and_revision(workspace_cl
     assert not playground.execution_id
 
 
+@pytest.mark.parametrize("position", ["input", "output"])
+async def test_handle_root_preflight_preserves_idle_state_and_latest_trace(
+    workspace_client, position
+):
+    workspace, playground, client = workspace_client
+    previous = {
+        "execution_id": "previous",
+        "execution": None,
+        "source": {"entry": "previous", "packages": {}},
+        "spans": [],
+        "observed_at": None,
+        "complete": True,
+        "trace_error": None,
+    }
+    playground.latest = previous
+    document = {"input": {}, "output": {}, "run": {"executor": "builtin", "content": "pass"}}
+    document[position] = {"tx": {"type": ["handle", "null"], "kind": "infra:Tx"}}
+    view = await workspace.get()
+    saved = await workspace.save(
+        view["revision"],
+        edits(view)
+        + [
+            {"path": "handle.yaml", "text": dumps(document)},
+            {
+                "path": "handle_input.json",
+                "text": dumps({"tx": None} if position == "input" else {}),
+            },
+        ],
+    )
+    response = await client.post(
+        "/v1/workspace/executions",
+        json={"entry": "handle.yaml", "input": "handle_input.json", "revision": saved["revision"]},
+    )
+    assert response.status_code == 422, response.text
+    assert "pure values" in response.text
+    assert not playground.view()["busy"] and playground.execution_id is None
+    assert playground.latest is previous and playground._completion is None
+    current = await workspace.get()
+    response = await client.put(
+        "/v1/workspace", json={"revision": current["revision"], "files": edits(current)}
+    )
+    assert response.status_code == 200, response.text
+    assert playground.latest is previous
+
+
 async def test_workspace_persists_and_only_one_host_can_own_it(workspace_client):
     workspace, _, _ = workspace_client
     view = await workspace.get()

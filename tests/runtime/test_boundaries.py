@@ -79,7 +79,16 @@ async def test_workflow_revalidates_remote_activity_response_and_uses_route(
         response = responses[len(seen) - 1]
         if response == "execution":
             raise exceptions.ApplicationError("remote execution failed", type="execution")
-        return dumps({"output": {"value": True if response == "invalid" else 42}})
+        return dumps(
+            {
+                "result": {"output": {"value": True if response == "invalid" else 42}},
+                "resources": {
+                    "created": [],
+                    "worker_queue": run.queue + "-worker-" + "a" * 32,
+                    "resident_rids": [],
+                },
+            }
+        )
 
     document = graph(
         {

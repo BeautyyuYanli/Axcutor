@@ -1,6 +1,10 @@
 [
   {
     "entry": "main",
+    "packages": {"main": {"format":"yaml","text":"input: {tx: {type: handle, kind: 'infra.postgres:Tx'}}\noutput: {same: {type: boolean}}\ngraph:\n  nodes:\n    compare:\n      use: builtin:compare\n      with: {input: {op: {value: eq}, left: tx, right: tx}, output: {result: same}}\n  edges: ['start -> compare', 'compare -> end']\n"}}
+  },
+  {
+    "entry": "main",
     "packages": {"main": {"format":"yaml","text":"input:\n  scalar: {type: number, enum: [123456789012345678901234567890, 1.0]}\noutput: {}\ngraph:\n  variables:\n    huge: {type: integer, default: 123456789012345678901234567890}\n    precise: {type: number, default: 1.0000000000000000000000000001}\n    ordered:\n      type: object\n      additionalProperties: {type: integer}\n      default: {\"10\": 10, \"2\": 2, \"0\": 0, a: 1}\n  nodes:\n    n: {input: [scalar], run: {executor: builtin, content: 'read variables.scalar'}}\n  edges: ['start -> n', 'n -> end']\n"}}
   },
   {

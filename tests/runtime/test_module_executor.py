@@ -80,7 +80,7 @@ def installed(tmp_path, monkeypatch):
 async def invoke(payload, activities=None):
     return loads(
         await ActivityEnvironment().run((activities or RunActivities()).execute_run, dumps(payload))
-    )
+    )["result"]
 
 
 @pytest.mark.parametrize("local", [".", ".__init__", ".impl", ".sub.impl"])

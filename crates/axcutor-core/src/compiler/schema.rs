@@ -117,6 +117,7 @@ fn types(v: Option<&Value>, required: bool, a: &Address, ds: &mut Ds) -> Symbols
         let valid = name(n, &at, ds);
         match TypeSpec::parse(t) {
             Ok(t) if valid => {
+                type_visibility(&t, &at, ds);
                 result.insert(n.clone(), t);
             }
             Ok(_) => (),
@@ -124,6 +125,30 @@ fn types(v: Option<&Value>, required: bool, a: &Address, ds: &mut Ds) -> Symbols
         }
     }
     result
+}
+
+fn type_visibility(t: &TypeSpec, a: &Address, ds: &mut Ds) {
+    match &t.kind {
+        TypeKind::Handle(kind) => {
+            let module = kind.split_once(':').unwrap().0;
+            if !workflow_visible(&a.workflow, module) {
+                a.at("kind").error(
+                    ds,
+                    "variable",
+                    "visibility.private_resource",
+                    format!("resource {kind} is private to its parent package"),
+                );
+            }
+        }
+        TypeKind::Array(t) => type_visibility(t, &a.at("items"), ds),
+        TypeKind::OrderedMap(t) => type_visibility(t, &a.at("additionalProperties"), ds),
+        TypeKind::TypedDict { properties, .. } => {
+            for (name, t) in properties {
+                type_visibility(t, &a.at("properties").at(name), ds);
+            }
+        }
+        TypeKind::Scalar { .. } => (),
+    }
 }
 
 fn branches(
@@ -348,6 +373,7 @@ fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
                         .map_or(InitialValue::Unbound, InitialValue::Default);
                     match TypeSpec::parse(&Value::Object(t)) {
                         Ok(typespec) if valid => {
+                            type_visibility(&typespec, &at, ds);
                             variables.insert(n.clone(), VarDecl { typespec, initial });
                         }
                         Ok(_) => (),

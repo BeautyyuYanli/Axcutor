@@ -48,6 +48,17 @@ fn validate_input(input_json: &str, schema_json: &str) -> PyResult<String> {
 }
 
 #[pyfunction]
+fn literal_equal(left_json: &str, right_json: &str) -> PyResult<bool> {
+    compiler::kernel::literal_equal_json(left_json, right_json).map_err(kernel_error)
+}
+
+#[pyfunction]
+fn validate_root_interface(input_schema_json: &str, output_schema_json: &str) -> PyResult<String> {
+    compiler::kernel::validate_root_interface_json(input_schema_json, output_schema_json)
+        .map_err(kernel_error)
+}
+
+#[pyfunction]
 fn compile_workflow(request_json: &str) -> PyResult<String> {
     compiler::compile_workflow_json(request_json).map_err(PyValueError::new_err)
 }
@@ -75,6 +86,8 @@ fn axcutor_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eval_builtin, m)?)?;
     m.add_function(wrap_pyfunction!(validate_run_contract, m)?)?;
     m.add_function(wrap_pyfunction!(validate_input, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_root_interface, m)?)?;
+    m.add_function(wrap_pyfunction!(literal_equal, m)?)?;
     m.add_function(wrap_pyfunction!(compile_workflow, m)?)?;
     m.add_function(wrap_pyfunction!(get_available_vars_at_node, m)?)?;
     m.add_function(wrap_pyfunction!(derive_node_ports, m)?)?;

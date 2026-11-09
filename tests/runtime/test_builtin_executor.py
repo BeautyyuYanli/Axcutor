@@ -42,7 +42,9 @@ def request(content, inputs=None, outputs=None, branches=None, values=None):
 
 
 async def invoke(payload):
-    return loads(await ActivityEnvironment().run(RunActivities().execute_run, dumps(payload)))
+    return loads(await ActivityEnvironment().run(RunActivities().execute_run, dumps(payload)))[
+        "result"
+    ]
 
 
 def check_module(filename, generated):

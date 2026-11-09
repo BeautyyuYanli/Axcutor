@@ -21,6 +21,35 @@ from temporalio.client import WorkflowFailureError
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples/workflows"
 
 
+async def test_contracts_module_mounts_include_resource_only_roots_without_imports(tmp_path):
+    root = tmp_path / "workflows"
+    root.mkdir()
+    (root / "__init__.py").touch()
+    (root / "__axcutor__.yaml").write_text(
+        "input: {}\noutput: {tx: {type: handle, kind: 'infra.postgres:Tx'}}\n"
+        "run: {executor: module, content: .create}\n"
+    )
+    args = (
+        "contracts",
+        root,
+        "--mount",
+        f"flows={root}",
+        "--module-mount",
+        "flows=uninstalled.flows",
+        "--module-mount",
+        "infra=uninstalled.infra",
+    )
+    code, _, stderr = await invoke(*args)
+    assert code == 0, stderr
+    source = (root / "create_contract.py").read_text()
+    assert "from uninstalled.infra.postgres import Tx as " in source
+    assert "TYPE_CHECKING" in source
+    code, _, stderr = await invoke(*args, "--check")
+    assert code == 0, stderr
+    code, _, _ = await invoke(*args, "--module-mount", "infra=duplicate")
+    assert code == 1
+
+
 async def invoke(*args):
     process = await asyncio.create_subprocess_exec(
         sys.executable,

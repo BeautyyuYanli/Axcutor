@@ -606,7 +606,7 @@ fn equality(c: &mut Checker<'_>) {
             if value.is_null() {
                 t.nullable
             } else {
-                t.strip_null().accepts(value)
+                t.strip_null().accepts_literal(value)
                     || (matches!(t.base(), "integer" | "number") && value.is_number())
             }
         }
@@ -716,7 +716,7 @@ fn object_merge(c: &mut Checker<'_>) {
                                 c.error("base", format!("base contains undeclared property {name}"))
                             }
                             Some(expected)
-                                if !fields.contains(name) && !expected.accepts(value) =>
+                                if !fields.contains(name) && !expected.accepts_literal(value) =>
                             {
                                 c.error("base", format!("retained property {name} is incompatible"))
                             }

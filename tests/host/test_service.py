@@ -80,6 +80,28 @@ async def test_invalid_host_options_are_rejected_at_construction_without_backend
         ExecutionService(client, options=options)
 
 
+@pytest.mark.parametrize("position", ["input", "output"])
+async def test_host_rejects_recursive_handle_interfaces_before_backend_contact(position):
+    client = await Client.connect("127.0.0.1:1", lazy=True)
+    document = {
+        "input": {},
+        "output": {},
+        "run": {"executor": "builtin", "content": "pass"},
+    }
+    document[position] = {
+        "resources": {
+            "type": "array",
+            "items": {"type": ["handle", "null"], "kind": "infra:Tx"},
+        }
+    }
+    with pytest.raises(InputValidationError, match="pure values"):
+        await service(client).submit(
+            "demo.main",
+            packages(document),
+            {"resources": []} if position == "input" else {},
+        )
+
+
 @pytest.mark.parametrize(
     "options", [None, {}, {"heartbeat_timeout_ms": 1000}, {"heartbeat_interval_ms": 200}]
 )

@@ -28,6 +28,16 @@ from .errors import (
     StackOverflowError,
     boundary_error,
 )
+from .resource_model import (
+    CLEANUP_SECONDS,
+    STICKY_SECONDS,
+    RegistryEntry,
+    ResourceRegistry,
+    description,
+    has_handles,
+    pool,
+    scan,
+)
 
 
 def parse_runtime_options(options: JsonObject) -> JsonObject:
@@ -244,6 +254,318 @@ class AxcutorInterpreterWorkflow:
         )
         # Tasks inherit their enclosing deadline, independently of sibling tasks.
         self._deadline_scope: ContextVar[bool] = ContextVar("axcutor_deadline", default=False)
+        self._registry = ResourceRegistry()
+        self._resource_roots: dict[int, tuple[JsonObject, JsonObject]] = {}
+        self._root_scope: ContextVar[set[int] | None] = ContextVar(
+            "axcutor_root_scope", default=None
+        )
+        self._next_resource_root = 0
+        self._next_call = 0
+        self._resource_calls: dict[str, JsonObject] = {}
+        self._default_queue: str | None = None
+
+    def _hold(self, values: JsonObject, symbols: JsonObject) -> int:
+        self._next_resource_root += 1
+        token = self._next_resource_root
+        self._resource_roots[token] = values, symbols
+        scope = self._root_scope.get()
+        if scope is not None:
+            scope.add(token)
+        return token
+
+    def _retain_result(self, result: JsonObject, schema: JsonObject) -> JsonObject:
+        if "_resource_root" not in result and scan(result["output"], schema):
+            result["_resource_root"] = self._hold(result["output"], schema)
+        return result
+
+    def _release_result(self, result: JsonObject) -> None:
+        self._resource_roots.pop(result.pop("_resource_root", None), None)
+
+    def _output_types(self, body: JsonObject, symbols: JsonObject) -> JsonObject:
+        if body["kind"] in ("run", "graph"):
+            return body["output"]
+        if body["kind"] == "workflow":
+            target = self._bundle["workflows"][body["workflow_id"]]["output"]
+            return {caller: target[name] for name, caller in body["bindings"]["output"].items()}
+        return {name: symbols[name] for name in _out_names(body)}
+
+    async def _collect_resources(
+        self,
+        *,
+        final: bool = False,
+        exported: set[str] | None = None,
+        expires: float | None = None,
+    ) -> None:
+        """Synchronously scan real execution roots, then schedule bounded cleanup."""
+        reachable: set[str] = set()
+        if not final:
+            for frame in self._frames.values():
+                if frame.kind != "iteration":
+                    reachable.update(scan(frame.env, frame.symbols))
+            for values, symbols in self._resource_roots.values():
+                reachable.update(scan(values, symbols))
+        for rid, entry in self._registry.entries.items():
+            if entry.owned and rid not in reachable and rid not in (exported or ()):
+                entry.pending = True
+        pending = [
+            (rid, entry)
+            for rid, entry in self._registry.entries.items()
+            if entry.owned and entry.pending and not entry.cleaning
+        ]
+        if not pending:
+            return
+        for _, entry in pending:
+            entry.cleaning = True
+        expires = workflow.time() + CLEANUP_SECONDS if expires is None else expires
+
+        async def clean() -> None:
+            try:
+                for rid, entry in pending:
+                    d = entry.descriptor
+                    for queue in list(d["resident_queues"]):
+                        if queue in entry.cleaned or workflow.time() >= expires:
+                            continue
+                        status = await self._dispose_resource(
+                            d, queue, expires, deleted=entry.deleted
+                        )
+                        if status == "disposed":
+                            entry.cleaned.add(queue)
+                            if d["persistent"]:
+                                entry.deleted = True
+                        elif status == "missing" and queue not in entry.failed:
+                            entry.cleaned.add(queue)
+                        else:
+                            entry.failed.add(queue)
+                    if d["persistent"] and not entry.deleted and workflow.time() < expires:
+                        status = await self._dispose_resource(
+                            d, pool(d["creator_queue"]), expires, restore=True
+                        )
+                        entry.deleted = status == "disposed"
+                    if set(d["resident_queues"]) <= entry.cleaned and (
+                        not d["persistent"] or entry.deleted
+                    ):
+                        if entry.deleted:
+                            for call in self._resource_calls.values():
+                                if rid in call["owned"]:
+                                    call["deleted"].add(rid)
+                        self._registry.entries.pop(rid, None)
+                    elif final:
+                        workflow.logger.warning(
+                            "resource cleanup unconfirmed rid=%s kind=%s", rid, d["kind"]
+                        )
+            finally:
+                for _, entry in pending:
+                    entry.cleaning = False
+
+        task = asyncio.create_task(clean())
+        # Shield the same round through repeated cancellation. Each scheduled
+        # Activity is bounded by the remaining round budget, never a fresh 30s.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except (asyncio.CancelledError, exceptions.CancelledError):
+                continue
+        task.result()
+
+    async def _dispose_resource(
+        self,
+        descriptor: JsonObject,
+        queue: str,
+        expires: float,
+        *,
+        restore: bool = False,
+        deleted: bool = False,
+    ) -> str:
+        remaining = expires - workflow.time()
+        if remaining <= 0:
+            return "unconfirmed"
+        try:
+            response = loads(
+                await workflow.execute_activity(
+                    "dispose_resources",
+                    dumps({"resources": [descriptor], "restore": restore, "deleted": deleted}),
+                    result_type=str,
+                    task_queue=queue,
+                    schedule_to_start_timeout=timedelta(seconds=min(STICKY_SECONDS, remaining)),
+                    start_to_close_timeout=timedelta(seconds=remaining),
+                    schedule_to_close_timeout=timedelta(seconds=remaining),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                    cancellation_type=workflow.ActivityCancellationType.TRY_CANCEL,
+                )
+            )
+            (item,) = response["results"]
+            if item["rid"] != descriptor["rid"] or item["status"] not in {
+                "disposed",
+                "missing",
+                "unconfirmed",
+            }:
+                raise EngineError("invalid resource cleanup response")
+            return item["status"]
+        except exceptions.FailureError:
+            return "unconfirmed"
+
+    def _resource_call(self, allowed: list[JsonObject], source_run_id: str) -> str:
+        self._next_call += 1
+        call_id = f"resource-call-{self._next_call}"
+        self._resource_calls[call_id] = {
+            "allowed": allowed,
+            "owned": {d["rid"]: self._registry.entries[d["rid"]].owned for d in allowed},
+            "source_run_id": source_run_id,
+            "drained": False,
+            "reported": {(d["rid"], q) for d in allowed for q in d["resident_queues"]},
+            "deleted": set(),
+        }
+        return call_id
+
+    def _remember_residencies(self, call_id: str) -> None:
+        call = self._resource_calls[call_id]
+        for d in call["allowed"]:
+            entry = self._registry.entries.get(d["rid"])
+            if entry is not None:
+                call["reported"].update(
+                    (d["rid"], queue) for queue in entry.descriptor["resident_queues"]
+                )
+
+    @workflow.signal
+    async def resource_update(self, request_json: str) -> None:
+        """Merge one exact-call final residency update; it never reactivates output."""
+        try:
+            request = loads(request_json)
+            call = self._resource_calls.get(request["call_id"])
+            if call is None or call["source_run_id"] != request["source_run_id"]:
+                return
+            # Validate before mutating live state. Repeated cumulative updates
+            # add no work; a new late residency only restores cleanup authority.
+            probe = ResourceRegistry()
+            for d in call["allowed"]:
+                probe.entries[d["rid"]] = RegistryEntry(description(d), False)
+            probe.accept(request["resources"], call["allowed"], None)
+            changed = False
+            for rid, received in probe.entries.items():
+                for queue in received.descriptor["resident_queues"]:
+                    pair = rid, queue
+                    if pair in call["reported"]:
+                        continue
+                    entry = self._registry.entries.get(rid)
+                    if entry is None:
+                        original = next(d for d in call["allowed"] if d["rid"] == rid)
+                        entry = RegistryEntry(
+                            description(original),
+                            call["owned"][rid],
+                            pending=True,
+                            deleted=rid in call["deleted"],
+                            cleaned=set(original["resident_queues"]),
+                        )
+                        self._registry.entries[rid] = entry
+                    if queue not in entry.descriptor["resident_queues"]:
+                        entry.descriptor["resident_queues"].append(queue)
+                    call["reported"].add(pair)
+                    changed = True
+            call["drained"] = True
+        except (KeyError, ValueError, TypeError):
+            workflow.logger.warning("invalid resource final update")
+            return
+        if changed:
+            await self._collect_resources()
+
+    def _merge_failure(self, error: BaseException, call_id: str) -> bool:
+        cause = error
+        while isinstance(cause, (exceptions.ActivityError, exceptions.ChildWorkflowError)):
+            if cause.cause is None:
+                return False
+            cause = cause.cause
+        if isinstance(cause, exceptions.ApplicationError) and cause.details:
+            try:
+                details = loads(cause.details[0])
+                call = self._resource_calls[call_id]
+                self._registry.accept(details["resources"], call["allowed"], None)
+                self._remember_residencies(call_id)
+                call["drained"] = details["drained"] is True
+                return call["drained"]
+            except (TypeError, ValueError, KeyError):
+                raise EngineError("invalid resource failure details") from error
+        return False
+
+    async def _settle_resource_call(
+        self, handle: asyncio.Future[Any], call_id: str, body: JsonObject
+    ) -> None:
+        """End scheduling authority after a fixed wait; local uses stay with Store."""
+        call = self._resource_calls[call_id]
+
+        def receive_completed() -> None:
+            if handle.cancelled():
+                return
+            try:
+                response = handle.result()
+            except exceptions.FailureError as error:
+                self._merge_failure(error, call_id)
+            except asyncio.CancelledError:
+                pass
+            else:
+                # Cancellation can race a response already delivered by Temporal.
+                # Accept known ownership for cleanup, never for business commit.
+                result, _ = self._receive_response(response, body, call["allowed"])
+                self._remember_residencies(call_id)
+                self._release_result(result)
+                call["drained"] = True
+
+        if handle.done():
+            receive_completed()
+        if call["drained"]:
+            return
+        handle.cancel()
+
+        async def observe() -> None:
+            try:
+                await asyncio.shield(handle)
+            except (asyncio.CancelledError, exceptions.FailureError):
+                pass
+            if handle.done():
+                receive_completed()
+
+        observer = asyncio.create_task(observe())
+
+        async def wait() -> None:
+            try:
+                await workflow.wait_condition(lambda: call["drained"], timeout=CLEANUP_SECONDS)
+            except TimeoutError:
+                workflow.logger.warning("resource call drainage unconfirmed call=%s", call_id)
+
+        task = asyncio.create_task(wait())
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except (asyncio.CancelledError, exceptions.CancelledError):
+                continue
+        task.result()
+        results = await cancel_and_drain([observer])
+        if isinstance(results[0], EngineError):
+            raise results[0]
+
+    def _receive_response(
+        self, response: str, body: JsonObject, allowed: list[JsonObject]
+    ) -> tuple[JsonObject, str | None]:
+        try:
+            envelope = loads(response)
+            if not isinstance(envelope, dict) or envelope.keys() != {"result", "resources"}:
+                raise ValueError("Activity and Child responses require result/resources")
+            result = _contract(envelope["result"], body)
+            self._registry.accept(
+                envelope["resources"], allowed, scan(result["output"], body["output"])
+            )
+            default = envelope["resources"].get("default_queue")
+            if default is not None:
+                if not isinstance(default, str) or not default:
+                    raise ValueError("invalid default resource queue")
+                # Offline SDK Replayers replace info().task_queue. Record the
+                # original default in Activity results for later routing checks.
+                self._default_queue = default
+            return (
+                self._retain_result(result, body["output"]),
+                envelope["resources"]["worker_queue"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise Recoverable("contract", str(error)) from error
 
     @workflow.run
     async def run(self, request: JsonObject) -> str:
@@ -252,6 +574,13 @@ class AxcutorInterpreterWorkflow:
         _entry and _call_depth are reserved for interpreter Child Workflows.
         Root ingress failures are terminal and cannot enter a DSL node catch.
         """
+        parent = workflow.info().parent
+        context = request.get("resource_context", {})
+        cancelled = False
+        evicted = False
+        result: JsonObject | None = None
+        failure: BaseException | None = None
+        exported: set[str] = set()
         try:
             self._bundle_json = request["bundle_json"]
             self._bundle = loads(self._bundle_json)
@@ -263,36 +592,106 @@ class AxcutorInterpreterWorkflow:
             if not isinstance(entry, str):
                 raise ValueError("entry must be a string")
             root = self._bundle["workflows"][entry]
+            if parent is None:
+                axcutor_core.validate_root_interface(dumps(root["input"]), dumps(root["output"]))
+            else:
+                if context.get("parent_run_id") != parent.run_id:
+                    raise ValueError("Child resource context must match the real parent Run")
             values = loads(axcutor_core.validate_input(request["input_json"], dumps(root["input"])))
+            if parent is not None:
+                self._registry.borrow(context.get("resources", []), values, root["input"])
+                self._default_queue = context.get("default_queue")
             with self._trace_call("workflow", entry, values) as span:
                 if span is not None:
                     span["frame_kind"] = "function"
                     span["cursor"] = "run" if root["body"]["kind"] == "run" else "start"
                 result = await self._exec_root(entry, values, depth, None, entry)
                 self._trace_result(span, result)
-                return dumps(result)
-        except (asyncio.CancelledError, exceptions.CancelledError):
+                if parent is not None:
+                    exported = set(scan(result["output"], root["output"]))
+        except GeneratorExit:
+            evicted = True
             raise
-        except Recoverable as error:
-            raise exceptions.ApplicationError(
-                str(error), type=error.selector, non_retryable=True
-            ) from error
-        except EngineError as error:
-            raise exceptions.ApplicationError(
-                str(error), type=type(error).__name__, non_retryable=True
-            ) from error
+        except (asyncio.CancelledError, exceptions.CancelledError) as error:
+            cancelled = True
+            failure = error
         except Exception as error:
-            # Invalid bundles/requests and kernel invariants fail the Workflow,
-            # rather than producing endless failing Workflow Tasks.
-            raise exceptions.ApplicationError(
-                str(error), type="EngineError", non_retryable=True
-            ) from error
+            failure = error
         finally:
-            if self._signal_init_timer is not None:
+            if not evicted:
+                expires = workflow.time() + CLEANUP_SECONDS
+                await self._collect_resources(final=True, exported=exported, expires=expires)
+                if not workflow.all_handlers_finished():
+                    handlers = asyncio.create_task(
+                        workflow.wait_condition(
+                            workflow.all_handlers_finished,
+                            timeout=max(0, expires - workflow.time()),
+                        )
+                    )
+                    while not handlers.done():
+                        try:
+                            await asyncio.shield(handlers)
+                        except (asyncio.CancelledError, exceptions.CancelledError):
+                            continue
+                    try:
+                        handlers.result()
+                    except TimeoutError:
+                        workflow.logger.warning(
+                            "resource final handlers did not drain within budget"
+                        )
+                    await self._collect_resources(final=True, exported=exported, expires=expires)
+                if workflow.cancellation_reason() is not None:
+                    cancelled = True
+                    failure = asyncio.CancelledError()
+                    await self._collect_resources(final=True, expires=expires)
+            if cancelled and parent is not None:
+                try:
+                    await workflow.get_external_workflow_handle(
+                        parent.workflow_id, run_id=parent.run_id
+                    ).signal(
+                        "resource_update",
+                        dumps(
+                            {
+                                "source_run_id": workflow.info().run_id,
+                                "call_id": request.get("resource_context", {}).get("call_id"),
+                                "resources": self._registry.metadata(set()),
+                            }
+                        ),
+                    )
+                except exceptions.FailureError:
+                    workflow.logger.warning("Child resource final update could not be delivered")
+            if not evicted and self._signal_init_timer is not None:
                 # This task only owns a Workflow sleep. Propagate cancellation
                 # of the run while gathering its cancellation/completion.
                 self._signal_init_timer.cancel()
                 await asyncio.gather(self._signal_init_timer, return_exceptions=True)
+        if failure is not None:
+            if isinstance(failure, (asyncio.CancelledError, exceptions.CancelledError)):
+                raise failure
+            selector = (
+                failure.selector
+                if isinstance(failure, Recoverable)
+                else type(failure).__name__
+                if isinstance(failure, EngineError)
+                else "EngineError"
+            )
+            # Build the cumulative residency handoff after final cleanup and
+            # its possible late updates, while preserving the original selector.
+            raise exceptions.ApplicationError(
+                str(failure),
+                dumps({"resources": self._registry.metadata(set()), "drained": True}),
+                type=selector,
+                non_retryable=True,
+            ) from failure
+        assert result is not None
+        self._release_result(result)
+        if parent is not None:
+            metadata = self._registry.metadata(exported)
+            metadata["default_queue"] = self._default_queue
+            for rid in exported:
+                self._registry.entries[rid].owned = False
+            return dumps({"result": result, "resources": metadata})
+        return dumps(result)
 
     @contextmanager
     def _trace_call(
@@ -464,6 +863,8 @@ class AxcutorInterpreterWorkflow:
                 non_retryable=True,
             )
         try:
+            if has_handles(loads(waiter.output_schema_json)):
+                raise ValueError("signal output must contain only pure values")
             validated = axcutor_core.validate_run_contract(
                 dumps({"branch": request.get("branch"), "output": request["output"]}),
                 waiter.output_schema_json,
@@ -580,10 +981,16 @@ class AxcutorInterpreterWorkflow:
                 "for_each": None,
             },
         }
+        evicted = False
         try:
             return await self._state_machine(frame, node, values, frame.symbols, {}, address)
+        except GeneratorExit:
+            evicted = True
+            raise
         finally:
             del self._frames[frame.id]
+            if not evicted:
+                await self._collect_resources()
 
     async def _exec_graph(
         self,
@@ -606,11 +1013,13 @@ class AxcutorInterpreterWorkflow:
             if node["modifiers"]["for_each"] is None and node["body"]["kind"] in ("run", "graph"):
                 symbols.update(node["body"]["output"])
         frame = self._frame(kind, address, depth, parent, env, symbols, graph["max_steps"])
+        evicted = False
         try:
             while True:
                 route = graph["routes"][frame.cursor]
                 for name in route["kill_vars"]:
                     frame.env.pop(name, None)
+                await self._collect_resources()
                 edge = route["edge"]
                 if edge["kind"] == "fork_join":
                     locked = deepcopy(frame.env)
@@ -621,22 +1030,35 @@ class AxcutorInterpreterWorkflow:
                     for slot in slots:
                         delta.update(slot["output"])
                     frame.env.update(delta)
+                    for slot in slots:
+                        self._release_result(slot)
+                    await self._collect_resources()
                     target = edge["join_target"]
                 else:
                     if edge["target"]["kind"] == "fail":
                         raise Recoverable("execution", "graph reached fail")
                     target = edge["target"]["target"]
                 if target["kind"] == "end":
-                    return _contract({"branch": target["branch_id"], "output": frame.env}, host)
+                    return self._retain_result(
+                        _contract({"branch": target["branch_id"], "output": frame.env}, host),
+                        host["output"],
+                    )
                 node_id = target["node_id"]
                 frame.cursor = node_id
                 result = await self._activate(frame, graph, node_id, frame.env)
                 frame.env.update(result["output"])
+                self._release_result(result)
+                await self._collect_resources()
                 frame.cursor = node_id + (
                     "." + result["branch"] if result["branch"] is not None else ""
                 )
+        except GeneratorExit:
+            evicted = True
+            raise
         finally:
             del self._frames[frame.id]
+            if not evicted:
+                await self._collect_resources()
 
     @staticmethod
     def _tick(frame: Frame) -> None:
@@ -742,7 +1164,10 @@ class AxcutorInterpreterWorkflow:
                 }
             else:
                 output[name] = [slot["output"][name] for slot in slots if name in slot["output"]]
-        return {"branch": None, "output": output}
+        result = self._retain_result({"branch": None, "output": output}, frame.symbols)
+        for slot in slots:
+            self._release_result(slot)
+        return result
 
     async def _state_machine(
         self,
@@ -763,9 +1188,34 @@ class AxcutorInterpreterWorkflow:
                     else "iteration"
                 )
                 span["cursor"] = frame.cursor
-            result = await self._node_attempts(frame, node, snapshot, symbols, injected, address)
-            self._trace_result(span, result)
-            return result
+            parent_scope = self._root_scope.get()
+            scope: set[int] = set()
+            token = self._root_scope.set(scope)
+            result: JsonObject | None = None
+            evicted = False
+            try:
+                self._hold(snapshot, symbols)
+                result = await self._node_attempts(
+                    frame, node, snapshot, symbols, injected, address
+                )
+                self._retain_result(result, self._output_types(node["body"], symbols))
+                self._trace_result(span, result)
+                return result
+            except GeneratorExit:
+                # Cache eviction discards reconstructed state; it is not a
+                # lifecycle transition and can run outside the original Task.
+                evicted = True
+                raise
+            finally:
+                carried = result.get("_resource_root") if result is not None else None
+                for root in scope:
+                    if root != carried:
+                        self._resource_roots.pop(root, None)
+                if carried is not None and parent_scope is not None:
+                    parent_scope.add(carried)
+                if not evicted:
+                    self._root_scope.reset(token)
+                    await self._collect_resources()
 
     async def _node_attempts(
         self,
@@ -798,6 +1248,8 @@ class AxcutorInterpreterWorkflow:
         # If it can retry, this loop must own the entire node attempt budget.
         native = (
             is_activity
+            and not has_handles(body["input_schema"])
+            and not has_handles(body["output"])
             and retry is not None
             and "timeout" in retry["on"]
             and "contract" not in retry["on"]
@@ -811,6 +1263,8 @@ class AxcutorInterpreterWorkflow:
             # Expose the policy, never invent individual attempts or durations.
             self._trace_event("activity_retry_policy", **retry)
         for attempt in range(1, attempts + 1):
+            root_scope = self._root_scope.get()
+            roots_before = set(root_scope or ())
             try:
                 with (
                     self._trace_call("attempt", address, snapshot)
@@ -837,6 +1291,11 @@ class AxcutorInterpreterWorkflow:
                     self._trace_result(attempt_span, result)
                     return result
             except Recoverable as error:
+                if root_scope is not None:
+                    for root in root_scope - roots_before:
+                        self._resource_roots.pop(root, None)
+                    root_scope.intersection_update(roots_before)
+                await self._collect_resources()
                 if error.selector == "timeout":
                     self._signal_initialized = True  # A durable deadline has fired.
                 if attempt < attempts and error.selector in retry["on"]:
@@ -915,6 +1374,13 @@ class AxcutorInterpreterWorkflow:
             threshold is not None and workflow.info().get_current_history_length() >= threshold
         )
         if use_child:
+            try:
+                allowed = self._registry.authorize(values, root["input"])
+            except ValueError as error:
+                raise Recoverable("execution", str(error)) from error
+            resource_call = bool(allowed) or has_handles(root["output"])
+            call_id = self._resource_call(allowed, "")
+            child: asyncio.Future[Any] | None = None
             # Keep the call's place in the frame tree while the SDK owns the
             # child execution. The host follows this link without exposing IDs.
             remote = self._frame(
@@ -935,34 +1401,61 @@ class AxcutorInterpreterWorkflow:
                         "options": self._options,
                         "_entry": target,
                         "_call_depth": depth,
+                        "resource_context": {
+                            "resources": allowed,
+                            "call_id": call_id,
+                            "parent_run_id": workflow.info().run_id,
+                            "default_queue": self._default_queue,
+                        },
                     },
                     retry_policy=RetryPolicy(maximum_attempts=1),
                     cancellation_type=workflow.ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED,
                     parent_close_policy=workflow.ParentClosePolicy.REQUEST_CANCEL,
                 )
                 self._signal_initialized = True
+                self._resource_calls[call_id]["source_run_id"] = child.first_execution_run_id
                 remote.child_execution = {
                     "workflow_id": child.id,
                     "run_id": child.first_execution_run_id,
                 }
                 if span is not None:
                     span["child_execution"] = {**remote.child_execution, "entry": target}
-                response = await child
+                response = await asyncio.shield(child)
+                result, _ = self._receive_response(response, root, allowed)
+                self._remember_residencies(call_id)
+                self._resource_calls[call_id]["drained"] = True
             except exceptions.FailureError as error:
+                drained = self._merge_failure(error, call_id)
+                if child is not None and not drained and resource_call:
+                    await self._settle_resource_call(child, call_id, root)
                 raise boundary_error(error) from error
+            except asyncio.CancelledError:
+                if child is not None:
+                    if resource_call:
+                        await self._settle_resource_call(child, call_id, root)
+                    else:
+                        await cancel_and_drain([child])
+                raise
             finally:
                 del self._frames[remote.id]
-            result = _contract(response, root)
+                if not resource_call:
+                    del self._resource_calls[call_id]
         else:
             result = await self._exec_root(target, values, depth, frame.id, address)
-        return {
-            "branch": result["branch"],
-            "output": {
-                caller: result["output"][name]
-                for name, caller in bindings["output"].items()
-                if name in result["output"]
+        mapped = self._retain_result(
+            {
+                "branch": result["branch"],
+                "output": {
+                    caller: result["output"][name]
+                    for name, caller in bindings["output"].items()
+                    if name in result["output"]
+                },
             },
-        }
+            self._output_types(body, symbols),
+        )
+        self._release_result(result)
+        await self._collect_resources()
+        return mapped
 
     async def _run_activity(
         self, node: JsonObject, snapshot: JsonObject, native_retry: bool
@@ -992,17 +1485,72 @@ class AxcutorInterpreterWorkflow:
             "heartbeat_interval_ms": self._options["heartbeat_interval_ms"],
         }
         try:
-            response = await workflow.execute_activity(
-                "execute_run",
-                dumps(request),
-                result_type=str,
-                task_queue=self._options["task_queues"].get(body["run"]["executor"]),
-                start_to_close_timeout=timedelta(milliseconds=timeout),
-                heartbeat_timeout=timedelta(milliseconds=self._options["heartbeat_timeout_ms"]),
-                retry_policy=policy,
-                cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+            allowed = self._registry.authorize(snapshot, body["input_schema"])
+            base = (
+                self._options["task_queues"].get(body["run"]["executor"])
+                or self._default_queue
+                or workflow.info().task_queue
             )
-        except exceptions.FailureError as error:
-            raise boundary_error(error) from error
-        self._signal_initialized = True
-        return _contract(response, body)
+            queue = self._registry.route(base, allowed, has_handles(body["output"]))
+        except ValueError as error:
+            raise Recoverable("execution", str(error)) from error
+        resource_call = bool(allowed) or has_handles(body["output"])
+        call_id = self._resource_call(allowed, workflow.info().run_id)
+        request["resource_context"] = {"resources": allowed, "call_id": call_id}
+        request["workflow_queue"] = self._default_queue or workflow.info().task_queue
+        try:
+            while True:
+                handle = workflow.start_activity(
+                    "execute_run",
+                    dumps(request),
+                    result_type=str,
+                    task_queue=queue,
+                    schedule_to_start_timeout=(
+                        timedelta(seconds=STICKY_SECONDS) if queue != base else None
+                    ),
+                    start_to_close_timeout=timedelta(milliseconds=timeout),
+                    heartbeat_timeout=timedelta(milliseconds=self._options["heartbeat_timeout_ms"]),
+                    retry_policy=policy,
+                    cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+                )
+                try:
+                    response = await asyncio.shield(handle)
+                    break
+                except exceptions.FailureError as error:
+                    cause = error.cause
+                    if (
+                        isinstance(cause, exceptions.TimeoutError)
+                        and cause.type == exceptions.TimeoutType.SCHEDULE_TO_START
+                    ):
+                        if queue != base and all(d["locator"] is not None for d in allowed):
+                            queue = base
+                            continue
+                        raise Recoverable(
+                            "execution", "transient resource Worker is unavailable"
+                        ) from error
+                    drained = self._merge_failure(error, call_id)
+                    if resource_call and not drained:
+                        await self._settle_resource_call(handle, call_id, body)
+                    raise boundary_error(error) from error
+                except asyncio.CancelledError:
+                    if resource_call:
+                        await self._settle_resource_call(handle, call_id, body)
+                    else:
+                        await cancel_and_drain([handle])
+                    raise
+            self._signal_initialized = True
+            result, worker_queue = self._receive_response(response, body, allowed)
+            self._remember_residencies(call_id)
+            base = (
+                self._options["task_queues"].get(body["run"]["executor"])
+                or self._default_queue
+                or workflow.info().task_queue
+            )
+            if worker_queue is not None and pool(worker_queue) == base and resource_call:
+                self._registry.sticky[base] = worker_queue
+            self._resource_calls[call_id]["drained"] = True
+            return result
+        finally:
+            # Pure-value calls cannot report later resource responsibility.
+            if not resource_call:
+                del self._resource_calls[call_id]

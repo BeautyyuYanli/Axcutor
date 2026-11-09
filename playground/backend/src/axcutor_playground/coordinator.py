@@ -35,11 +35,10 @@ from axcutor_runtime.codec import JsonObject, dumps, loads
 from axcutor_runtime.contracts import generate_contracts
 from axcutor_runtime.module import module_executor
 from axcutor_runtime.packages import load_packages
-from axcutor_runtime.worker import create_worker
+from axcutor_runtime.worker import ResourceWorker, create_worker
 from axcutor_runtime.workflow import AxcutorInterpreterWorkflow
 from temporalio.client import Client
 from temporalio.common import QueryRejectCondition
-from temporalio.worker import Worker
 
 from .workspace import Workspace, WorkspaceConflict, WorkspaceView, discover_mounts, source_path
 
@@ -98,7 +97,7 @@ class Playground:
         self.latest: LatestTrace | None = None
         self._trace_observer: asyncio.Task[None] | None = None
         self._completion: asyncio.Task[None] | None = None
-        self._worker: Worker | None = None
+        self._worker: ResourceWorker | None = None
         self._module: Executor = module_executor({})
         self._inflight = 0
         self._drained = asyncio.Event()
@@ -226,6 +225,10 @@ class Playground:
                     raise InvalidRequest("workflow input must be a JSON object")
                 bundle = loads(compile_bundle(entry_id, packages))
                 try:
+                    axcutor_core.validate_root_interface(
+                        dumps(bundle["workflows"][entry_id]["input"]),
+                        dumps(bundle["workflows"][entry_id]["output"]),
+                    )
                     axcutor_core.validate_input(
                         dumps(inputs), dumps(bundle["workflows"][entry_id]["input"])
                     )

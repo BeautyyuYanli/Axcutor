@@ -21,13 +21,16 @@ from pydantic import BaseModel, ValidationError
 
 from .codec import JsonObject, dumps
 from .concurrency import cancel_and_drain
+from .python_loader import module_mounts as validate_mounts
+from .python_loader import python_module
+from .resources import Handle
 
 if TYPE_CHECKING:
     from .activities import AbortSignal
 
 
-# This prelude is included verbatim so exported modules compile and type-check
-# without an executor instance or imports from axcutor_runtime.
+# Pure-value contracts remain standalone. Handle contracts add the shared public
+# type below; resource-class imports are only needed by static type checking.
 _PRELUDE = """import math
 import builtins as _ax_builtins
 import typing as _ax_typing
@@ -174,6 +177,8 @@ def synthesize_contract_module(
     input_schema: JsonObject,
     output_schema: JsonObject,
     branches_contract: JsonObject,
+    *,
+    module_mounts: Mapping[str, str] | None = None,
 ) -> str:
     """Generate standalone Python 3.11+ contracts without evaluating business code.
 
@@ -182,6 +187,7 @@ def synthesize_contract_module(
     Python's Literal type cannot represent fractional numeric literals.
     """
     names = set(branches_contract)
+    mounts = validate_mounts(module_mounts)
 
     def collect(schema: JsonObject) -> None:
         names.update(schema.get("properties", {}))
@@ -207,13 +213,47 @@ def synthesize_contract_module(
     used = {"Input", "Output", "Branch", "ReturnType"}
     exports = ["Input", "Branch" if branches_contract else "Output", "ReturnType"]
     model_count = 0
+    resource_classes: dict[str, str] = {}
 
     def annotation(schema: JsonObject, path: str, output: bool) -> str:
         nonlocal model_count
         kind = schema["type"]
         nullable = isinstance(kind, list)
         base = next(t for t in kind if t != "null") if nullable else kind
-        if base == "object" and "properties" in schema:
+        if base == "handle":
+            logical, cls = schema["kind"].split(":")
+            if schema["kind"] not in resource_classes:
+                alias = f"{private}resource_{len(resource_classes)}"
+                resource_classes[schema["kind"]] = alias
+                if len(resource_classes) == 1:
+                    sections.append(
+                        f"from axcutor_runtime.resources import Handle as {private}Handle\n"
+                        f"\ndef {private}handle(kind: str, output: bool) -> Any:\n"
+                        "    def validate(value: Any) -> Any:\n"
+                        f"        if not output and not isinstance(value, {private}Handle):\n"
+                        "            if (not isinstance(value, dict)\n"
+                        "                    or value.keys() != {'$handle', 'kind'}):\n"
+                        "                raise ValueError('invalid handle envelope')\n"
+                        f"            value = {private}Handle(\n"
+                        "                rid=value['$handle'], kind=value['kind'])\n"
+                        f"        if (not isinstance(value, {private}Handle)\n"
+                        "                or value.kind != kind):\n"
+                        "            raise ValueError('expected public Handle of this kind')\n"
+                        "        return value\n"
+                        "    return validate\n\n"
+                    )
+                sections.append(
+                    f"if {private}typing.TYPE_CHECKING:\n"
+                    f"    from {python_module(logical, mounts)} import {cls} as {alias}\n"
+                    "else:\n"
+                    f"    {alias} = {private}typing.Any\n\n"
+                )
+            alias = resource_classes[schema["kind"]]
+            result = (
+                f"{private}typing.Annotated[{private}Handle[{alias}], "
+                f"{private}pydantic.PlainValidator({private}handle({schema['kind']!r}, {output}))]"
+            )
+        elif base == "object" and "properties" in schema:
             desired = ("Output_" if output else "Input_") + path
             name, index = desired, 2
             while name in used:
@@ -411,9 +451,14 @@ def synthesize_module(
     output_schema: JsonObject,
     branches_contract: JsonObject,
     content: str,
+    *,
+    module_mounts: Mapping[str, str] | None = None,
 ) -> BuiltinModule:
     """Add a trusted builtin function body to the shared contract model source."""
-    prefix = synthesize_contract_module(input_schema, output_schema, branches_contract)
+    prefix = synthesize_contract_module(
+        input_schema, output_schema, branches_contract, module_mounts=module_mounts
+    )
+    prefix += "\nfrom axcutor_runtime.resources import Handle, resources\n"
     prefix += "\nasync def execute(input: Input) -> ReturnType:\n"
     # Python recognizes CR/LF physical lines. str.splitlines/textwrap.indent also
     # split Unicode separators that are ordinary characters inside Python strings.
@@ -448,6 +493,8 @@ def _export(value: Any, unset: Any) -> Any:
     shadow Python/Pydantic serialization attributes. Rust checks the resulting
     values, including models built with Pydantic's validation bypass APIs.
     """
+    if isinstance(value, Handle):
+        return {"$handle": value.rid, "kind": value.kind}
     if isinstance(value, BaseModel):
         storage = object.__getattribute__(value, "__dict__")
         return {
@@ -526,6 +573,7 @@ async def execute_builtin(request: JsonObject, signal: "AbortSignal") -> JsonObj
         request["output_schema"],
         request["branches_contract"],
         request["run_spec"]["content"],
+        module_mounts=request.get("module_mounts"),
     )
     filename = "<axcutor-builtin-" + hashlib.sha256(generated.source.encode()).hexdigest() + ">"
     namespace: JsonObject = {"__name__": "__axcutor_builtin__"}

@@ -33,6 +33,8 @@
 
 ### 2. 强类型闭合结构体（`TypedDict`）的输入与输出映射
 
+句柄另映射为 `Handle[C]`，C 是按 module_mounts 解析的精确资源类，仅在 TYPE_CHECKING 下导入。输入由闭合信封构造公共 Handle；输出仅接受公共 Handle，并在一般 BaseModel 之前导出为两字段信封。builtin 前导注入 Handle/resources，资源类放在普通模块内。三种合成/生成接口均支持可选关键字 module_mounts，映射不参与 SHA；kind 与可空性参与 SHA。
+
 对于 `type: "object"` 且声明了 `properties` 的闭合结构体（路径记为 `<path>`，如 `user` 或 `user_address`）：
 
 1. **`Input` 侧嵌套结构体模型（`Input_<path>`）**：

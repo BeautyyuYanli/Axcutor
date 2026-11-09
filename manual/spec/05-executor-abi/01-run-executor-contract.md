@@ -50,6 +50,8 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 
 ### 2. 运行时边界契约校验（Produces `contract` Exception on Violation）
 
+业务返回形状不变。Activity 与独立 Child 在内部统一使用 `result/resources` 外壳，先完成资源接管，再提交或映射完整业务输出。根宿主仍返回原有业务形状，详见[资源交接](./05-resource-lifecycle.md)。
+
 运行时收到 Activity 的 `ExecutionSuccess` 后，在将其合并入图 `variables` 之前，在 Activity 出口与工作流接收边界均执行以下两项边界校验（任一项失败，或执行器在构造返回值期间显式报告契约校验失败，均丢弃返回值并产生可恢复的 **`contract` 异常**；对于 `executor: "signal"`，相同的两项契约校验在外部信号接收边界同步执行，校验失败时直接以 `422 signal_validation_failed` 拒绝外部请求并保持节点等待状态，详见 [`04-signal-cooperative-executor.md`](./04-signal-cooperative-executor.md)）：
 
 1. **分支合法性校验**：
@@ -68,7 +70,7 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 
 Activity 单次尝试同时维护业务协程、本地单调时钟 `deadline`（预算 `attempt_timeout_ms`）、取消监听协程以及周期为 `heartbeat_interval_ms` 的心跳协程（心跳负责向后端上报存活并接收取消通知；若心跳协程自身发生基础设施异常，则中止尝试并转化为不可恢复的 `EngineError`）。当触发 `abort_signal` 时，执行器与运行时必须遵循以下契约：
 
-1. **执行器资源清理义务与任务排空**：`abort_signal` 一旦置位（超时置 `reason = "timeout"`，外部或并发取消置 `reason = "cancelled"`），执行器应尽快中止正在进行的底层 I/O、终止子进程或停止计算并释放外部资源。Activity 在所有退出路径上均通过 `cancel_and_drain` 等待其创建的全部本地任务排空退出后才结束当次尝试，工作流同样以 `WAIT_CANCELLATION_COMPLETED` 等待 Activity 清理完成。
+1. **执行器资源清理义务与任务排空**：`abort_signal` 置位后，业务应尽快中止 I/O、子进程和计算。Activity 取消并排空业务及派生任务，本轮排空与清理共用 30 秒预算；未实际排空的本地使用记录继续保留，排空后驱动 pending 清理。Workflow 的旧调度授权在有界收尾后结束，不无限等待失联任务。析构失败保留责任，不替换业务异常。
 2. **提交前单调时钟复查与迟到结果静默丢弃（Late-Result Dropping）**：
    * `abort_signal` 触发的瞬间，该次尝试在运行时内部的生命周期即告终结（因超时触发者产生 `timeout` 异常并按需转入 `retry` / `catch` 状态机；因 `CancelledError` 触发者推进取消收敛流程）；
    * 即使业务协程在同步编译、序列化或 `validate_run_contract` 契约校验期间未让出事件循环而赶在 `deadline` 协程被调度前产出返回值，Activity 在最终返回前仍会复查本地单调时钟（`loop.time() >= expires_at`），一旦超期立即将 `abort_signal` 置为 `"timeout"` 并丢弃该迟到成功结果；

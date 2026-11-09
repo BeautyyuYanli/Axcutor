@@ -1,6 +1,6 @@
 # RFC-0013: 不透明句柄类型与跨 Activity / Workflow 资源生命周期
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **范围**：类型系统扩展、跨 Activity / Child Workflow 资源传递、Worker 亲和性与确定性资源回收。
 * **关联提案**：[RFC-0009](./0009-static-subtyping-and-covariance.md)、[RFC-0011](./0011-compiler-and-temporal-runtime-architecture.md)、[RFC-0012](./0012-run-executor-and-builtin-python.md)、[RFC-0014](./0014-module-python-executor.md)、[RFC-0015](./0015-unified-package-and-import-system.md)、[RFC-0016](./0016-activity-heartbeat-configuration-and-throttling.md)、[RFC-0017](./0017-cooperative-signal-executor.md)。
 
