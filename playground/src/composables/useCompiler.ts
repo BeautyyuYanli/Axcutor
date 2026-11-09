@@ -4,10 +4,15 @@
  */
 import { computed, onMounted, ref, shallowRef, watch, type Ref } from 'vue';
 import init, { compile_workflow, get_available_vars_at_node } from '../wasm-pkg/axcutor_wasm';
-import type { CompileOutput, SourceDocument, VariableCandidate } from '../types/compiler';
+import type { CompileOutput, CompileRequest, SourceDocument, VariableCandidate } from '../types/compiler';
 import { JsonText } from '../utils/losslessJson';
 
 let initialization: Promise<unknown> | undefined;
+
+export function compileSource(source: CompileRequest): { output: CompileOutput; raw: JsonText } {
+  const raw = new JsonText(compile_workflow(JSON.stringify(source)));
+  return { raw, output: JSON.parse(raw.text) as CompileOutput };
+}
 
 export function useCompiler(entry: Ref<string>, packages: Ref<Record<string, SourceDocument>>) {
   const ready = ref(false);
@@ -19,9 +24,9 @@ export function useCompiler(entry: Ref<string>, packages: Ref<Record<string, Sou
   const compile = () => {
     if (!ready.value) return;
     try {
-      const raw = compile_workflow(JSON.stringify({ entry: entry.value, packages: packages.value }));
-      rawOutput.value = new JsonText(raw);
-      compileOutput.value = JSON.parse(raw) as CompileOutput;
+      const compiled = compileSource({ entry: entry.value, packages: packages.value });
+      rawOutput.value = compiled.raw;
+      compileOutput.value = compiled.output;
       error.value = null;
     } catch (cause) {
       compileOutput.value = null;

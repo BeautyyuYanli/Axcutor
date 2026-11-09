@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import init, { compile_workflow, get_available_vars_at_node } from '../src/wasm-pkg/axcutor_wasm';
-import { defaultPreset } from '../src/presets';
+import { defaultPreset } from './preset';
 import { handleId, layoutGraph, liveOverlay, locateFrame, scopeBody } from '../src/utils/graphLayout';
 import { JsonText } from '../src/utils/losslessJson';
 import type { CompileOutput, Scope } from '../src/types/compiler';

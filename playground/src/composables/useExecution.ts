@@ -1,15 +1,17 @@
-/** One observed execution per workbench. The host remains the state owner.
+/** One observed execution per workbench. Temporal owns execution state.
  * Polls never overlap, stale responses cannot overwrite a terminal state, and
  * disposing aborts observation requests only (it never cancels server work).
+ * A submission 503 with an ID keeps observation/cancellation available without
+ * inventing an Execution view or submitting the workflow again.
  * Hey API's SDK signatures do not narrow data for parseAs:'text'; conversion at
  * this boundary is explicit and every business payload stays in JsonText.
  */
 import { onScopeDispose, ref, shallowRef } from 'vue';
 import { createClient } from '../client/client';
-import { submitExecution, getExecution, cancelExecution } from '../client/sdk.gen';
-import type { ErrorResponse, Execution } from '../client/types.gen';
-import type { Diagnostic, SourceDocument } from '../types/compiler';
-import { executionSlices, JsonText, serializeSubmitBody, type RawExecutionSlices } from '../utils/losslessJson';
+import { runWorkspace, getExecution, cancelExecution } from '../client/sdk.gen';
+import type { ErrorResponse, Execution, SubmittedSource, Workspace } from '../client/types.gen';
+import type { Diagnostic } from '../types/compiler';
+import { executionSlices, JsonText, type RawExecutionSlices } from '../utils/losslessJson';
 
 export interface ExecutionProblem {
   status: number | null;
@@ -27,8 +29,11 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
     return response;
   });
   const execution = shallowRef<Execution | null>(null);
+  const observedId = ref<string | null>(null);
   const slices = shallowRef<RawExecutionSlices>({ frameVariablesRaw: new Map(), resultOutputRaw: null });
   const error = shallowRef<ExecutionProblem | null>(null);
+  const source = shallowRef<SubmittedSource | null>(null);
+  const workspace = shallowRef<Workspace | null>(null);
   const submitting = ref(false);
   const cancelRequested = ref(false);
   const controllers = new Set<AbortController>();
@@ -52,6 +57,7 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
     }
     if (execution.value?.execution_id === next.execution_id && execution.value.status !== 'running') return false;
     execution.value = next;
+    observedId.value = next.status === 'running' ? next.execution_id : null;
     slices.value = executionSlices(tokens);
     error.value = null;
     if (next.status !== 'running') { clearTimer(); abortRequests(); cancelRequested.value = false; }
@@ -61,6 +67,7 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
   async function request(
     operation: (signal: AbortSignal) => Promise<{ response?: Response; error?: unknown }>,
     requestGeneration: number,
+    submission = false,
   ): Promise<boolean> {
     const controller = new AbortController();
     controllers.add(controller);
@@ -68,9 +75,25 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
       const result = await operation(controller.signal);
       if (disposed || generation !== requestGeneration || controller.signal.aborted) return false;
       const raw = result.response && rawResponses.get(result.response);
-      if (result.response?.ok && raw !== undefined) return accept(raw, requestGeneration);
+      if (result.response?.ok && raw !== undefined) {
+        if (submission) {
+          const tokens = new JsonText(raw);
+          source.value = JSON.parse(tokens.raw(['source'])!) as SubmittedSource;
+          workspace.value = JSON.parse(tokens.raw(['workspace'])!) as Workspace;
+          return accept(tokens.raw(['execution'])!, requestGeneration);
+        }
+        return accept(raw, requestGeneration);
+      }
       const tokens = raw ? new JsonText(raw) : null;
       const envelope = tokens ? JSON.parse(raw!) as ErrorResponse : null;
+      if (submission && envelope?.error?.details?.workspace) {
+        workspace.value = envelope.error.details.workspace as Workspace;
+      }
+      const id = envelope?.error?.details?.execution_id;
+      if (submission && result.response?.status === 503 && envelope?.error?.code === 'runtime_unavailable'
+        && typeof id === 'string' && id.length > 0) {
+        observedId.value = id;
+      }
       error.value = {
         status: result.response?.status ?? null,
         code: envelope?.error?.code ?? 'network_error',
@@ -87,60 +110,52 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
   }
 
   function schedule() {
-    if (disposed || polling || timer !== undefined || execution.value?.status !== 'running') return;
+    if (disposed || polling || timer !== undefined || !observedId.value) return;
     timer = setTimeout(() => { timer = undefined; void poll(); }, 300);
   }
 
   async function poll() {
-    const id = execution.value?.execution_id;
-    if (!id || disposed || polling || execution.value?.status !== 'running') return;
+    const id = observedId.value;
+    if (!id || disposed || polling) return;
     polling = true;
     try {
       await request(signal => getExecution({ client, path: { execution_id: id }, signal }), generation);
     } finally { polling = false; schedule(); }
   }
 
-  async function run(entry: string, packages: Record<string, SourceDocument>, inputRawText: string) {
-    if (disposed || submitting.value || execution.value?.status === 'running') return false;
-    // Snapshot before the first await: editors can continue changing independently.
-    const body = { entry, packages: Object.fromEntries(Object.entries(packages).map(([path, source]) => [
-      path, { format: source.format, text: source.text },
-    ])) };
-    let serialized: string;
-    try { serialized = serializeSubmitBody(body, inputRawText); }
-    catch (cause) {
-      error.value = { status: null, code: 'invalid_input_json', message: String(cause), detailsRaw: null, diagnostics: [] };
-      return false;
-    }
+  async function run(entry: string, input: string | null, revision: string) {
+    if (disposed || submitting.value || observedId.value) return false;
+    const body = { entry, input, revision };
     generation++;
     clearTimer();
     abortRequests();
     execution.value = null;
+    observedId.value = null;
     slices.value = { frameVariablesRaw: new Map(), resultOutputRaw: null };
     error.value = null;
+    source.value = null;
+    workspace.value = null;
     cancelRequested.value = false;
     submitting.value = true;
     try {
-      const accepted = await request(signal => submitExecution({
-        client, body, bodySerializer: () => serialized, signal,
-      }), generation);
+      const accepted = await request(signal => runWorkspace({ client, body, signal }), generation, true);
       schedule();
       return accepted;
     } finally { submitting.value = false; }
   }
 
   async function cancel() {
-    if (disposed || execution.value?.status !== 'running' || cancelRequested.value) return;
+    const id = observedId.value;
+    if (disposed || !id || cancelRequested.value) return;
     cancelRequested.value = true;
     const requestGeneration = generation;
-    const id = execution.value.execution_id;
     const accepted = await request(signal => cancelExecution({
       client, path: { execution_id: id }, signal,
     }), requestGeneration);
     if (generation !== requestGeneration || disposed) return;
-    if (!accepted && execution.value?.status === 'running') cancelRequested.value = false;
+    if (!accepted && observedId.value) cancelRequested.value = false;
     schedule();
   }
 
-  return { execution, slices, error, submitting, cancelRequested, run, cancel };
+  return { execution, observedId, slices, error, source, workspace, submitting, cancelRequested, run, cancel };
 }

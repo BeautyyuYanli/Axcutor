@@ -9,13 +9,16 @@ import asyncio
 import json
 import signal
 import socket
-from datetime import timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import uvicorn
-from axcutor_host import ExecutionService
-from axcutor_host.http import create_app
-from axcutor_runtime.worker import create_worker
+from axcutor_playground.coordinator import Playground
+from axcutor_playground.http import create_playground_app
+from axcutor_playground.workspace import Workspace
 from temporalio.testing import WorkflowEnvironment
+
+EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
 
 async def main() -> None:
@@ -24,17 +27,15 @@ async def main() -> None:
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, stopped.set)
     async with await WorkflowEnvironment.start_time_skipping() as environment:
-        async with create_worker(environment.client, "playground-browser"):
-            service = ExecutionService(
-                environment.client,
-                "playground-browser",
-                rpc_timeout=timedelta(seconds=5),
-                options={"heartbeat_interval_ms": 20, "heartbeat_timeout_ms": 1000},
-            )
+        with TemporaryDirectory(prefix="axcutor-browser-") as data:
+            workspace = Workspace(Path(data), EXAMPLES)
+            playground = Playground(environment.client, workspace)
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
-                server = uvicorn.Server(uvicorn.Config(create_app(service), log_level="warning"))
+                server = uvicorn.Server(
+                    uvicorn.Config(create_playground_app(playground), log_level="warning")
+                )
                 serving = asyncio.create_task(server.serve(sockets=[sock]))
                 try:
                     async with asyncio.timeout(10):

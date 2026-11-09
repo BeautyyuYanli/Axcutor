@@ -95,54 +95,59 @@ export type ErrorResponse = {
     };
 };
 
-export type SubmitExecutionData = {
-    body: SubmitExecutionRequest;
-    path?: never;
-    query?: never;
-    url: '/v1/executions';
+export type WorkspaceFileEdit = {
+    /**
+     * Relative workspace source path
+     */
+    path: string;
+    text: string;
 };
 
-export type SubmitExecutionErrors = {
+export type WorkspaceFile = {
     /**
-     * Invalid JSON or request
+     * Relative workspace source path
      */
-    400: ErrorResponse;
-    /**
-     * Execution not found
-     */
-    404: ErrorResponse;
-    /**
-     * Method not allowed
-     */
-    405: ErrorResponse;
-    /**
-     * Execution ID already exists
-     */
-    409: ErrorResponse;
-    /**
-     * Compilation or input validation failed
-     */
-    422: ErrorResponse;
-    /**
-     * Internal server error
-     */
-    500: ErrorResponse;
-    /**
-     * Runtime unavailable
-     */
-    503: ErrorResponse;
+    path: string;
+    text: string;
+    generated: boolean;
 };
 
-export type SubmitExecutionError = SubmitExecutionErrors[keyof SubmitExecutionErrors];
-
-export type SubmitExecutionResponses = {
+export type Workspace = {
+    revision: string;
+    files: Array<WorkspaceFile>;
     /**
-     * Submitted; may already be terminal
+     * Execution or local cleanup in flight
      */
-    202: Execution;
+    busy: boolean;
+    execution_id: string | null;
 };
 
-export type SubmitExecutionResponse = SubmitExecutionResponses[keyof SubmitExecutionResponses];
+export type SaveWorkspaceRequest = {
+    revision: string;
+    files: Array<WorkspaceFileEdit>;
+};
+
+export type RunWorkspaceRequest = {
+    revision: string;
+    /**
+     * Relative workspace source path
+     */
+    entry: string;
+    input?: string | null;
+};
+
+export type SubmittedSource = {
+    entry: string;
+    packages: {
+        [key: string]: SourceDocument;
+    };
+};
+
+export type WorkspaceExecution = {
+    execution: Execution;
+    source: SubmittedSource;
+    workspace: Workspace;
+};
 
 export type GetExecutionData = {
     body?: never;
@@ -167,7 +172,7 @@ export type GetExecutionErrors = {
      */
     405: ErrorResponse;
     /**
-     * Execution ID already exists
+     * Workspace revision conflict or Playground busy
      */
     409: ErrorResponse;
     /**
@@ -218,7 +223,7 @@ export type CancelExecutionErrors = {
      */
     405: ErrorResponse;
     /**
-     * Execution ID already exists
+     * Workspace revision conflict or Playground busy
      */
     409: ErrorResponse;
     /**
@@ -249,3 +254,150 @@ export type CancelExecutionResponses = {
 };
 
 export type CancelExecutionResponse = CancelExecutionResponses[keyof CancelExecutionResponses];
+
+export type GetWorkspaceData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/workspace';
+};
+
+export type GetWorkspaceErrors = {
+    /**
+     * Invalid JSON or request
+     */
+    400: ErrorResponse;
+    /**
+     * Execution not found
+     */
+    404: ErrorResponse;
+    /**
+     * Method not allowed
+     */
+    405: ErrorResponse;
+    /**
+     * Workspace revision conflict or Playground busy
+     */
+    409: ErrorResponse;
+    /**
+     * Compilation or input validation failed
+     */
+    422: ErrorResponse;
+    /**
+     * Internal server error
+     */
+    500: ErrorResponse;
+    /**
+     * Runtime unavailable
+     */
+    503: ErrorResponse;
+};
+
+export type GetWorkspaceError = GetWorkspaceErrors[keyof GetWorkspaceErrors];
+
+export type GetWorkspaceResponses = {
+    /**
+     * Workspace
+     */
+    200: Workspace;
+};
+
+export type GetWorkspaceResponse = GetWorkspaceResponses[keyof GetWorkspaceResponses];
+
+export type SaveWorkspaceData = {
+    body: SaveWorkspaceRequest;
+    path?: never;
+    query?: never;
+    url: '/v1/workspace';
+};
+
+export type SaveWorkspaceErrors = {
+    /**
+     * Invalid JSON or request
+     */
+    400: ErrorResponse;
+    /**
+     * Execution not found
+     */
+    404: ErrorResponse;
+    /**
+     * Method not allowed
+     */
+    405: ErrorResponse;
+    /**
+     * Workspace revision conflict or Playground busy
+     */
+    409: ErrorResponse;
+    /**
+     * Compilation or input validation failed
+     */
+    422: ErrorResponse;
+    /**
+     * Internal server error
+     */
+    500: ErrorResponse;
+    /**
+     * Runtime unavailable
+     */
+    503: ErrorResponse;
+};
+
+export type SaveWorkspaceError = SaveWorkspaceErrors[keyof SaveWorkspaceErrors];
+
+export type SaveWorkspaceResponses = {
+    /**
+     * Workspace
+     */
+    200: Workspace;
+};
+
+export type SaveWorkspaceResponse = SaveWorkspaceResponses[keyof SaveWorkspaceResponses];
+
+export type RunWorkspaceData = {
+    body: RunWorkspaceRequest;
+    path?: never;
+    query?: never;
+    url: '/v1/workspace/executions';
+};
+
+export type RunWorkspaceErrors = {
+    /**
+     * Invalid JSON or request
+     */
+    400: ErrorResponse;
+    /**
+     * Execution not found
+     */
+    404: ErrorResponse;
+    /**
+     * Method not allowed
+     */
+    405: ErrorResponse;
+    /**
+     * Workspace revision conflict or Playground busy
+     */
+    409: ErrorResponse;
+    /**
+     * Compilation or input validation failed
+     */
+    422: ErrorResponse;
+    /**
+     * Internal server error
+     */
+    500: ErrorResponse;
+    /**
+     * Runtime unavailable
+     */
+    503: ErrorResponse;
+};
+
+export type RunWorkspaceError = RunWorkspaceErrors[keyof RunWorkspaceErrors];
+
+export type RunWorkspaceResponses = {
+    /**
+     * WorkspaceExecution
+     */
+    202: WorkspaceExecution;
+};
+
+export type RunWorkspaceResponse = RunWorkspaceResponses[keyof RunWorkspaceResponses];

@@ -40,7 +40,10 @@ async def invoke(*args):
 
 
 @pytest.mark.parametrize("no_wait", [False, True])
-async def test_cli_runs_source_snapshot_and_emits_exact_result(server, tmp_path, no_wait):
+async def test_cli_runs_source_snapshot_and_emits_exact_result(
+    server, tmp_path, no_wait, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(EXAMPLES))
     queue, workflow_id = str(uuid4()), str(uuid4())
     input_file = tmp_path / "input.json"
     # Cross the subprocess/Temporal boundary without rounding an integer to float.

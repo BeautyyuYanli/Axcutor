@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CancelExecutionData, CancelExecutionErrors, CancelExecutionResponses, GetExecutionData, GetExecutionErrors, GetExecutionResponses, SubmitExecutionData, SubmitExecutionErrors, SubmitExecutionResponses } from './types.gen';
+import type { CancelExecutionData, CancelExecutionErrors, CancelExecutionResponses, GetExecutionData, GetExecutionErrors, GetExecutionResponses, GetWorkspaceData, GetWorkspaceErrors, GetWorkspaceResponses, RunWorkspaceData, RunWorkspaceErrors, RunWorkspaceResponses, SaveWorkspaceData, SaveWorkspaceErrors, SaveWorkspaceResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -18,8 +18,14 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
     meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
 
-export const submitExecution = <ThrowOnError extends boolean = false>(options: Options<SubmitExecutionData, ThrowOnError>): RequestResult<SubmitExecutionResponses, SubmitExecutionErrors, ThrowOnError> => (options.client ?? client).post<SubmitExecutionResponses, SubmitExecutionErrors, ThrowOnError>({
-    url: '/v1/executions',
+export const getExecution = <ThrowOnError extends boolean = false>(options: Options<GetExecutionData, ThrowOnError>): RequestResult<GetExecutionResponses, GetExecutionErrors, ThrowOnError> => (options.client ?? client).get<GetExecutionResponses, GetExecutionErrors, ThrowOnError>({ url: '/v1/executions/{execution_id}', ...options });
+
+export const cancelExecution = <ThrowOnError extends boolean = false>(options: Options<CancelExecutionData, ThrowOnError>): RequestResult<CancelExecutionResponses, CancelExecutionErrors, ThrowOnError> => (options.client ?? client).post<CancelExecutionResponses, CancelExecutionErrors, ThrowOnError>({ url: '/v1/executions/{execution_id}:cancel', ...options });
+
+export const getWorkspace = <ThrowOnError extends boolean = false>(options?: Options<GetWorkspaceData, ThrowOnError>): RequestResult<GetWorkspaceResponses, GetWorkspaceErrors, ThrowOnError> => (options?.client ?? client).get<GetWorkspaceResponses, GetWorkspaceErrors, ThrowOnError>({ url: '/v1/workspace', ...options });
+
+export const saveWorkspace = <ThrowOnError extends boolean = false>(options: Options<SaveWorkspaceData, ThrowOnError>): RequestResult<SaveWorkspaceResponses, SaveWorkspaceErrors, ThrowOnError> => (options.client ?? client).put<SaveWorkspaceResponses, SaveWorkspaceErrors, ThrowOnError>({
+    url: '/v1/workspace',
     ...options,
     headers: {
         'Content-Type': 'application/json',
@@ -27,6 +33,11 @@ export const submitExecution = <ThrowOnError extends boolean = false>(options: O
     }
 });
 
-export const getExecution = <ThrowOnError extends boolean = false>(options: Options<GetExecutionData, ThrowOnError>): RequestResult<GetExecutionResponses, GetExecutionErrors, ThrowOnError> => (options.client ?? client).get<GetExecutionResponses, GetExecutionErrors, ThrowOnError>({ url: '/v1/executions/{execution_id}', ...options });
-
-export const cancelExecution = <ThrowOnError extends boolean = false>(options: Options<CancelExecutionData, ThrowOnError>): RequestResult<CancelExecutionResponses, CancelExecutionErrors, ThrowOnError> => (options.client ?? client).post<CancelExecutionResponses, CancelExecutionErrors, ThrowOnError>({ url: '/v1/executions/{execution_id}:cancel', ...options });
+export const runWorkspace = <ThrowOnError extends boolean = false>(options: Options<RunWorkspaceData, ThrowOnError>): RequestResult<RunWorkspaceResponses, RunWorkspaceErrors, ThrowOnError> => (options.client ?? client).post<RunWorkspaceResponses, RunWorkspaceErrors, ThrowOnError>({
+    url: '/v1/workspace/executions',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});

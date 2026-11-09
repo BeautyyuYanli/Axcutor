@@ -8,3 +8,8 @@ tests
 .pytest_cache
 .mypy_cache
 .ruff_cache
+playground/node_modules
+playground/dist
+playground/src/wasm-pkg
+playground/.browser-test
+.axcutor
