@@ -11,7 +11,7 @@
 | `input` | **必填** | `{ <var_name>: <TypeSpec> }` | 工作流对外输入参数表；无输入时写 `{}`。 |
 | `output` | **必填** | `{ <var_name>: <TypeSpec> }` | 工作流对外输出参数表；无输出时写 `{}`。 |
 | `branches` | 可选 | `{ <choice>: "<desc>" \| { description: "<desc>", output: [<var>, ...] } }` | 对外控制分支及各分支承诺产出的 `output` 字段子集，默认 `{}`。 |
-| `timeout_ms` | 可选 | 正整数（毫秒） | 仅当顶层为 `run` 时可用：单次尝试最大允许耗时。 |
+| `timeout_ms` | 可选 | 正整数（毫秒） | 仅当顶层为 `run` 时可用：单次尝试最大允许耗时。Activity 节点省略时采用运行选项 `activity_timeout_ms`（默认 7 天）；`signal` 节点省略时无限期等待。 |
 | `retry` | 可选 | `RetrySpec` | 仅当顶层为 `run` 时可用：原地快照重试配置。 |
 | `run` \| `graph` | **二选一** | `RunSpec` 或 `GraphSpec` | 根节点执行体：直接作为单步动作（`run`）或展开为控制流图（`graph`）。 |
 
@@ -81,6 +81,9 @@ graph:
 - **`use: workflow:<PackagePath>` 与 `use: builtin:<op>` 的修饰符及可见性规则**：
   - `for_each`、`timeout_ms`、`retry`、`catch` 四类修饰符仅支持 `use: workflow:<PackagePath>` 子工作流包调用，对所有 `use: builtin:<op>` 内建算子禁用。
   - `workflow:<PackagePath>` 必须为点号 `.` 分隔的合法包路径（首段为公开标识符，后续段若以 `_` 开头则为父包私有子包，仅允许从父包子树内调用）。
+- **`timeout_ms` 省略时的默认期限**：
+  - Activity 型 `run`（`builtin`、`module` 及扩展执行器）省略 `timeout_ms` 时，单次尝试采用运行选项 `activity_timeout_ms`（默认 `604800000` 毫秒，即 7 天；排队时间不计入尝试预算）；
+  - 内联 `graph`、`use: workflow:<PackagePath>` 与 `executor: signal` 省略 `timeout_ms` 时不设单次尝试上限（详见 [运行选项、心跳与宿主资源](../guide/04-state-and-resilience/02-guardrails-and-timeouts.md#runtime-options)）。
 
 ---
 
@@ -146,7 +149,7 @@ graph:
 | `item` | **必填** | `<identifier>` | 注入单次迭代帧的当前元素（或有序映射的当前值）变量名。 |
 | `key` | 可选 | `<identifier>` | 仅遍历有序映射（`OrderedMap`）时可用：注入当前键（`string`）的变量名；遍历列表时禁止声明。 |
 | `index` | 可选 | `<identifier>` | 注入当前遍历序号 `0, 1, ...`（`integer`）的变量名。 |
-| `concurrency` | 可选 | 正整数（默认 `1`） | 最大并发度（正整数，默认 `1`）。 |
+| `concurrency` | 可选 | 正整数（默认 `1`） | 同一集合激活内同时执行的最大迭代许可数（正整数，默认 `1`；迭代的挂起等待、内部重试与取消清理期间持续持有许可，不等同于 Worker 全局进程槽位）。 |
 
 *(注：挂载 `for_each` 的节点直接复用节点自身的 `output`、`with.output` 与 `branches.<branch>.output` 声明目标输出集合变量与按分支过滤子集，要求至少绑定 1 个目标输出变量。)*
 

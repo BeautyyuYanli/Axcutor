@@ -9,11 +9,12 @@
 | 异常类别 | 标识符 / 异常名 | 产生源 | 是否允许被 `retry` / `catch` 拦截 |
 | :--- | :--- | :--- | :--- |
 | **可恢复运行时异常** | `execution` | `run` 执行器运行故障，或子图主动走向 `-> fail` | **允许** |
-| **可恢复运行时异常** | `timeout` | 单次尝试耗时超出节点 `timeout_ms` | **允许** |
+| **可恢复运行时异常** | `timeout` | 单次尝试耗时超出节点 `timeout_ms` 或 Activity 默认期限 `activity_timeout_ms` | **允许** |
 | **可恢复运行时异常** | `contract` | 节点返回的 `output` 违反 `TypeSpec` 或返回非法 `branch` | **允许** |
 | **可恢复运行时异常** | `max_steps` | 内联 `graph` 或 `use` 子工作流超出其 `graph.max_steps` | **允许**（仅在包裹该子图的父节点边界） |
-| **不可恢复引擎 Panic** | `StackOverflowError` | 调用栈深度 $d > \text{MAX\_CALL\_DEPTH}$ | **禁止拦截**（直接穿透终止） |
+| **不可恢复引擎 Panic** | `StackOverflowError` | 调用栈深度 $d > \text{max\_call\_depth}$ | **禁止拦截**（直接穿透终止） |
 | **不可恢复引擎 Panic** | `MaxStepsExceededError` | 根工作流（Root Graph）自身超出 `max_steps` | **禁止拦截**（直接穿透终止） |
+| **不可恢复引擎 Panic** | `EngineError` | 非法工作流请求/运行选项、控制参数超出后端可表示范围、心跳基础设施故障，或后端强制终止等引擎内部不变量违约 | **禁止拦截**（直接穿透终止） |
 | **不可恢复引擎 Panic** | `CancelledError` | 外部宿主取消信号、并发兄弟分支 Fail-Fast 协同取消，或图栈帧 `max_steps` 超限时的在途并发任务取消 | **禁止拦截**（直接穿透终止） |
 
 > **内建算子无运行时可恢复异常**：内建算子（`use: builtin:<op>`）属于引擎内部纯确定性同步求值原语，其输出类型契约与合法分支在编译期已完全静态锁定，且禁止挂载 `timeout_ms`、`retry` 与 `catch`。因此在运行期，内建算子**永不产生可恢复运行时异常**（`execution` / `timeout` / `contract` / `max_steps`）；其运行期求值语义详见 [`05-builtin-operational-semantics.md`](./05-builtin-operational-semantics.md)。
@@ -59,7 +60,7 @@ stateDiagram-v2
 当图栈帧 $F_G$ 产生未捕获异常 $E$——包括主动到达 `-> fail` 终态（$E = \texttt{execution}$）、图内节点（或并发分支 / `for_each` 迭代）抛出未被局部 `catch` 拦截的异常，或图 $G$ 自身触发 $\text{steps}(F_G) > G.\text{max\_steps}$ 步数超限（子图产生 $E = \texttt{max\_steps}$，根图产生不可恢复的 `MaxStepsExceededError`）——引擎按以下三步协议有序执行栈展开：
 
 1. **在途并发任务 Fail-Fast 协同取消**：
-   * 若出错点位于 Fork-Join 并发组 `[W_1, ..., W_k]` 或并发 `for_each` 内部，或图栈帧 $F_G$ 下仍存在尚未完成的在途并发分支、迭代及子栈帧，协调器立即向其广播不可捕获的 `CancelledError`（触发底层执行器 `abort_signal`）并等待其全部退出，同时丢弃已暂存的全部并发缓冲槽位。
+   * 若出错点位于 Fork-Join 并发组 `[W_1, ..., W_k]` 或并发 `for_each` 内部，或图栈帧 $F_G$ 下仍存在尚未完成的在途并发分支、迭代及子栈帧，协调器立即向其广播不可捕获的 `CancelledError`（触发底层执行器 `abort_signal`）并等待其全部退出；若在清理排空期间伴随出现不可恢复的引擎级 Panic（如 `StackOverflowError`、`MaxStepsExceededError`、`EngineError`），则优先保留并传播该不可恢复 Panic，同时丢弃已暂存的全部并发缓冲槽位。
 2. **当前图栈帧销毁与回滚**：
    * 销毁当前图栈帧 $F_G$，丢弃其全部局部变量修改，不向父栈帧提交任何输出。
 3. **跨栈帧向父边界传播**：

@@ -26,7 +26,9 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 | **`input_snapshot`** | `ReadOnlyMap<RestrictedIdentifier, JSONValue>` | **最小权限只读输入快照**：仅包含该节点 `input: [...]` 声明的变量（或顶层 `RootRunNode` 的 `input`）在激活时刻的**深拷贝/不可变值（Deep-Frozen / Immutable Value）**。未在 `input` 中声明的图变量不出现在此映射中；执行器在本地内存或进程内对该快照的任何就地修改（In-place Mutation）均与运行时所属栈帧的 `variables` 物理隔离，不得产生任何跨节点副作用。 |
 | **`output_schema`** | `Map<RestrictedIdentifier, TypeSpec>` | 该节点声明的完整单次输出类型契约表（归一化的 JSON Schema `TypeSpec` 映射）。 |
 | **`branches_contract`** | `Map<BranchId, { description: String, output: List<RestrictedIdentifier> }>` | 规范化后的控制分支表。若节点未声明 `branches`，则为空映射 `{}`。 |
-| **`abort_signal`** | `CancellationToken` | **协作式取消信号**：当单次尝试触及 `timeout_ms` 或并发兄弟分支触发 `CancelledError` 时，运行时通过该信号通知执行器中止执行。执行器必须监听该信号并在触发时尽快中止底层计算或 I/O、释放外部资源（如关闭网络连接、终止子进程、回滚未提交事务）。 |
+| **`attempt_timeout_ms`** | `PositiveInt` | 当前单次尝试的有效超时预算 $A$（毫秒），取节点显式 `timeout_ms` 或运行选项 `activity_timeout_ms`，用于 Activity 进程内建立本地单调时钟 `deadline`。 |
+| **`heartbeat_interval_ms`** | `PositiveInt` | Activity 进程内发送应用心跳的本地间隔 $I$（毫秒），取运行选项显式值或由 `heartbeat_timeout_ms` 派生的 $\max(1, \lfloor T / 3 \rfloor)$。 |
+| **`abort_signal`** | `CancellationToken` | **进程内协作式取消信号**：由 Activity 尝试在本地创建并传入执行器函数（不跨网络序列化）。当单次尝试触及本地 `deadline`（`reason = "timeout"`）或收到工作流/宿主取消信号（`reason = "cancelled"`）时置位，通知执行器中止执行并释放外部资源。 |
 
 ---
 
@@ -48,7 +50,7 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 
 ### 2. 运行时边界契约校验（Produces `contract` Exception on Violation）
 
-运行时收到 Activity 的 `ExecutionSuccess` 后，在将其合并入图 `variables` 之前，执行以下两项边界校验（任一项失败，或执行器在构造返回值期间显式报告契约校验失败，均丢弃返回值并产生可恢复的 **`contract` 异常**；对于 `executor: "signal"`，相同的两项契约校验在外部信号接收边界同步执行，校验失败时直接以 `422 signal_validation_failed` 拒绝外部请求并保持节点等待状态，详见 [`04-signal-cooperative-executor.md`](./04-signal-cooperative-executor.md)）：
+运行时收到 Activity 的 `ExecutionSuccess` 后，在将其合并入图 `variables` 之前，在 Activity 出口与工作流接收边界均执行以下两项边界校验（任一项失败，或执行器在构造返回值期间显式报告契约校验失败，均丢弃返回值并产生可恢复的 **`contract` 异常**；对于 `executor: "signal"`，相同的两项契约校验在外部信号接收边界同步执行，校验失败时直接以 `422 signal_validation_failed` 拒绝外部请求并保持节点等待状态，详见 [`04-signal-cooperative-executor.md`](./04-signal-cooperative-executor.md)）：
 
 1. **分支合法性校验**：
    * 若 `branches_contract` 为空（无分支节点）：`branch` 必须为 `null` 或省略，且预期产出字段集为 $F_{\text{expected}} = \text{dom}(\text{output\_schema})$；
@@ -62,9 +64,12 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 
 当执行器内部发生业务或基础设施故障（包括业务函数抛出未捕获的非契约异常、脚本退出码非零、外部 HTTP/RPC 返回网络错误或 5xx、数据库连接断开、模型 API 调用失败等）且当前尝试尚未被 `abort_signal` 取消时，执行器统一将其封装为 `ExecutionError` 返回给运行时，由运行时映射为标准可恢复异常 **`execution`**，进入节点的 `retry` / `catch` 状态机。
 
-### 4. `abort_signal` 取消响应契约与迟到结果丢弃（Cancellation & Late-Result Dropping）
+### 4. 心跳、本地 Deadline、`abort_signal` 取消响应与迟到结果丢弃（Cancellation & Late-Result Dropping）
 
-当运行时触发某次尝试（Attempt）的 `abort_signal`（原因包括单次尝试触及 `timeout_ms` 超时边界，或所属节点/子图收到并发汇合产生的 `CancelledError`）时，执行器与运行时必须遵循以下取消契约：
+Activity 单次尝试同时维护业务协程、本地单调时钟 `deadline`（预算 `attempt_timeout_ms`）、取消监听协程以及周期为 `heartbeat_interval_ms` 的心跳协程（心跳负责向后端上报存活并接收取消通知；若心跳协程自身发生基础设施异常，则中止尝试并转化为不可恢复的 `EngineError`）。当触发 `abort_signal` 时，执行器与运行时必须遵循以下契约：
 
-1. **执行器资源清理义务**：`abort_signal` 一旦置位，执行器应立即中止正在进行的底层 I/O（如主动断开 HTTP/RPC 连接、取消数据库查询游标）、终止沙箱子进程或停止本地计算，并确保释放已占用的外部句柄与锁资源。
-2. **迟到结果的静默丢弃（Late-Result Dropping）**：`abort_signal` 触发的瞬间，该次尝试在运行时内部的生命周期即告终结（因 `timeout_ms` 触发者由运行时直接生成 `timeout` 异常并按需转入 `retry` / `catch` 状态机；因 `CancelledError` 触发者直接推进取消收敛流程）。此后执行器异步返回的任何迟到 `ExecutionSuccess` 或 `ExecutionError`（包括因取消操作本身引发的底层连接中断错误）**均被运行时静默丢弃**——既不会写入图 `variables`，也不会再次触发 `contract` / `execution` 异常或重复进入该节点的 `retry` / `catch` 状态机。
+1. **执行器资源清理义务与任务排空**：`abort_signal` 一旦置位（超时置 `reason = "timeout"`，外部或并发取消置 `reason = "cancelled"`），执行器应尽快中止正在进行的底层 I/O、终止子进程或停止计算并释放外部资源。Activity 在所有退出路径上均通过 `cancel_and_drain` 等待其创建的全部本地任务排空退出后才结束当次尝试，工作流同样以 `WAIT_CANCELLATION_COMPLETED` 等待 Activity 清理完成。
+2. **提交前单调时钟复查与迟到结果静默丢弃（Late-Result Dropping）**：
+   * `abort_signal` 触发的瞬间，该次尝试在运行时内部的生命周期即告终结（因超时触发者产生 `timeout` 异常并按需转入 `retry` / `catch` 状态机；因 `CancelledError` 触发者推进取消收敛流程）；
+   * 即使业务协程在同步编译、序列化或 `validate_run_contract` 契约校验期间未让出事件循环而赶在 `deadline` 协程被调度前产出返回值，Activity 在最终返回前仍会复查本地单调时钟（`loop.time() >= expires_at`），一旦超期立即将 `abort_signal` 置为 `"timeout"` 并丢弃该迟到成功结果；
+   * 尝试中止后执行器异步返回的任何迟到 `ExecutionSuccess` 或 `ExecutionError` 均在 `cancel_and_drain` 阶段被静默丢弃——既不会写入图 `variables`，也不会再次触发 `contract` / `execution` 异常或重复进入该节点的 `retry` / `catch` 状态机。

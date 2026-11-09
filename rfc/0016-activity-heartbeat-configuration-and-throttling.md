@@ -1,6 +1,6 @@
 # RFC-0016: 全栈执行预算、资源配额与心跳配置收敛
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **关联提案**：[RFC-0011 运行时架构](./0011-compiler-and-temporal-runtime-architecture.md)、[RFC-0012 执行器 ABI](./0012-run-executor-and-builtin-python.md)、[RFC-0017 signal 等待](./0017-cooperative-signal-executor.md)
 
 ## 一、目标与收敛原则
