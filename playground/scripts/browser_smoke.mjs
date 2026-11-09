@@ -205,7 +205,7 @@ try {
   await expect(page.locator('.source-editor').getByRole('button', { name: 'Editor', exact: true })).toBeVisible();
   await expect(page.locator('.source-editor').getByRole('button', { name: 'Save files', exact: true })).toBeVisible();
   await expect(page.locator('.source-editor').getByRole('button', { name: 'Discard edits', exact: true })).toBeVisible();
-  await expect(graph.locator('.vue-flow__node')).toHaveCount(4);
+  await expect(graph.locator('.vue-flow__node')).toHaveCount(5);
   await expect(page.getByText('Compiler: ready', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Files editable', { exact: true })).toHaveCount(0);
   await expect(graph.getByRole('navigation', { name: 'Scope navigation' })).toHaveCount(0);
@@ -215,6 +215,7 @@ try {
   })));
   expect(horizontal.start.x).toBeLessThan(horizontal.double.x);
   expect(horizontal.double.x).toBeLessThan(horizontal.summarize.x);
+  expect(horizontal.summarize.x).toBeCloseTo(horizontal.measure_spread.x, 1);
   expect(horizontal.summarize.x).toBeLessThan(horizontal.end.x);
   expect(Math.abs(horizontal.start.y - horizontal.end.y)).toBeLessThan(2);
   expect(horizontal.start.height).toBeLessThan(horizontal.double.height);
@@ -489,7 +490,7 @@ try {
   await editor.fill(mainSourceText
     .replace('    double:', '    changed_double:')
     .replace('start -> double', 'start -> changed_double')
-    .replace('double -> summarize', 'changed_double -> summarize'));
+    .replace('double -> [summarize, measure_spread] -> end', 'changed_double -> [summarize, measure_spread] -> end'));
   await expect(graph.locator('.vue-flow__node[data-id="changed_double"]')).toBeVisible();
   await graph.locator('.vue-flow__node[data-id="summarize"]').getByRole('button', { name: 'summarize', exact: true }).click();
   let actualSubmission;

@@ -150,6 +150,7 @@ async def test_resident_worker_reimports_python_helpers_contracts_and_deleted_mo
     assert (await wait_for(host, first["execution"]["execution_id"]))["result"]["output"] == {
         "doubled": [6, 2, 4],
         "total": 12,
+        "spread": 4,
     }
     contract = sys.modules["playground_demo.double._contract"]
     old_input = contract.Input
@@ -178,6 +179,7 @@ async def test_resident_worker_reimports_python_helpers_contracts_and_deleted_mo
     assert (await wait_for(host, second["execution"]["execution_id"]))["result"]["output"] == {
         "doubled": [10, 4, 7],
         "total": 121,
+        "spread": 6,
     }
     contract = sys.modules["playground_demo.double._contract"]
     assert contract.Input is not old_input
@@ -714,7 +716,7 @@ async def test_independent_console_entry_starts_http_serves_static_and_runs_modu
                 final = await asyncio.wait_for(
                     ExecutionService(server.client).wait(execution_id), 15
                 )
-                assert final["result"]["output"] == {"doubled": [6, 2, 4], "total": 12}
+                assert final["result"]["output"] == {"doubled": [6, 2, 4], "total": 12, "spread": 4}
         finally:
             if process.returncode is None:
                 process.terminate()

@@ -1,10 +1,11 @@
-# Iterate a child workflow concurrently, then summarize its ordered results.
+# Iterate a child workflow concurrently, then compute sum and range in parallel.
 input:
   items: {type: array, items: {type: integer}}
   delay_seconds: {type: integer}
 output:
   doubled: {type: array, items: {type: integer}}
   total: {type: integer}
+  spread: {type: integer}
 
 graph:
   nodes:
@@ -30,7 +31,17 @@ graph:
         executor: module
         content: .summarize
 
+    measure_spread:
+      input: [doubled]
+      output:
+        spread: {type: integer}
+      run:
+        executor: builtin
+        content: |
+          if not input.doubled:
+              return Output(spread=0)
+          return Output(spread=max(input.doubled) - min(input.doubled))
+
   edges:
     - start -> double
-    - double -> summarize
-    - summarize -> end
+    - double -> [summarize, measure_spread] -> end

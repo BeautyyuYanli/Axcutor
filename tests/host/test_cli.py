@@ -98,9 +98,14 @@ async def test_cli_runs_source_snapshot_and_emits_exact_result(
         lines = [loads(line) for line in stdout.splitlines()]
         assert lines[0]["execution_id"] == workflow_id
         assert "run_id" not in lines[0]
+        doubled = [2 * n for n in items]
         expected = {
             "branch": None,
-            "output": {"doubled": [2 * n for n in items], "total": 2 * sum(items)},
+            "output": {
+                "doubled": doubled,
+                "total": sum(doubled),
+                "spread": max(doubled) - min(doubled),
+            },
         }
         handle = server.client.get_workflow_handle(workflow_id)
         assert loads(await asyncio.wait_for(handle.result(), 10)) == expected

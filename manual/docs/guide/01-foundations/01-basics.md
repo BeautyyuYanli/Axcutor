@@ -320,7 +320,7 @@ await_approval:
 ```
 
 * **等待状态暴露（`Frame.waiting`）**：节点激活后直接在工作流协程内部挂起（不占用 Activity Worker 槽位），并将其规范等待地址（如 `__main__/await_approval`）追加至所属栈帧的 `waiting` 列表中；外部调用方可通过查询活跃栈帧的 `variables` 与 `waiting` 获取上下文及等待地址。
-* **外部契约校验与原子认领**：调用方通过 [HTTP `POST /v1/executions/{id}:signal`](../../reference/04-execution-http-api.md#投递外部信号) 或 [CLI `axcutor signal`](../00-run-with-docker.md#使用-cli-恢复等待节点) 提交 `address`、`branch`、`output` 及可选的帧步数护栏 `step`。若分支或输出不符合节点契约，请求以 `422 signal_validation_failed` 被原子拒绝，节点保持原等待状态且不消耗 `retry` 次数；校验通过后才认领槽位、写回 `output` 并沿所选分支继续推进。
+* **外部契约校验与原子认领**：调用方通过 [HTTP `POST /v1/executions/{id}:signal`](../../reference/04-execution-http-api.md#投递外部信号) 或 CLI `axcutor signal` 提交 `address`、`branch`、`output` 及可选的帧步数护栏 `step`。若分支或输出不符合节点契约，请求以 `422 signal_validation_failed` 被原子拒绝，节点保持原等待状态且不消耗 `retry` 次数；校验通过后才认领槽位、写回 `output` 并沿所选分支继续推进。
 
 ---
 

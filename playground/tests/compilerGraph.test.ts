@@ -28,12 +28,14 @@ describe('real WASM serialization and CFG', () => {
     const bundle = output.bundle!;
     const scope: Scope = { workflowId: 'demo.main', scopeGraphPath: [] };
     const graph = layoutGraph(bundle, scope, output.analysis[0]);
-    expect(graph.nodes.map(node => node.id)).toEqual(['start', 'double', 'summarize', 'end']);
-    expect(graph.edges).toHaveLength(3);
+    expect(graph.nodes.map(node => node.id)).toEqual(['start', 'double', 'summarize', 'measure_spread', 'end']);
+    expect(graph.edges).toHaveLength(5);
     expect(graph.nodes.every(node => Number.isFinite(node.position.x) && Number.isFinite(node.position.y))).toBe(true);
     const byId = Object.fromEntries(graph.nodes.map(node => [node.id, node]));
     expect(byId.start.position.x + byId.start.width).toBeLessThan(byId.double.position.x);
     expect(byId.double.position.x + byId.double.width).toBeLessThan(byId.summarize.position.x);
+    expect(byId.summarize.position.x).toBe(byId.measure_spread.position.x);
+    expect(byId.summarize.position.y).not.toBe(byId.measure_spread.position.y);
     expect(byId.summarize.position.x + byId.summarize.width).toBeLessThan(byId.end.position.x);
     expect(byId.start.height).toBeLessThan(byId.double.height);
     expect(layoutGraph(bundle, { workflowId: 'demo.double', scopeGraphPath: [] }, null).nodes.map(node => node.id)).toEqual(['start', 'run', 'end']);
