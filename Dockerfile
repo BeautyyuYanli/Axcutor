@@ -37,7 +37,7 @@ COPY python ./python
 COPY playground/backend ./playground/backend
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=cache,target=/usr/local/cargo/registry \
-    uv sync --locked --no-dev --no-editable --package axcutor-playground
+    uv sync --locked --no-dev --no-editable --package axcutor-playground --package axcutor-cli
 
 FROM python:3.12-slim-bookworm
 WORKDIR /app

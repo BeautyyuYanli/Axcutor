@@ -20,7 +20,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from axcutor_host.service import ExecutionNotFound, ExecutionService, RuntimeUnavailable
+from axcutor_host import AxcutorHost, ExecutionNotFound, RuntimeUnavailable
 from axcutor_playground.coordinator import Playground
 from axcutor_playground.http import create_playground_app
 from axcutor_playground.workspace import Workspace
@@ -475,7 +475,7 @@ async def test_latest_trace_retains_completed_calls_snapshot_and_replaces_only_a
 ):
     host = playground
     if offloaded:
-        host.executions = ExecutionService(
+        host.executions = AxcutorHost(
             host.client,
             host.queue,
             options={"record_trace": True, "child_workflow_history_events": 1},
@@ -563,7 +563,7 @@ async def test_execution_routes_preserve_ids_lossless_frames_and_cancellation(
 ):
     host = Playground(server.client, Workspace(tmp_path / "workspace", templates))
     queue = str(uuid4())
-    service = ExecutionService(
+    service = AxcutorHost(
         client=server.client, task_queue=queue, options={"heartbeat_interval_ms": 200}
     )
     execution_id = "订单 / a/../b\n% ? # :cancel"
@@ -607,7 +607,7 @@ async def test_execution_routes_preserve_ids_lossless_frames_and_cancellation(
 async def test_playground_signal_route_uses_execution_contract(server, tmp_path, templates):
     host = Playground(server.client, Workspace(tmp_path / "data", templates))
     queue = str(uuid4())
-    service = ExecutionService(server.client, queue)
+    service = AxcutorHost(server.client, queue)
     execution_id = "订单 / a/../b\n% ? # :signal"
     location = "/v1/executions/" + quote(execution_id, safe="").replace(".", "%2E")
     doc = {"input": {}, "output": {"value": {"type": "number"}}, "run": {"executor": "signal"}}
@@ -713,9 +713,7 @@ async def test_independent_console_entry_starts_http_serves_static_and_runs_modu
                 )
                 assert submitted.status_code == 202, submitted.text
                 execution_id = loads(submitted.text)["execution"]["execution_id"]
-                final = await asyncio.wait_for(
-                    ExecutionService(server.client).wait(execution_id), 15
-                )
+                final = await asyncio.wait_for(AxcutorHost(server.client).wait(execution_id), 15)
                 assert final["result"]["output"] == {"doubled": [6, 2, 4], "total": 12, "spread": 4}
         finally:
             if process.returncode is None:

@@ -293,6 +293,7 @@ async def test_specialized_schema_reuses_execution_models(workspace_client):
     response = await client.get("/openapi.json")
     assert loads(response.text) == openapi_schema()
     assert "/v1/executions" not in loads(response.text)["paths"]
+    assert (await client.post("/v1/executions", content="{}")).status_code == 404
     assert (await client.post("/v1/workspace", content="{}")).status_code == 405
     assert (
         await client.put("/v1/workspace", content='{"revision":1,"revision":2}')

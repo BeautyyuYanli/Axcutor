@@ -2,15 +2,13 @@
 
 import asyncio
 import signal
-import socket
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
-import httpx
 import pytest
-from axcutor_host import ExecutionService
+from axcutor_host import AxcutorHost
 from axcutor_runtime import compile_bundle
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.packages import PackageMount, load_mounts
@@ -61,9 +59,7 @@ async def test_contracts_module_mounts_include_resource_only_roots_without_impor
 
 async def invoke(*args):
     process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        "from axcutor_host.cli import main; main()",
+        str(Path(sys.executable).with_name("axcutor")),
         *map(str, args),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -226,9 +222,7 @@ async def test_cli_rejects_invalid_input_before_connecting(tmp_path):
 @asynccontextmanager
 async def resident(*args, exit_codes=(0,)):
     process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        "from axcutor_host.cli import main; main()",
+        str(Path(sys.executable).with_name("axcutor")),
         *map(str, args),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -247,24 +241,10 @@ async def resident(*args, exit_codes=(0,)):
         assert process.returncode in exit_codes, (stdout, stderr)
 
 
-async def test_serve_binds_http_and_shuts_down_without_backend():
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    # Uvicorn restores and re-raises SIGTERM after its graceful ASGI shutdown.
-    async with resident(
-        "serve", "--port", port, "--address", "127.0.0.1:1", exit_codes=(0, -signal.SIGTERM)
-    ):
-        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
-            async with asyncio.timeout(10):
-                while True:
-                    try:
-                        response = await client.post("/v1/executions", content="{")
-                        break
-                    except httpx.ConnectError:
-                        await asyncio.sleep(0.02)
-            assert response.status_code == 400
-            assert loads(response.text)["error"]["code"] == "invalid_json"
+async def test_console_entry_exposes_only_runtime_and_execution_commands():
+    code, stdout, stderr = await invoke("--help")
+    assert code == 0, stderr
+    assert "{worker,run,signal,contracts}" in stdout
 
 
 async def test_worker_process_polls_and_handles_sigterm(server):
@@ -278,7 +258,7 @@ async def test_worker_process_polls_and_handles_sigterm(server):
     ):
         # Start can queue before the process begins polling; the live query
         # confirms a resident Worker actually processed the source snapshot.
-        host = ExecutionService(server.client, queue)
+        host = AxcutorHost(server.client, queue)
         text = "input: {}\noutput: {}\nrun:\n  executor: builtin\n  content: return Output()\n"
         source = {
             "demo.main": {
@@ -289,6 +269,53 @@ async def test_worker_process_polls_and_handles_sigterm(server):
         first = await host.submit("demo.main", {"demo": {"packages": source}})
         final = await host.wait(first["execution_id"])
         assert final["status"] == "completed", final
+
+
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+async def test_worker_process_waits_for_inflight_activity_cleanup(server, tmp_path, signum):
+    queue, workflow_queue = str(uuid4()), str(uuid4())
+    started, release, cleaned = [tmp_path / name for name in ("started", "release", "cleaned")]
+    content = (
+        "import asyncio\nfrom pathlib import Path\n"
+        f"Path({str(started)!r}).touch()\n"
+        "try:\n"
+        f"    while not Path({str(release)!r}).exists():\n"
+        "        await asyncio.sleep(0.01)\n"
+        "finally:\n"
+        "    await asyncio.sleep(0.1)\n"
+        f"    Path({str(cleaned)!r}).touch()\n"
+        "return Output()\n"
+    )
+    doc = {"input": {}, "output": {}, "run": {"executor": "builtin", "content": content}}
+    # Keep the Workflow poller alive while the CLI's Activity Worker retires.
+    host = AxcutorHost(server.client, workflow_queue, options={"task_queues": {"builtin": queue}})
+    async with (
+        create_worker(server.client, workflow_queue),
+        resident(
+            "worker",
+            "--address",
+            server.client.service_client.config.target_host,
+            "--task-queue",
+            queue,
+        ) as process,
+    ):
+        first = await host.submit(
+            "__main__",
+            {"__main__": {"packages": {"__main__": {"format": "json", "text": dumps(doc)}}}},
+        )
+        try:
+            async with asyncio.timeout(5):
+                while not started.exists():  # noqa: ASYNC110 - external process readiness
+                    await asyncio.sleep(0.01)
+            process.send_signal(signum)
+            await asyncio.sleep(0.2)
+            assert process.returncode is None
+        finally:
+            release.touch()
+        await asyncio.wait_for(process.wait(), 10)
+        assert cleaned.exists()
+        final = await asyncio.wait_for(host.wait(first["execution_id"]), 10)
+        assert final["status"] == "completed"
 
 
 @pytest.mark.parametrize("no_wait", [False, True])
@@ -316,7 +343,7 @@ async def test_cli_failure_exit_code_depends_on_wait_mode(server, tmp_path, no_w
             handle = server.client.get_workflow_handle(lines[0]["execution_id"])
             with pytest.raises(WorkflowFailureError):
                 await handle.result()
-            final = await ExecutionService(server.client, queue).get(handle.id)
+            final = await AxcutorHost(server.client, queue).get(handle.id)
         else:
             final = lines[-1]
     assert final["status"] == "failed" and final["error"]["type"] == "execution"
@@ -328,7 +355,7 @@ async def test_signal_cli_keeps_target_separate_from_server_and_emits_one_result
     server, tmp_path, wait, fail
 ):
     queue = str(uuid4())
-    host = ExecutionService(server.client, queue)
+    host = AxcutorHost(server.client, queue)
     doc = graph(
         {
             "decision": {
@@ -389,7 +416,7 @@ async def test_signal_cli_rejects_nonobject_output_before_backend(tmp_path, text
 
 async def test_signal_cli_defaults_to_empty_output(server):
     queue = str(uuid4())
-    host = ExecutionService(server.client, queue)
+    host = AxcutorHost(server.client, queue)
     doc = {"input": {}, "output": {}, "run": {"executor": "signal"}}
     async with create_worker(server.client, queue):
         first = await host.submit(

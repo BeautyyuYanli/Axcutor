@@ -66,7 +66,7 @@
 
 ## 四、 执行请求运行选项与 Activity 心跳节流规范（Runtime Options & Heartbeat）
 
-运行时接收可选的 `options` 映射（由宿主 `ExecutionService(..., options=...)` 或直接工作流请求传入），并在工作流执行与重放入口通过 `parse_runtime_options` 统一校验与补齐：
+运行时接收可选的 `options` 映射（由宿主 `AxcutorHost(..., options=...)` 或直接工作流请求传入），并在工作流执行与重放入口通过 `parse_runtime_options` 统一校验与补齐：
 
 ### 1. 六项运行选项 schema、默认值与心跳派生不变量
 
@@ -84,7 +84,7 @@
   2. **仅当 `heartbeat_interval_ms` 键缺失（省略）时**，按已确定的 $T$ 自动计算派生值 $I = \max(1, \lfloor T / 3 \rfloor)$；若调用方显式提供了 `heartbeat_interval_ms`，则原样保留显式值（不随 $T$ 重算）；
   3. 最终校验 $I < T$（例如仅设置 $T = 1000$ 时派生 $I = 333$；$T = 2$ 时派生 $I = 1$；而 $T = 1$ 因派生 $I = 1 \not< 1$ 被拒绝）。
 * **宿主原始覆盖值持久化与重放演进**：
-  * 宿主 `ExecutionService` 在构造期即复用同一校验规则（非法时抛出 `ValueError`），但在提交根工作流请求时**仅持久化调用方传入的原始覆盖字典**，不预先固化默认值；
+  * 宿主 `AxcutorHost` 在构造期即复用同一校验规则（非法时抛出 `ValueError`），但在提交根工作流请求时**仅持久化调用方传入的原始覆盖字典**，不预先固化默认值；
   * 工作流在执行与重放入口调用 `parse_runtime_options` 补齐缺失键的默认值（直接工作流请求的非法 `options` 转化为不可恢复的 **`EngineError`**），并将展开后的完整六键字典传递给派生的 Child Workflow（由于显式值在重复解析时原样保留，Child 不会因二次解析而改写父工作流已确定的心跳间隔）。
 
 ### 2. 应用心跳与 Worker 节流配对

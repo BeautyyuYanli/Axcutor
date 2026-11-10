@@ -14,7 +14,7 @@ import stat
 from pathlib import Path, PurePosixPath
 from typing import Any, TextIO, TypedDict
 
-from axcutor_host.service import HostError, InvalidRequest
+from axcutor_host import HostError, InvalidRequest
 from axcutor_runtime.packages import PackageMount, package_path
 
 _RESERVED = frozenset({".gitkeep", ".host.lock", ".workspace-backup", ".workspace-stage"})

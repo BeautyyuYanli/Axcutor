@@ -20,10 +20,10 @@ from typing import Any, TypedDict
 from uuid import uuid4
 
 import axcutor_core
-from axcutor_host.service import (
+from axcutor_host import (
+    AxcutorHost,
     Execution,
     ExecutionNotFound,
-    ExecutionService,
     InputValidationError,
     InvalidRequest,
     RuntimeUnavailable,
@@ -88,7 +88,7 @@ class Playground:
         self.client = client
         self.workspace = workspace
         self.queue = "axcutor-playground-" + str(uuid4())
-        self.executions = ExecutionService(
+        self.executions = AxcutorHost(
             client,
             self.queue,
             options={"heartbeat_interval_ms": _HEARTBEAT_INTERVAL_MS, "record_trace": True},

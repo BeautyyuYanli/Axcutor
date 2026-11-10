@@ -25,8 +25,8 @@ jobs:
       - run: uv sync --locked
       - name: Runtime static checks
         run: |
-          uv run --locked ruff check python tests/runtime tests/host tests/conftest.py tests/helpers.py playground/backend playground/scripts
-          uv run --locked ruff format --check python tests/runtime tests/host tests/conftest.py tests/helpers.py playground/backend playground/scripts
+          uv run --locked ruff check python tests/runtime tests/host tests/cli tests/conftest.py tests/helpers.py playground/backend playground/scripts
+          uv run --locked ruff format --check python tests/runtime tests/host tests/cli tests/conftest.py tests/helpers.py playground/backend playground/scripts
           uv run --locked pyrefly check
       - name: Native extension, sandbox, time-skipping Server and History replay
         run: uv run --locked pytest

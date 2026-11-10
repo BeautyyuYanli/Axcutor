@@ -126,8 +126,8 @@ nodes:
 | 类别 | 配置入口 | 作用范围 |
 | :--- | :--- | :--- |
 | 业务预算 | DSL 的 `max_steps`、`timeout_ms`、`retry`、`for_each.concurrency` | 图帧、节点尝试或同一次集合激活。 |
-| 运行选项 | `ExecutionService(..., options=...)`；直接 Workflow 请求的 `options` | 写入执行请求，执行和重放时解析，向 Child 传递展开后的完整值。 |
-| 宿主与部署 | `ExecutionService.rpc_timeout`、`create_worker(..., **kwargs)`、Uvicorn 与 Compose | 控制面调用、当前进程资源、服务排空或进程停止。 |
+| 运行选项 | `AxcutorHost(..., options=...)`；直接 Workflow 请求的 `options` | 写入执行请求，执行和重放时解析，向 Child 传递展开后的完整值。 |
+| 宿主与部署 | `AxcutorHost.rpc_timeout`、`create_worker(..., **kwargs)`、Uvicorn 与 Compose | 控制面调用、当前进程资源、服务排空或进程停止。 |
 | 内部保护 | 编译器与编解码边界、宿主观察与前端轮询 | 源码解析、数值表示或状态刷新；不增加 DSL 字段。 |
 
 生产宿主默认提交空覆盖字典 `{}`。宿主在构造时检查选项，但只复制和保存原始覆盖值；Workflow 补齐以下六项默认值。非法类型、未知键或参数关系在宿主报 `ValueError`，在直接 Workflow 入口报不可恢复的 `EngineError`。
@@ -144,10 +144,10 @@ nodes:
 正整数不包含布尔值。除历史提示外，上述整数选项均不接受显式 `None`。例如：
 
 ```python
-from axcutor_host import ExecutionService
+from axcutor_host import AxcutorHost
 
 # 只改 T 时派生 I=333；T=2 派生 I=1，T=1 无法满足 I<T，会被拒绝。
-service = ExecutionService(client, options={"heartbeat_timeout_ms": 1000})
+service = AxcutorHost(client, options={"heartbeat_timeout_ms": 1000})
 ```
 
 根请求只持久化覆盖值，因此未显式配置的选项在执行或重放时按运行时默认值补齐。已有 Activity 的请求及 Server 原生重试沿用历史参数；重放后的新调度采用补齐后的值。已启动的 Child 持有父 Run 当时展开的完整选项，重新解析不改写显式值。
@@ -166,7 +166,7 @@ I 控制应用调用心跳的间隔。SDK 继续合并心跳，通常按有效�
 from datetime import timedelta
 from axcutor_runtime.worker import create_worker
 
-service = ExecutionService(client, options={"heartbeat_interval_ms": 200})
+service = AxcutorHost(client, options={"heartbeat_interval_ms": 200})
 worker = create_worker(client, "axcutor", max_heartbeat_throttle_interval=timedelta(milliseconds=200))
 ```
 
@@ -176,7 +176,7 @@ Worker 的槽位、poller、启动速率、缓存和 `tuner` 继续通过 SDK �
 
 每次重试重置尝试期限，退避不计入下一次尝试。外层复合节点的期限覆盖后代排队、尝试、退避和等待；超时后仍等待后代收到取消并完成清理，之后才进入重试或 `catch`。本地 deadline 置位取消信号，提交前再次检查单调时钟，丢弃同步校验或序列化造成的迟到成功。外部副作用的幂等性由执行器与外部系统负责。
 
-`ExecutionService.rpc_timeout` 默认 `5s`，约束单次后端调用；一个公开方法可能串行发起多个调用。`wait()` 的执行结果观察不设业务期限；取消观察任务不会取消执行。提交或信号投递返回 `503 runtime_unavailable` 时可能已经生效，应查询原 ID。快速心跳可增加取消送达机会，但不保证执行终态或停机一定在固定窗口内完成。
+`AxcutorHost.rpc_timeout` 默认 `5s`，约束单次后端调用；一个公开方法可能串行发起多个调用。`wait()` 的执行结果观察不设业务期限；取消观察任务不会取消执行。提交或信号投递返回 `503 runtime_unavailable` 时可能已经生效，应查询原 ID。快速心跳可增加取消送达机会，但不保证执行终态或停机一定在固定窗口内完成。
 
 ## 五、完整示例：组合步数护栏、超时控制与快照重试
 

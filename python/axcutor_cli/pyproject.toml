@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "axcutor-cli"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Command-line execution, contract generation and Worker entry points for Axcutor"
+dependencies = [
+    "axcutor-host==0.1.0",
+    "axcutor-runtime==0.1.0",
+    "temporalio>=1.35,<2",
+]
+
+[project.scripts]
+axcutor = "axcutor_cli.cli:main"

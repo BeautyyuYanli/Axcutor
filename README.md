@@ -23,4 +23,8 @@ docker compose up
 
 ## 文档
 
+`axcutor_host.AxcutorHost` 提供协议无关的执行管理；`axcutor` 命令由 `axcutor_cli` 提供，包含 `run`、`signal`、`contracts`、`worker`。执行通过 Temporal task queue 交给独立 Worker，不由宿主接口持有 Worker。
+
+`axcutor-playground api` 启动独立执行 HTTP API（默认端口 `8000`），不创建工作区或 Worker；`axcutor-playground` 默认启动完整工作台（默认端口 `8080`），拥有工作区与驻留 Worker。部署参数与执行契约见 [Execution HTTP API](manual/docs/reference/04-execution-http-api.md)。
+
 完整语言教程、实战配方与参考规范见 [文档中心](manual/index.md)（渐进式教程见 [manual/docs/guide](manual/docs/guide/index.md)）。

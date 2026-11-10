@@ -1,4 +1,4 @@
-"""Exercise routing, strict JSON and error envelopes with the actual service."""
+"""Exercise routing, strict JSON and error envelopes with the actual host."""
 
 import asyncio
 import socket
@@ -10,9 +10,9 @@ from uuid import uuid4
 import httpx
 import pytest
 import uvicorn
-from axcutor_host import ExecutionService
-from axcutor_host.http import create_app, openapi_schema
-from axcutor_host.service import Execution, ExecutionError, ExecutionResult, Frame
+from axcutor_host import AxcutorHost
+from axcutor_host.host import Execution, ExecutionError, ExecutionResult, Frame
+from axcutor_playground.execution_http import create_app, openapi_schema
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.worker import create_worker
 from helpers import INTEGER, N, assign, graph
@@ -34,7 +34,7 @@ def request_body(*, inputs=None):
 
 
 def client_for(client, queue=None, timeout=0.15):
-    service = ExecutionService(
+    service = AxcutorHost(
         client,
         queue or str(uuid4()),
         rpc_timeout=timedelta(seconds=timeout),
@@ -239,7 +239,7 @@ async def test_live_routes_conflicts_cancellation_and_terminal_idempotency(serve
     )
     async with create_worker(server.client, queue, {"builtin": work}):
         try:
-            host = ExecutionService(
+            host = AxcutorHost(
                 server.client,
                 queue,
                 options={"heartbeat_interval_ms": 20, "heartbeat_timeout_ms": 1000},
@@ -355,7 +355,7 @@ async def test_signal_http_shape_errors_precede_backend(body):
 @pytest.mark.parametrize("execution_id", ["signal/.", "signal/..", "订单 / a/../b\n% ? # :signal"])
 async def test_signal_http_routes_lossless_output_conflicts_and_validation(server, execution_id):
     queue = str(uuid4())
-    host = ExecutionService(server.client, queue)
+    host = AxcutorHost(server.client, queue)
     doc = graph(
         {
             "decision": {

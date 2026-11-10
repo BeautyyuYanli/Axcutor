@@ -8,10 +8,10 @@ from uuid import uuid4
 
 import pytest
 from axcutor_host import (
+    AxcutorHost,
     CompilationError,
     ExecutionAlreadyExists,
     ExecutionNotFound,
-    ExecutionService,
     InputValidationError,
     InvalidRequest,
     RuntimeUnavailable,
@@ -62,7 +62,7 @@ def empty():
 
 
 def service(client, queue=None, **kwargs):
-    return ExecutionService(
+    return AxcutorHost(
         client,
         queue or str(uuid4()),
         options={"heartbeat_interval_ms": 20, "heartbeat_timeout_ms": 1000},
@@ -91,7 +91,7 @@ def service(client, queue=None, **kwargs):
 async def test_invalid_host_options_are_rejected_at_construction_without_backend(options):
     client = await Client.connect("127.0.0.1:1", lazy=True)
     with pytest.raises(ValueError):
-        ExecutionService(client, options=options)
+        AxcutorHost(client, options=options)
 
 
 @pytest.mark.parametrize("position", ["input", "output"])
@@ -126,7 +126,7 @@ async def test_host_persists_raw_overrides_and_worker_receives_derived_defaults(
     if options:
         options = {**options, "task_queues": {"builtin": queue}}
     original = deepcopy(options or {})
-    host = ExecutionService(server.client, queue, options=options)
+    host = AxcutorHost(server.client, queue, options=options)
     if options:
         options["task_queues"]["builtin"] = "must-not-be-used"
         options["heartbeat_interval_ms"] = 1
@@ -263,7 +263,7 @@ async def test_duplicate_id_while_running_and_generated_uuid(server):
 @pytest.mark.parametrize("offloaded", [False, True])
 async def test_live_frame_tree_and_cooperative_cancel_include_all_descendants(server, offloaded):
     queue = str(uuid4())
-    host = ExecutionService(
+    host = AxcutorHost(
         server.client,
         queue,
         options={
@@ -393,7 +393,7 @@ async def test_failure_categories_from_real_interpreter(server, selector):
                 {"sub": inline(doc, [])}, ["start -> sub", "sub -> end"], outputs={"value": INTEGER}
             )
     elif selector == "StackOverflowError":
-        host = ExecutionService(server.client, queue, options={"max_call_depth": 1})
+        host = AxcutorHost(server.client, queue, options={"max_call_depth": 1})
         doc = graph({"sub": inline(empty())}, ["start -> sub", "sub -> end"])
     elif selector == "EngineError":
         doc = graph(
@@ -604,7 +604,7 @@ async def signal_view(host, execution_id, addresses):
 @pytest.mark.parametrize("child", [False, True])
 async def test_signal_routes_multiple_child_levels_and_rewrites_waiting_addresses(server, child):
     queue = str(uuid4())
-    host = ExecutionService(
+    host = AxcutorHost(
         server.client, queue, options={"child_workflow_history_events": 1 if child else None}
     )
     leaf = {"input": {"n": INTEGER}, "output": {"value": N}, "run": {"executor": "signal"}}
@@ -644,7 +644,7 @@ async def test_signal_routes_multiple_child_levels_and_rewrites_waiting_addresse
 
 async def test_signal_child_routing_requires_path_segment_boundary(server):
     queue = str(uuid4())
-    host = ExecutionService(server.client, queue, options={"child_workflow_history_events": 1})
+    host = AxcutorHost(server.client, queue, options={"child_workflow_history_events": 1})
     leaf = {"input": {}, "output": {}, "run": {"executor": "signal"}}
     doc = graph(
         {"call": call("leaf"), "call_other": {"run": {"executor": "signal"}}},

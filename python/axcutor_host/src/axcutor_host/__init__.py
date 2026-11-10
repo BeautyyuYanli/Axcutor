@@ -1,12 +1,12 @@
-"""Protocol independent execution service; controllers live in cli and http."""
+"""Protocol-independent execution management; adapters live in CLI and Playground."""
 
 from axcutor_runtime.bundle import CompilationError
 
-from .service import (
+from .host import (
+    AxcutorHost,
     Execution,
     ExecutionAlreadyExists,
     ExecutionNotFound,
-    ExecutionService,
     HostError,
     InputValidationError,
     InvalidRequest,
@@ -16,11 +16,11 @@ from .service import (
 )
 
 __all__ = [
+    "AxcutorHost",
     "CompilationError",
     "Execution",
     "ExecutionAlreadyExists",
     "ExecutionNotFound",
-    "ExecutionService",
     "HostError",
     "InputValidationError",
     "InvalidRequest",
