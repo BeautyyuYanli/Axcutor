@@ -10,7 +10,7 @@ import type { Frame } from '../src/client/types.gen';
 beforeAll(async () => { await init({ module_or_path: readFileSync(new URL('../src/wasm-pkg/axcutor_wasm_bg.wasm', import.meta.url)) }); });
 
 function compile(document: object, entry = 'folder.demo.main') {
-  const raw = compile_workflow(JSON.stringify({ entry, packages: { [entry]: { format: 'json', text: JSON.stringify(document) } } }));
+  const raw = compile_workflow(JSON.stringify({ entry, mounts: { [entry.split('.')[0]]: { packages: { [entry]: { format: 'json', text: JSON.stringify(document) } } } } }));
   const result = JSON.parse(raw) as CompileOutput;
   expect(result.diagnostics).toEqual([]);
   return { result, raw: new JsonText(raw) };
@@ -23,7 +23,7 @@ const frame = (address: string, kind: Frame['kind'] = 'function', cursor = 'star
 describe('real WASM serialization and CFG', () => {
   it('compiles the repository preset, expands Root Run and resolves same-address iteration/function frames', () => {
     const preset = defaultPreset();
-    const output = JSON.parse(compile_workflow(JSON.stringify({ entry: preset.entry, packages: preset.packages }))) as CompileOutput;
+    const output = JSON.parse(compile_workflow(JSON.stringify({ entry: preset.entry, mounts: preset.mounts }))) as CompileOutput;
     expect(output.diagnostics).toEqual([]);
     const bundle = output.bundle!;
     const scope: Scope = { workflowId: 'demo.main', scopeGraphPath: [] };
@@ -79,7 +79,7 @@ describe('real WASM serialization and CFG', () => {
 
   it('keeps exact enum tokens in the WASM analysis query and proves field projections/subtyping', () => {
     const source = '{"input":{"n":{"type":"integer","enum":[99999999999999999999999999999999999]},"user":{"type":"object","properties":{"age":{"type":"integer"},"name":{"type":"string"}},"required":["age"]}},"output":{},"graph":{"nodes":{"work":{"run":{"executor":"builtin","content":"return Output()"}}},"edges":["start -> work","work -> end"]}}';
-    const output = new JsonText(compile_workflow(JSON.stringify({ entry: 'main', packages: { main: { format: 'json', text: source } } })));
+    const output = new JsonText(compile_workflow(JSON.stringify({ entry: 'main', mounts: { main: { packages: { main: { format: 'json', text: source } } } } })));
     expect(JSON.parse(output.raw(['diagnostics'])!)).toEqual([]);
     const analysisRaw = output.raw(['analysis', 0])!;
     const integer = get_available_vars_at_node(analysisRaw, 'work', '{"type":"integer"}');

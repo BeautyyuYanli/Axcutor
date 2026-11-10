@@ -28,7 +28,7 @@ def request_body(*, inputs=None):
     )
     return {
         "entry": "demo.main",
-        "packages": {"demo.main": {"format": "json", "text": dumps(doc)}},
+        "mounts": {"demo": {"packages": {"demo.main": {"format": "json", "text": dumps(doc)}}}},
         "input": {"n": 7} if inputs is None else inputs,
     }
 
@@ -130,21 +130,31 @@ async def test_invalid_json_is_strict_and_precedes_backend(text, url):
         1,
         {},
         {"entry": "main"},
-        {"entry": "main", "packages": []},
-        {"entry": 1, "packages": {}},
-        {"entry": "/main", "packages": {}},
-        {"entry": "../main", "packages": {}},
-        {"entry": "main", "packages": {}, "input": None},
-        {"entry": "main", "packages": {}, "execution_id": None},
-        {"entry": "main", "packages": {}, "execution_id": ""},
-        {"entry": "main", "packages": {}, "unknown": 1},
-        {"entry": "main", "packages": {"main": {"format": "xml", "text": ""}}},
-        {"entry": "main", "packages": {"main": {"format": [], "text": ""}}},
-        {"entry": "main", "packages": {"main": {"format": "yaml", "text": 1}}},
+        {"entry": "main", "mounts": []},
+        {"entry": 1, "mounts": {}},
+        {"entry": "/main", "mounts": {}},
+        {"entry": "../main", "mounts": {}},
+        {"entry": "main", "mounts": {}, "input": None},
+        {"entry": "main", "mounts": {}, "execution_id": None},
+        {"entry": "main", "mounts": {}, "execution_id": ""},
+        {"entry": "main", "mounts": {}, "unknown": 1},
+        {
+            "entry": "main",
+            "mounts": {"main": {"packages": {"main": {"format": "xml", "text": ""}}}},
+        },
+        {"entry": "main", "mounts": {"main": {"resources": {"main": {"format": [], "text": ""}}}}},
+        {
+            "entry": "main",
+            "mounts": {"main": {"packages": {"main": {"format": "yaml", "text": 1}}}},
+        },
         {"entry": "main", "sources": {}},
-        {"entry": "old.yaml", "packages": {}},
-        {"entry": "billing._private", "packages": {}},
-        {"entry": "__main__", "packages": {"bad/path": {"format": "yaml", "text": ""}}},
+        {"entry": "main", "packages": {}},
+        {"entry": "old.yaml", "mounts": {}},
+        {"entry": "billing._private", "mounts": {}},
+        {"entry": "main", "mounts": {"main": {"packages": []}}},
+        {"entry": "main", "mounts": {"main": {"allowed_executors": "builtin"}}},
+        {"entry": "main", "mounts": {"main": {"allowed_executors": [1]}}},
+        {"entry": "main", "mounts": {"main": {"unknown": {}}}},
     ],
 )
 async def test_invalid_request_shapes_are_rejected_without_backend(body):
@@ -159,7 +169,7 @@ async def test_compilation_input_and_backend_errors_use_distinct_contracts():
     backend = await Client.connect("127.0.0.1:1", lazy=True)
     async with client_for(backend) as client:
         body = request_body()
-        body["packages"]["demo.main"]["text"] = "input: {}\noutput: {}\ngraph: {}"
+        body["mounts"]["demo"]["packages"]["demo.main"]["text"] = "input: {}\noutput: {}\ngraph: {}"
         error = assert_error(
             await client.post("/v1/executions", content=dumps(body)), 422, "compilation_failed"
         )
@@ -220,7 +230,7 @@ async def test_live_routes_conflicts_cancellation_and_terminal_idempotency(serve
 
     body = request_body()
     body["execution_id"] = execution_id
-    body["packages"]["demo.main"]["text"] = dumps(
+    body["mounts"]["demo"]["packages"]["demo.main"]["text"] = dumps(
         {
             "input": {"n": INTEGER},
             "output": {},
@@ -293,7 +303,7 @@ async def test_http_roundtrip_preserves_large_integer_decimal_and_map_order(serv
     }
     body = {
         "entry": "demo.main",
-        "packages": {"demo.main": {"format": "json", "text": dumps(doc)}},
+        "mounts": {"demo": {"packages": {"demo.main": {"format": "json", "text": dumps(doc)}}}},
         "input": {"value": value},
     }
     async with create_worker(server.client, queue):
@@ -364,7 +374,11 @@ async def test_signal_http_routes_lossless_output_conflicts_and_validation(serve
             content=dumps(
                 {
                     "entry": "__main__",
-                    "packages": {"__main__": {"format": "json", "text": dumps(doc)}},
+                    "mounts": {
+                        "__main__": {
+                            "packages": {"__main__": {"format": "json", "text": dumps(doc)}}
+                        }
+                    },
                     "execution_id": execution_id,
                 }
             ),

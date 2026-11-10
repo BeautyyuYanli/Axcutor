@@ -41,7 +41,7 @@
     $$\text{PrivateSegment} ::= \{ s \in \text{PackageSegment} \mid \text{starts\_with}(s, \texttt{"\_"}) \}$$
   * **点分工作流包路径（`PackagePath`）**：每个具名工作流对应逻辑命名空间中的一个点分包路径（物理目录树中唯一对应一个包含 `__axcutor__.yaml` 的文件夹），首段（顶层挂载根包名 `RootPackageName`）必须为 `PublicSegment` 且不得为系统保留入口名 `"__main__"`：
     $$\text{PackagePath} ::= \text{PublicSegment} \; ( \texttt{"."} \; \text{PackageSegment} )^* \quad (\text{首段 } \neq \texttt{"\_\_main\_\_"})$$
-    *(注：独立匿名入口文档使用系统保留标识 `"__main__"`，不属于可挂载或可被调用的 `PackagePath`；严禁在 `PackagePath` 中出现斜杠 `/`、相对路径段 `.` / `..`、`__axcutor__` 或 `.yaml` / `.yml` / `.json` 文件扩展名。)*
+    *(注：独立匿名入口文档使用系统保留标识 `"__main__"`，不属于可挂载或可被调用的 `PackagePath`；严禁在 `PackagePath` 中出现斜杠 `/`、相对路径段 `.` / `..`、`__axcutor__`、`__ax_resources__` 或 `.yaml` / `.yml` / `.json` 文件扩展名。)*
   * **包内私有 Python 模块单点相对路径（`LocalModuleSpec`）**：用于 `executor: "module"` 绑定当前工作流包文件夹内部的 `.py` 实现模块，仅允许单点包内相对路径（禁止跨包绝对路径与 `..` 上级相对路径）：
     $$\text{LocalModuleSpec} ::= \texttt{"."} \mid \texttt{"."} \; \text{LocalPath}, \quad \text{LocalPath} ::= \text{PackageSegment} \; ( \texttt{"."} \; \text{PackageSegment} )^*$$
   * **调用目标规格（`UseTargetSpec`）**：`CallNode` 中 `use` 字段的值类型，仅支持跨包工作流调用（从根包起始的绝对点分包路径 `PackagePath`）或内建确定性算子调用：

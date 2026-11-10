@@ -148,6 +148,9 @@ fn signatures_resolve_cycles_in_either_snapshot_order() {
 fn duplicate_mounts_and_old_envelopes_never_silently_overwrite() {
     for text in [
         r#"{"entry":"main","sources":{}}"#,
+        r#"{"entry":"main","packages":{}}"#,
+        r#"{"entry":"main","mounts":{"main":{},"main":{}}}"#,
+        r#"{"entry":"main","mounts":{"main":{"packages":{"main":{"format":"yaml","text":""},"main":{"format":"yaml","text":""}}}}}"#,
         r#"{"entry":"main","packages":{"main":{"format":"yaml","text":""},"main":{"format":"yaml","text":""}}}"#,
     ] {
         assert!(compile_workflow_json(text).is_err());

@@ -4,7 +4,7 @@ import { useExecution } from '../src/composables/useExecution';
 
 const view = (status = 'running', output = 'null') => `{"execution_id":"demo","status":"${status}","started_at":"2026-01-01T00:00:00Z","finished_at":${status === 'running' ? 'null' : '"2026-01-01T00:00:01Z"'},"frames":[],"result":${output},"error":null}`;
 const response = (raw: string, status = 200) => new Response(raw, { status, headers: { 'content-type': 'application/json' } });
-const submitted = (raw: string) => `{"execution":${raw},"source":{"entry":"demo.main","packages":{}},"workspace":{"revision":"generated","files":[],"busy":true,"execution_id":"demo"}}`;
+const submitted = (raw: string) => `{"execution":${raw},"source":{"entry":"demo.main","mounts":{}},"workspace":{"revision":"generated","files":[],"busy":true,"execution_id":"demo"}}`;
 const uncertainSubmission = JSON.stringify({
   error: {
     code: 'runtime_unavailable',

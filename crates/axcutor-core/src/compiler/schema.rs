@@ -96,7 +96,56 @@ fn integer(
     None
 }
 
-fn types(v: Option<&Value>, required: bool, a: &Address, ds: &mut Ds) -> Symbols {
+/// Resource headers are closed declarations, not executable workflow documents.
+pub(super) fn resources(raw: &Value, a: &Address, resources: &mut HashSet<String>, ds: &mut Ds) {
+    let Some(m) = object(raw, a, ds) else { return };
+    closed(m, &["resources"], a, ds);
+    let at = a.at("resources");
+    let Some(entries) = m
+        .get("resources")
+        .and_then(Value::as_object)
+        .filter(|m| !m.is_empty())
+    else {
+        at.error(
+            ds,
+            "document",
+            "schema.resources",
+            "resources must be a nonempty mapping",
+        );
+        return;
+    };
+    for (name, value) in entries {
+        let at = at.at(name);
+        let before = ds.len();
+        if !package_segment(name) || name.starts_with('_') {
+            at.error(
+                ds,
+                "document",
+                "schema.identifier",
+                "resource class must be a public package segment",
+            );
+        }
+        if !value.is_null() {
+            if let Some(fields) = object(value, &at, ds) {
+                closed(fields, &["description"], &at, ds);
+                if let Some(description) = fields.get("description") {
+                    string(Some(description), &at.at("description"), ds);
+                }
+            }
+        }
+        if ds.len() == before {
+            resources.insert(format!("{}:{name}", a.workflow));
+        }
+    }
+}
+
+fn types(
+    v: Option<&Value>,
+    required: bool,
+    a: &Address,
+    resources: &HashSet<String>,
+    ds: &mut Ds,
+) -> Symbols {
     if v.is_none() && !required {
         return Symbols::new();
     }
@@ -117,7 +166,7 @@ fn types(v: Option<&Value>, required: bool, a: &Address, ds: &mut Ds) -> Symbols
         let valid = name(n, &at, ds);
         match TypeSpec::parse(t) {
             Ok(t) if valid => {
-                type_visibility(&t, &at, ds);
+                type_resources(&t, &at, resources, ds);
                 result.insert(n.clone(), t);
             }
             Ok(_) => (),
@@ -127,7 +176,7 @@ fn types(v: Option<&Value>, required: bool, a: &Address, ds: &mut Ds) -> Symbols
     result
 }
 
-fn type_visibility(t: &TypeSpec, a: &Address, ds: &mut Ds) {
+fn type_resources(t: &TypeSpec, a: &Address, resources: &HashSet<String>, ds: &mut Ds) {
     match &t.kind {
         TypeKind::Handle(kind) => {
             let module = kind.split_once(':').unwrap().0;
@@ -139,12 +188,20 @@ fn type_visibility(t: &TypeSpec, a: &Address, ds: &mut Ds) {
                     format!("resource {kind} is private to its parent package"),
                 );
             }
+            if !resources.contains(kind) {
+                a.at("kind").error(
+                    ds,
+                    "variable",
+                    "type.unknown_resource",
+                    format!("resource {kind} is not declared"),
+                );
+            }
         }
-        TypeKind::Array(t) => type_visibility(t, &a.at("items"), ds),
-        TypeKind::OrderedMap(t) => type_visibility(t, &a.at("additionalProperties"), ds),
+        TypeKind::Array(t) => type_resources(t, &a.at("items"), resources, ds),
+        TypeKind::OrderedMap(t) => type_resources(t, &a.at("additionalProperties"), resources, ds),
         TypeKind::TypedDict { properties, .. } => {
             for (name, t) in properties {
-                type_visibility(t, &a.at("properties").at(name), ds);
+                type_resources(t, &a.at("properties").at(name), resources, ds);
             }
         }
         TypeKind::Scalar { .. } => (),
@@ -235,14 +292,16 @@ pub(super) fn dependencies(raw: &Value, pending: &mut VecDeque<String>) {
 pub(super) fn root(
     raw: &Value,
     a: &Address,
+    allowed_executors: Option<&[String]>,
+    resources: &HashSet<String>,
     ds: &mut Ds,
 ) -> (Option<NormalizedRoot>, Option<Signature>) {
     let Some(m) = object(raw, a, ds) else {
         return (None, None);
     };
     let before = ds.len();
-    let input = types(m.get("input"), true, &a.at("input"), ds);
-    let output = types(m.get("output"), true, &a.at("output"), ds);
+    let input = types(m.get("input"), true, &a.at("input"), resources, ds);
+    let output = types(m.get("output"), true, &a.at("output"), resources, ds);
     let branches = branches(m.get("branches"), &output, &a.at("branches"), ds);
     let signature = (ds.len() == before).then(|| Signature {
         input: input.clone(),
@@ -263,7 +322,8 @@ pub(super) fn root(
     }
     let body = if let Some(g) = m.get("graph") {
         closed(m, &["input", "output", "branches", "graph"], a, ds);
-        graph(g, &a.graph(false), ds).map(|graph| RootBody::Graph { graph })
+        graph(g, &a.graph(false), allowed_executors, resources, ds)
+            .map(|graph| RootBody::Graph { graph })
     } else if m.contains_key("run") {
         closed(
             m,
@@ -271,7 +331,7 @@ pub(super) fn root(
             a,
             ds,
         );
-        let run = run(m.get("run"), &a.at("run"), ds);
+        let run = run(m.get("run"), &a.at("run"), allowed_executors, ds);
         let timeout_ms = m
             .get("timeout_ms")
             .and_then(|v| integer(Some(v), 1, None, &a.at("timeout_ms"), ds));
@@ -298,7 +358,12 @@ pub(super) fn root(
     )
 }
 
-fn run(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<RunSpec> {
+fn run(
+    v: Option<&Value>,
+    a: &Address,
+    allowed_executors: Option<&[String]>,
+    ds: &mut Ds,
+) -> Option<RunSpec> {
     let m = object(v?, a, ds)?;
     let executor = string(m.get("executor"), &a.at("executor"), ds)?;
     if !identifier(&executor) {
@@ -309,6 +374,15 @@ fn run(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<RunSpec> {
             "executor must be an Identifier",
         );
         return None;
+    }
+    if allowed_executors.is_some_and(|allow| !allow.contains(&executor)) {
+        let root = a.workflow.split('.').next().unwrap();
+        a.at("executor").error(
+            ds,
+            "node",
+            "schema.executor_not_allowed",
+            format!("executor {executor} is not allowed in mount {root}"),
+        );
     }
     if executor == "signal" {
         closed(m, &["executor"], a, ds);
@@ -355,7 +429,13 @@ fn run(v: Option<&Value>, a: &Address, ds: &mut Ds) -> Option<RunSpec> {
     }
 }
 
-fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
+fn graph(
+    raw: &Value,
+    a: &Address,
+    allowed_executors: Option<&[String]>,
+    resources: &HashSet<String>,
+    ds: &mut Ds,
+) -> Option<NormalizedGraph> {
     let m = object(raw, a, ds)?;
     closed(m, &["variables", "nodes", "edges", "max_steps"], a, ds);
     let max_steps = integer(m.get("max_steps"), 1, Some(1000), &a.at("max_steps"), ds)
@@ -373,7 +453,7 @@ fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
                         .map_or(InitialValue::Unbound, InitialValue::Default);
                     match TypeSpec::parse(&Value::Object(t)) {
                         Ok(typespec) if valid => {
-                            type_visibility(&typespec, &at, ds);
+                            type_resources(&typespec, &at, resources, ds);
                             variables.insert(n.clone(), VarDecl { typespec, initial });
                         }
                         Ok(_) => (),
@@ -389,7 +469,7 @@ fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
             for (id, raw) in ns {
                 let at = a.node(id);
                 let valid = name(id, &at, ds);
-                let node = node(raw, &at, ds);
+                let node = node(raw, &at, allowed_executors, resources, ds);
                 if valid {
                     if let Some(node) = node {
                         nodes.insert(id.clone(), node);
@@ -442,7 +522,13 @@ fn graph(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedGraph> {
     })
 }
 
-fn node(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedNode> {
+fn node(
+    raw: &Value,
+    a: &Address,
+    allowed_executors: Option<&[String]>,
+    resources: &HashSet<String>,
+    ds: &mut Ds,
+) -> Option<NormalizedNode> {
     let m = object(raw, a, ds)?;
     let count = ["run", "graph", "use"]
         .iter()
@@ -527,17 +613,19 @@ fn node(raw: &Value, a: &Address, ds: &mut Ds) -> Option<NormalizedNode> {
             .get("input")
             .map(|v| strings(Some(v), &a.at("input"), ds))
             .unwrap_or_default();
-        let output = types(m.get("output"), false, &a.at("output"), ds);
+        let output = types(m.get("output"), false, &a.at("output"), resources, ds);
         let branches = branches(m.get("branches"), &output, &a.at("branches"), ds);
         if let Some(g) = m.get("graph") {
-            graph(g, &a.graph(true), ds).map(|graph| NodeBody::Graph {
-                input,
-                output,
-                branches,
-                graph: Box::new(graph),
+            graph(g, &a.graph(true), allowed_executors, resources, ds).map(|graph| {
+                NodeBody::Graph {
+                    input,
+                    output,
+                    branches,
+                    graph: Box::new(graph),
+                }
             })
         } else {
-            run(m.get("run"), &a.at("run"), ds).map(|run| NodeBody::Run {
+            run(m.get("run"), &a.at("run"), allowed_executors, ds).map(|run| NodeBody::Run {
                 workflow_id: a.workflow.clone(),
                 input,
                 input_schema: Symbols::new(),

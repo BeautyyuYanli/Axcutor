@@ -10,13 +10,26 @@ mod schema;
 use crate::ast::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompileRequest {
     pub entry: String,
+    pub mounts: Ordered<MountUnit>,
+}
+
+/// One root owns all of its documents and its compile-time executor policy.
+/// Resource declarations are independent of the reachable workflow closure.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MountUnit {
+    #[serde(default)]
     pub packages: Ordered<SourceDocument>,
+    #[serde(default)]
+    pub resources: Ordered<SourceDocument>,
+    #[serde(default)]
+    pub allowed_executors: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -169,18 +182,69 @@ struct Document {
     signature: Option<Signature>,
 }
 
-/// Compile only the entry's dependency closure, using a complete signature snapshot
-/// before implementation checking. Recursive calls never expand another graph body.
+/// Validate every mount and resource declaration, then compile only the entry's
+/// workflow dependency closure. All roots use the same passes; executor policies
+/// apply to the document's owning root, never to its callers or callees.
 pub fn compile_workflow(request: CompileRequest) -> CompileOutput {
     let mut diagnostics = vec![];
-    for id in request.packages.keys() {
-        if id != "__main__" && !package_path(id) {
-            Address::root(id).error(
+    let mut resources = HashSet::new();
+    for (root, mount) in &request.mounts {
+        if root != "__main__" && (!package_segment(root) || root.starts_with('_')) {
+            Address::root(root).error(
                 &mut diagnostics,
                 "document",
-                "schema.package_path",
-                "packages must use absolute dotted paths with public roots",
+                "schema.mount_root",
+                "mount root must be __main__ or a public package segment",
             );
+        }
+        for (is_resource, sources) in [(false, &mount.packages), (true, &mount.resources)] {
+            for (id, source) in sources {
+                let owned = if root == "__main__" {
+                    !is_resource && id == "__main__"
+                } else {
+                    package_path(id) && id.split('.').next() == Some(root.as_str())
+                };
+                let a = Address::root(id);
+                if !owned {
+                    a.error(
+                        &mut diagnostics,
+                        if is_resource { "resource" } else { "document" },
+                        "schema.package_path",
+                        format!("package path must belong to mount root {root}"),
+                    );
+                    continue;
+                }
+                if is_resource {
+                    let before = diagnostics.len();
+                    match parse::load(source) {
+                        Ok(raw) => schema::resources(&raw, &a, &mut resources, &mut diagnostics),
+                        Err((message, location)) => {
+                            a.error(&mut diagnostics, "document", "parse.source", message);
+                            diagnostics.last_mut().unwrap().source_location = location;
+                        }
+                    }
+                    // Workflow and resource documents may share a package path.
+                    // Preserve their source identity for diagnostic navigation.
+                    for diagnostic in &mut diagnostics[before..] {
+                        diagnostic.target_kind = "resource".into();
+                    }
+                }
+            }
+        }
+        if let Some(allowed) = &mount.allowed_executors {
+            for (index, executor) in allowed.iter().enumerate() {
+                if !identifier(executor) {
+                    Address::root(root)
+                        .at("allowed_executors")
+                        .at(&index.to_string())
+                        .error(
+                            &mut diagnostics,
+                            "document",
+                            "schema.executor",
+                            "executor must be an Identifier",
+                        );
+                }
+            }
         }
     }
     if request.entry != "__main__" && !public_package_path(&request.entry) {
@@ -202,7 +266,8 @@ pub fn compile_workflow(request: CompileRequest) -> CompileOutput {
         if id != "__main__" && !package_path(&id) {
             continue;
         }
-        let Some(source) = request.packages.get(&id) else {
+        let mount = request.mounts.get(id.split('.').next().unwrap());
+        let Some((mount, source)) = mount.and_then(|m| m.packages.get(&id).map(|s| (m, s))) else {
             if id == request.entry {
                 a.error(
                     &mut diagnostics,
@@ -230,7 +295,13 @@ pub fn compile_workflow(request: CompileRequest) -> CompileOutput {
             }
         };
         schema::dependencies(&raw, &mut pending);
-        let (root, signature) = schema::root(&raw, &a, &mut diagnostics);
+        let (root, signature) = schema::root(
+            &raw,
+            &a,
+            mount.allowed_executors.as_deref(),
+            &resources,
+            &mut diagnostics,
+        );
         documents.insert(
             id,
             Document {
@@ -429,7 +500,7 @@ pub fn derive_node_ports(analysis: &GraphAnalysis, node_id: &str) -> Vec<NodePor
 
 /// Malformed envelopes are host argument errors. Source/DSL errors are results.
 pub fn compile_workflow_json(text: &str) -> Result<String, String> {
-    // Reject duplicate package keys before serde's map can overwrite a mount.
+    // Reject duplicate roots and document keys before serde can overwrite them.
     let request: CompileRequest = json_argument(text, parse::MAX_MODEL_DEPTH)?;
     serde_json::to_string(&compile_workflow(request)).map_err(|e| e.to_string())
 }

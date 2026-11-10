@@ -4,10 +4,16 @@
  */
 export type SourceFormat = 'yaml' | 'json';
 export interface SourceDocument { format: SourceFormat; text: string }
-export interface CompileRequest { entry: string; packages: Record<string, SourceDocument> }
+export interface MountUnit {
+  packages?: Record<string, SourceDocument>;
+  resources?: Record<string, SourceDocument>;
+  allowed_executors?: string[] | null;
+}
+export interface CompileRequest { entry: string; mounts: Record<string, MountUnit> }
 export interface TypeSpec {
   type: string | string[];
   description?: string;
+  kind?: string;
   items?: TypeSpec;
   properties?: Record<string, TypeSpec>;
   required?: string[];

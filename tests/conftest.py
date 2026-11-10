@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from datetime import timedelta
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ import pytest
 from axcutor_runtime import AxcutorInterpreterWorkflow, compile_bundle
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.worker import create_worker, workflow_runner
+from helpers import source_mounts
 from temporalio import exceptions
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowFailureError
@@ -26,12 +28,16 @@ class Execution:
     def __init__(self, server, queue):
         self.server, self.queue = server, queue
         self.handles = []
+        self.mounts = {}
 
     async def start(self, document, inputs=None, *, packages=None, options=None):
         source_map = {"main": {"format": "json", "text": dumps(document)}}
         source_map.update(packages or {})
+        mounts = deepcopy(self.mounts)
+        for root, unit in source_mounts(source_map).items():
+            mounts.setdefault(root, {}).setdefault("packages", {}).update(unit["packages"])
         request = {
-            "bundle_json": compile_bundle("main", source_map),
+            "bundle_json": compile_bundle("main", mounts),
             "input_json": dumps({} if inputs is None else inputs),
             "options": {
                 "heartbeat_interval_ms": 20,

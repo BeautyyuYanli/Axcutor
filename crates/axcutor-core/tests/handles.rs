@@ -1,11 +1,40 @@
 //! Opaque resource identity is nominal, unforgeable by literals, and host-private.
 mod support;
-use axcutor_core::{ast::*, kernel::*};
+use axcutor_core::{
+    CompileOutput, CompileRequest, SourceDocument, ast::*, compile_workflow, kernel::*,
+};
 use serde_json::{Value, json};
 use support::*;
 
 fn handle() -> Value {
     json!({"type":"handle", "kind":"infra.postgres:Tx"})
+}
+
+fn compile(v: Value) -> CompileOutput {
+    compile_packages("main", [("main".into(), source(v))])
+}
+
+fn compile_packages(
+    entry: &str,
+    packages: impl IntoIterator<Item = (String, SourceDocument)>,
+) -> CompileOutput {
+    let mut mounts = support::mounts(packages);
+    mounts.entry("infra".into()).or_default().resources = [
+        (
+            "infra.postgres".into(),
+            source(json!({"resources":{"Tx":null,"Other":{}}})),
+        ),
+        (
+            "infra._private".into(),
+            source(json!({"resources":{"Tx":null}})),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    compile_workflow(CompileRequest {
+        entry: entry.into(),
+        mounts,
+    })
 }
 
 #[test]
@@ -26,6 +55,8 @@ fn handles_are_closed_nominal_and_nullable_without_structural_projection() {
         "infra:class",
         "infra/pg:Tx",
         "infra.json:Tx",
+        "infra.__ax_resources__:Tx",
+        "infra.__axcutor__:Tx",
     ] {
         assert!(TypeSpec::handle(kind).is_err(), "{kind}");
     }

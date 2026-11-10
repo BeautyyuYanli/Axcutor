@@ -5,12 +5,23 @@
 ## 类型与宿主边界
 
 ```yaml
-# kind 使用逻辑模块路径和公开顶层资源类名。
+# kind 使用逻辑资源包路径和公开顶层资源类名。
 tx: {type: handle, kind: infra.postgres:Tx}
 file: {type: [handle, "null"], kind: infra.s3:TempFile}
 ```
 
-`handle` 只允许 `type`、`kind` 和可选 `description`。模块私有段遵守工作流包可见性。同 kind 的类型才兼容；容器和可空性沿用现有规则。
+`handle` 只允许 `type`、`kind` 和可选 `description`。资源包私有段遵守工作流包可见性。同 kind 的类型才兼容；容器和可空性沿用现有规则。路径段禁止 `__axcutor__` 与 `__ax_resources__`。
+
+资源包包含 `__init__.py` 和独立的 `__ax_resources__.yaml`，可与同路径工作流共存。声明局部示例：
+
+```yaml
+# infra/postgres/__ax_resources__.yaml
+resources:
+  Tx: {description: 数据库事务}
+  Conn:
+```
+
+头文件只允许 `resources`，其值为非空映射。键为公开 Python 包标识符；每项为 `null` 或仅含可选字符串 `description` 的映射。编译器检查所有挂载的资源头文件，递归核对 input、output 和图变量中的 kind。未声明时报 `type.unknown_resource`，私有资源越界时报 `visibility.private_resource`。编译过程不导入 Python，声明不替代 Worker 上的类协议校验。
 
 句柄可经 `assign`、容器算子和 `unwrap` 传递。同 kind 句柄支持 `compare` 的 `eq/ne`，不支持字段投影、算术、逻辑或有序比较。非空句柄不能由 YAML 字面量创建；可空句柄的 `null` 和句柄容器的空值合法：
 
@@ -24,10 +35,10 @@ variables:
 
 ## 创建与借用
 
-资源类放在可导入模块中，直接使用 `@resource` 或 `@resource(persistent=True)`。公开接口只有 `await resources.put(instance)` 和 `await resources.get(handle)`。
+资源类由对应资源包的 `__init__.py` 公开导出，直接使用 `@resource` 或 `@resource(persistent=True)`。类可定义在该初始化文件或同目录的单文件子模块（包括 `_tx.py`），禁止从其他包重导出。公开接口只有 `await resources.put(instance)` 和 `await resources.get(handle)`。
 
 ```python
-# infra/counter.py：此对象只保存进程内状态，不能在其他 Worker 恢复。
+# infra/counter/__init__.py：此对象只保存进程内状态，不能在其他 Worker 恢复。
 from axcutor_runtime import resource
 
 @resource
@@ -110,8 +121,8 @@ Activity 成功且完整输出通过校验后，新导出资源归当前 Run。�
 
 ```sh
 # --mount 决定 DSL 发现和契约文件位置；--module-mount 决定静态 Python 导入。
-axcutor contracts workflows/billing --mount billing=workflows/billing \
+axcutor contracts workflows/billing --mount billing=workflows/billing --mount infra=workflows/infra \
   --module-mount billing=company.billing --module-mount infra=company.infrastructure
 ```
 
-纯资源包不需要对应 DSL 挂载。Worker 使用同一映射，静态检查环境须能导入精确资源类。映射不改变逻辑 kind 或契约 SHA。内部传输与清理状态见[生命周期规范](../../spec/05-executor-abi/05-resource-lifecycle.md)。
+纯资源包也须通过 `--mount` 提供静态资源头文件。Worker 使用同一逻辑根的 Python 映射，运行期只加载 Python 包，不读取磁盘上的资源声明。静态检查环境须能导入精确资源类；映射不改变逻辑 kind 或契约 SHA。内部传输与清理状态见[生命周期规范](../../spec/05-executor-abi/05-resource-lifecycle.md)。

@@ -4,6 +4,8 @@
 
 无论是内建的进程内受信任 Python 内联执行器（`executor: "builtin"`，详见 [`02-builtin-python-executor.md`](./02-builtin-python-executor.md)）、基于工作流包同构的模块级 Python 执行器（`executor: "module"`，详见 [`03-module-python-executor.md`](./03-module-python-executor.md)）、工作流内协作式等待执行器（`executor: "signal"`，详见 [`04-signal-cooperative-executor.md`](./04-signal-cooperative-executor.md)），还是在此基础上构建或独立注册的扩展执行器（如隔离沙箱、微服务 HTTP/RPC 调用、数据库事务操作或大模型结构化输出），均遵循统一的输出与控制分支契约。
 
+编译器依据节点所属根 `MountUnit.allowed_executors` 检查 `run.executor`。省略或 `null` 表示不限，空列表禁止全部 `run`；列表元素遵循 `Identifier`，不使用 Python 关键字排除规则。违规在对应 `run.executor` 处报 `schema.executor_not_allowed`，策略不跨根继承。确定性 `builtin:` 算子不属于 `run`。Worker 只消费编译后的快照，不重复接收白名单参数。
+
 ---
 
 ## 一、 执行器调用的抽象函数签名

@@ -583,7 +583,7 @@ async def test_execution_routes_preserve_ids_lossless_frames_and_cancellation(
     ):
         await service.submit(
             "__main__",
-            {"__main__": {"format": "json", "text": text}},
+            {"__main__": {"packages": {"__main__": {"format": "json", "text": text}}}},
             loads('{"n":1.00000000000000000000001}'),
             execution_id,
         )
@@ -614,7 +614,7 @@ async def test_playground_signal_route_uses_execution_contract(server, tmp_path,
     async with create_worker(server.client, queue):
         await service.submit(
             "__main__",
-            {"__main__": {"format": "json", "text": dumps(doc)}},
+            {"__main__": {"packages": {"__main__": {"format": "json", "text": dumps(doc)}}}},
             execution_id=execution_id,
         )
         async with httpx.AsyncClient(

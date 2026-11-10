@@ -42,7 +42,9 @@ def test_complete_manual_examples_generate_standalone_typed_python(tmp_path):
                     dumps(
                         {
                             "entry": "main",
-                            "packages": {"main": {"format": "yaml", "text": block}},
+                            "mounts": {
+                                "main": {"packages": {"main": {"format": "yaml", "text": block}}}
+                            },
                         }
                     )
                 )

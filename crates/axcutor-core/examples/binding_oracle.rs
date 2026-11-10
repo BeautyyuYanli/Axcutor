@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "[".repeat(arrays),
                 "]".repeat(arrays)
             );
-            cases.push(json!({"entry":"main","packages":{"main":{"format":format,"text":text}}}));
+            cases.push(json!({"entry":"main","mounts":{"main":{"packages":{"main":{"format":format,"text":text}}}}}));
         }
         // Valid source-boundary types must survive compile -> serialize -> query,
         // including the deeper injected TypeSpec position on an iteration node.
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         json!({"result":{"type":"array","items":{"type":"integer"}}});
                     doc["graph"]["nodes"]["n"] = json!({"run":{"executor":"builtin","content":"work"},"for_each":{"source":"x","item":"item"},"output":{"result":{"type":"integer"}}});
                 }
-                cases.push(json!({"entry":"main","packages":{"main":{"format":format,"text":doc.to_string()}}}));
+                cases.push(json!({"entry":"main","mounts":{"main":{"packages":{"main":{"format":format,"text":doc.to_string()}}}}}));
             }
         }
     }
@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bad = json!({"input":{"x":{"type":"number","enum":[{marker:"1"}]}},"output":{},"run":{"executor":"builtin","content":"work"}});
         for format in ["json", "yaml"] {
             cases.push(
-                json!({"entry":"main","packages":{"main":{"format":format,"text":bad.to_string()}}}),
+                json!({"entry":"main","mounts":{"main":{"packages":{"main":{"format":format,"text":bad.to_string()}}}}}),
             );
         }
     }
@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     marker_doc["graph"]["variables"] = json!({"marker_map":{"type":"object","additionalProperties":{"type":"string"},"default":{"$serde_json::private::Number":"1","$serde_json::private::RawValue":"1"}}});
     cases.push(
-        json!({"entry":"main","packages":{"main":{"format":"json","text":marker_doc.to_string()}}}),
+        json!({"entry":"main","mounts":{"main":{"packages":{"main":{"format":"json","text":marker_doc.to_string()}}}}}),
     );
     let mut oracle = vec![];
     for (case_index, case) in cases.into_iter().enumerate() {

@@ -26,7 +26,7 @@ const preview = computed(() => {
   try { return { source: workspaceSource(files.value, entryPath.value), error: null }; }
   catch (cause) { return { source: null, error: String(cause) }; }
 });
-const packages = computed(() => preview.value.source?.packages ?? {});
+const mounts = computed(() => preview.value.source?.mounts ?? {});
 const entry = computed(() => preview.value.source?.entry ?? '__main__');
 const scope = ref<Scope>({ workflowId: entry.value, scopeGraphPath: [] });
 const selectedNode = ref<string | null>(null);
@@ -34,7 +34,7 @@ const selectedFrameKey = ref<string | null>(null);
 const selectedSpanId = ref<string | null>(null);
 const canvasSource = ref<'editor' | 'execution'>('editor');
 const submitted = shallowRef<CompileOutput | null>(null);
-const { ready, error: compilerError, compileOutput } = useCompiler(entry, packages);
+const { ready, error: compilerError, compileOutput } = useCompiler(entry, mounts);
 const { execution, observedId, slices, source: submittedSource, workspace: runWorkspace, error: httpError, submitting, cancelRequested, run, cancel, restore: restoreExecution } = useExecution();
 const trace = useLatestTrace();
 const { view: traceView, problem: traceProblem } = trace;
@@ -85,7 +85,7 @@ const diagnostics = computed(() => [...(compileOutput.value?.diagnostics ?? []),
 const frames = computed(() => canvasSource.value === 'execution' && execution.value?.status === 'running' ? execution.value.frames : []);
 const writeBlocked = computed(() => serverBusy.value || preparing.value || submitting.value || observedId.value !== null);
 const readOnly = computed(() => busy.value || writeBlocked.value || !loaded.value);
-const workflowFiles = computed(() => files.value.filter(file => /\.(yaml|yml|json)$/.test(file.path)).sort((a, b) => a.path.localeCompare(b.path)));
+const workflowFiles = computed(() => files.value.filter(file => /\.(yaml|yml|json)$/.test(file.path) && file.path.split('/').at(-1) !== '__ax_resources__.yaml').sort((a, b) => a.path.localeCompare(b.path)));
 const inputFiles = computed(() => workflowFiles.value.filter(file => file.path.endsWith('.json')));
 const entryOptions = computed(() => workflowFiles.value.map(file => {
   // Use the same discovery as preview and Run; standalone documents are __main__.
@@ -142,7 +142,7 @@ function selectFile(path: string) {
   selectedFile.value = path;
   canvasSource.value = 'editor';
   const name = Object.keys(preview.value.source?.paths ?? {}).find(name => preview.value.source?.paths[name] === path);
-  if (name) navigate({ workflowId: name, scopeGraphPath: [] });
+  if (name) navigate({ workflowId: name.replace(/:resources$/, ''), scopeGraphPath: [] });
 }
 function addFile(path: string) {
   if (workspace.add(path)) selectFile(path);
@@ -158,7 +158,9 @@ function editText(path: string, text: string) {
 }
 function locateDiagnostic(diagnostic: Diagnostic) {
   editorOpen.value = true;
-  selectedFile.value = preview.value.source?.paths[diagnostic.workflow_id] ?? selectedFile.value;
+  const paths = preview.value.source?.paths ?? {};
+  const key = diagnostic.workflow_id + (diagnostic.target_kind === 'resource' ? ':resources' : '');
+  selectedFile.value = paths[key] ?? selectedFile.value;
   canvasSource.value = 'editor';
   scope.value = { workflowId: diagnostic.workflow_id, scopeGraphPath: [...diagnostic.scope_graph_path] };
   selectedNode.value = diagnostic.node_id;

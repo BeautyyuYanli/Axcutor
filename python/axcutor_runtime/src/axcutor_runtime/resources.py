@@ -9,6 +9,7 @@ or background retry service is installed.
 import asyncio
 import inspect
 import logging
+import sys
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import Context, ContextVar
@@ -128,7 +129,12 @@ class _Entry:
 
 
 class ResourceStore:
-    """One event-loop-owned physical instance table shared by a composite Worker."""
+    """One event-loop-owned instance table shared by a composite Worker.
+
+    Kinds address a package's public exports. Definitions may live in its
+    initializer or direct file submodules, never another package. Static resource
+    headers belong to compilation and are not read by the Store.
+    """
 
     def __init__(self, worker_queue: str, mounts: Mapping[str, str] | None = None) -> None:
         self.worker_queue = worker_queue
@@ -167,15 +173,22 @@ class ResourceStore:
             raise TypeError("invalid resource kind")
         module, name = kind.split(":")
         physical = python_module(module, self.mounts)
-        cls = getattr(load_module(physical), name)
-        if not isinstance(cls, type) or cls.__module__ != physical or cls.__qualname__ != name:
-            raise TypeError("resource kind must address the exact defining class")
+        cls = getattr(load_module(physical, current_package=True), name)
+        if (
+            not isinstance(cls, type)
+            or cls.__qualname__ != name
+            or getattr(sys.modules.get(cls.__module__), "__package__", None) != physical
+        ):
+            raise TypeError("resource kind must address a public class defined in the same package")
         _protocol(cls)
         return cls
 
     def _class_kind(self, value: Any) -> str:
         cls = type(value)
-        kind = f"{logical_module(cls.__module__, self.mounts)}:{cls.__name__}"
+        package = getattr(sys.modules.get(cls.__module__), "__package__", None)
+        if not isinstance(package, str) or not package:
+            raise TypeError("resource class must belong to a Python package")
+        kind = f"{logical_module(package, self.mounts)}:{cls.__name__}"
         if self.resolve_resource_class(kind) is not cls:
             raise TypeError("resource class identity mismatch")
         return kind

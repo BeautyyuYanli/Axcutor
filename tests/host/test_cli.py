@@ -13,7 +13,7 @@ import pytest
 from axcutor_host import ExecutionService
 from axcutor_runtime import compile_bundle
 from axcutor_runtime.codec import dumps, loads
-from axcutor_runtime.packages import PackageMount, load_packages
+from axcutor_runtime.packages import PackageMount, load_mounts
 from axcutor_runtime.worker import create_worker
 from helpers import INTEGER, N, action, call, graph
 from temporalio.client import WorkflowFailureError
@@ -29,11 +29,20 @@ async def test_contracts_module_mounts_include_resource_only_roots_without_impor
         "input: {}\noutput: {tx: {type: handle, kind: 'infra.postgres:Tx'}}\n"
         "run: {executor: module, content: .create}\n"
     )
+    infra = tmp_path / "infra"
+    infra.mkdir()
+    (infra / "__init__.py").write_text("raise AssertionError('must not import')\n")
+    postgres = infra / "postgres"
+    postgres.mkdir()
+    (postgres / "__init__.py").write_text("raise AssertionError('must not import')\n")
+    (postgres / "__ax_resources__.yaml").write_text("resources: {Tx: null}\n")
     args = (
         "contracts",
         root,
         "--mount",
         f"flows={root}",
+        "--mount",
+        f"infra={infra}",
         "--module-mount",
         "flows=uninstalled.flows",
         "--module-mount",
@@ -196,11 +205,11 @@ def test_file_packages_use_explicit_mounts_and_only_compile_reachable_documents(
     )
     (root / "unused.json").write_text("not a workflow")
     mounts = [PackageMount("demo", root)]
-    bundle = loads(compile_bundle(*load_packages(entry, mounts)))
+    bundle = loads(compile_bundle(*load_mounts(entry, mounts)))
     assert bundle["entry"] == "demo.nested"
     assert set(bundle["workflows"]) == {"demo.nested", "demo.child"}
     with pytest.raises(ValueError):
-        load_packages(entry)
+        load_mounts(entry)
 
 
 async def test_cli_rejects_invalid_input_before_connecting(tmp_path):
@@ -277,7 +286,7 @@ async def test_worker_process_polls_and_handles_sigterm(server):
                 "text": text,
             },
         }
-        first = await host.submit("demo.main", source)
+        first = await host.submit("demo.main", {"demo": {"packages": source}})
         final = await host.wait(first["execution_id"])
         assert final["status"] == "completed", final
 
@@ -338,7 +347,10 @@ async def test_signal_cli_keeps_target_separate_from_server_and_emits_one_result
     output = tmp_path / "output.json"
     output.write_text('{"value":1.00000000000000000000000001}')
     async with create_worker(server.client, queue):
-        first = await host.submit("__main__", {"__main__": {"format": "json", "text": dumps(doc)}})
+        first = await host.submit(
+            "__main__",
+            {"__main__": {"packages": {"__main__": {"format": "json", "text": dumps(doc)}}}},
+        )
         code, stdout, stderr = await invoke(
             "signal",
             first["execution_id"],
@@ -380,7 +392,10 @@ async def test_signal_cli_defaults_to_empty_output(server):
     host = ExecutionService(server.client, queue)
     doc = {"input": {}, "output": {}, "run": {"executor": "signal"}}
     async with create_worker(server.client, queue):
-        first = await host.submit("__main__", {"__main__": {"format": "json", "text": dumps(doc)}})
+        first = await host.submit(
+            "__main__",
+            {"__main__": {"packages": {"__main__": {"format": "json", "text": dumps(doc)}}}},
+        )
         code, stdout, stderr = await invoke(
             "signal",
             first["execution_id"],

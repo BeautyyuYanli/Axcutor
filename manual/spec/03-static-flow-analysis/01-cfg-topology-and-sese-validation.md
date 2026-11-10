@@ -55,8 +55,9 @@
 当图内 `CallNode` 通过 `use: workflow:<PackagePath>` 调用工作流包时，遵循以下包命名空间、可见性与递归调用公理：
 
 1. **显式无遮蔽根包挂载与唯一入口保留字（Explicit Root Mounts & Reserved `"__main__"`）**：
-   * 宿主环境通过不可变的无冲突点分包表 `packages: Map<PackagePath | "__main__", SourceDocument>` 向编译器提供工作流定义。每个具名工作流对应逻辑命名空间中的唯一点分包路径 `PackagePath`（如 `billing.charge`，物理上唯一对应包含 `__axcutor__.yaml` 的文件夹），顶层根包段 `RootPackageName` 必须为公开路径段 `PublicSegment` 且两两互异，严禁同名根包静默遮蔽（Shadowing）。
-   * `"__main__"` 为系统保留的独立匿名入口工作流标识，不可作为具名挂载包名，亦不可在 `use: workflow:...` 中被引用。
+   * 宿主环境通过闭合请求 `{entry, mounts}` 提供不可变快照，其中 `mounts: Map<RootPackageName | "__main__", MountUnit>` 按顶层根名组织。每个 `MountUnit` 分别包含工作流文档表 `packages`、静态资源声明表 `resources` 和可选执行器白名单 `allowed_executors`；字段格式与默认值见[编译请求与挂载单元契约](../../docs/reference/04-execution-http-api.md#提交执行)。
+   * 每个具名根的 `packages` 与 `resources` 键均须为合法的完整点分包路径，且首段必须等于所属挂载根名。每个具名工作流对应唯一包含 `__axcutor__.yaml` 的目录，每个物理子目录名对应一个包路径段。具名根须为公开包路径段，重复根键在解析时拒绝；其他根不能通过单元内部文档路径注入该根的命名空间。
+   * `"__main__"` 为系统保留的独立匿名入口标识，其挂载单元仅允许 `packages["__main__"]`，`resources` 必须为空。它不属于具名包路径，亦不可在 `use: workflow:...` 中被引用。
 2. **基于 `_` 前缀的编译期硬性私有可见性边界（Compile-Time Package Visibility）**：
    * 设被调用目标工作流包路径为 $T = s_1 . s_2 . \dots . s_k \in \text{PackagePath}$（其中首段 $s_1 \in \text{PublicSegment}$）：
      * 若 $\forall i \in \{1, \dots, k\},\; s_i \in \text{PublicSegment}$（所有路径段均不以 `_` 开头），则 $T$ 为**公开工作流包（Public Workflow Package）**，可被任意工作流及外部匿名入口 `"__main__"` 调用；

@@ -56,7 +56,9 @@ $$\mathcal{B} = \{\texttt{"string"}, \texttt{"integer"}, \texttt{"number"}, \tex
 
 ### 5. 不透明句柄（`handle`）
 
-只允许 `type`、`kind` 与可选 `description`。`kind` 必填，形式为 `<ModulePath>:<PublicClassName>`：模块路径复用 package_path，类名复用 package_segment 且不能以 `_` 开头。私有模块段沿用工作流包可见性；编译器不导入 Python 类。可空与容器组合仍递归闭合。
+只允许 `type`、`kind` 与可选 `description`。`kind` 必填，形式为 `<ModulePath>:<PublicClassName>`：资源包路径复用 package_path，禁止 `__axcutor__` 和 `__ax_resources__` 保留段；类名复用 package_segment 且不能以 `_` 开头。私有包段沿用工作流包可见性；编译器不导入 Python 类。可空与容器组合仍递归闭合。
+
+`TypeSpec::parse` 只检查词法与类型结构，不读取编译上下文。编译 Pass 1 从所有根的 `resources` 文档建立全局资源符号表，递归核对每个 handle kind；未声明时报 `type.unknown_resource`，不可见时报 `visibility.private_resource`。资源头文件语法见[资源声明](../../docs/reference/05-resource-handles.md)。
 
 ```yaml
 tx: {type: handle, kind: infra.postgres:Tx}

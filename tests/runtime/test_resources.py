@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -15,6 +16,7 @@ from axcutor_runtime import AxcutorInterpreterWorkflow, Handle, compile_bundle, 
 from axcutor_runtime.activities import RunActivities
 from axcutor_runtime.builtin import compute_contract_sha256, synthesize_contract_module
 from axcutor_runtime.codec import dumps, loads
+from axcutor_runtime.packages import PackageMount, snapshot_mounts
 from axcutor_runtime.resource_model import ResourceRegistry, description, scan
 from axcutor_runtime.resources import ResourceContext, ResourceStore
 from axcutor_runtime.worker import create_worker
@@ -59,6 +61,9 @@ def resource_package(tmp_path, monkeypatch):
         "    pass\n",
         encoding="utf-8",
     )
+    (package / "__ax_resources__.yaml").write_text(
+        "resources: {Tx: null, Conn: null, File: null}\n"
+    )
     monkeypatch.syspath_prepend(str(tmp_path))
     module = importlib.import_module(name)
     yield module
@@ -66,6 +71,23 @@ def resource_package(tmp_path, monkeypatch):
         if key == name or key.startswith(name + "."):
             del sys.modules[key]
     importlib.invalidate_caches()
+
+
+def resource_mounts(module):
+    return snapshot_mounts([PackageMount(module.__name__, Path(module.__file__).parent)])
+
+
+@pytest.fixture
+def execution(execution, resource_package):
+    """The installed test resource package has an explicit static declaration mount."""
+
+    @asynccontextmanager
+    async def run(*args, **kwargs):
+        async with execution(*args, **kwargs) as state:
+            state.mounts = resource_mounts(resource_package)
+            yield state
+
+    return run
 
 
 def handle_type(module, cls="Tx"):
@@ -114,7 +136,11 @@ async def test_pure_activity_calls_release_records_and_decode_each_envelope_once
     import axcutor_runtime.workflow as interpreter_module
 
     document = graph({"work": action("work")}, ["start -> work", "work -> end"])
-    bundle = loads(compile_bundle("main", {"main": {"format": "json", "text": dumps(document)}}))
+    bundle = loads(
+        compile_bundle(
+            "main", {"main": {"packages": {"main": {"format": "json", "text": dumps(document)}}}}
+        )
+    )
     node = bundle["workflows"]["main"]["body"]["graph"]["nodes"]["work"]
     response = dumps(
         {
@@ -954,7 +980,13 @@ async def test_forged_child_depth_cannot_bypass_actual_root_interface(server, re
         "output": {},
         "run": {"executor": "builtin", "content": "return Output()"},
     }
-    bundle = compile_bundle("main", {"main": {"format": "json", "text": dumps(doc)}})
+    bundle = compile_bundle(
+        "main",
+        {
+            "main": {"packages": {"main": {"format": "json", "text": dumps(doc)}}},
+            **resource_mounts(resource_package),
+        },
+    )
     queue = "root-boundary-" + uuid4().hex
     async with create_worker(server.client, queue):
         handle = await server.client.start_workflow(

@@ -430,7 +430,8 @@ async def test_completed_activity_supplies_initial_boundary_for_a_cold_update(up
             AxcutorInterpreterWorkflow.run,
             {
                 "bundle_json": compile_bundle(
-                    "main", {"main": {"format": "json", "text": dumps(document)}}
+                    "main",
+                    {"main": {"packages": {"main": {"format": "json", "text": dumps(document)}}}},
                 ),
                 "input_json": "{}",
             },
@@ -467,7 +468,14 @@ async def test_one_initialization_timer_survives_four_rounds_and_cold_workers(up
                     AxcutorInterpreterWorkflow.run,
                     {
                         "bundle_json": compile_bundle(
-                            "main", {"main": {"format": "json", "text": dumps(document)}}
+                            "main",
+                            {
+                                "main": {
+                                    "packages": {
+                                        "main": {"format": "json", "text": dumps(document)}
+                                    }
+                                }
+                            },
                         ),
                         "input_json": "{}",
                     },
@@ -531,7 +539,8 @@ async def test_claim_advances_cfg_while_timers_are_delayed(
             AxcutorInterpreterWorkflow.run,
             {
                 "bundle_json": compile_bundle(
-                    "main", {"main": {"format": "json", "text": dumps(document)}}
+                    "main",
+                    {"main": {"packages": {"main": {"format": "json", "text": dumps(document)}}}},
                 ),
                 "input_json": "{}",
             },
@@ -610,7 +619,8 @@ async def test_claim_wins_when_its_deadline_is_ready_in_the_same_activation(
             AxcutorInterpreterWorkflow.run,
             {
                 "bundle_json": compile_bundle(
-                    "main", {"main": {"format": "json", "text": dumps(document)}}
+                    "main",
+                    {"main": {"packages": {"main": {"format": "json", "text": dumps(document)}}}},
                 ),
                 "input_json": "{}",
             },
@@ -670,7 +680,7 @@ async def test_cancellation_with_inflight_update_unwinds_all_waiters_after_repla
             AxcutorInterpreterWorkflow.run,
             {
                 "bundle_json": compile_bundle(
-                    "main", {"main": {"format": "json", "text": dumps(doc)}}
+                    "main", {"main": {"packages": {"main": {"format": "json", "text": dumps(doc)}}}}
                 ),
                 "input_json": "{}",
             },

@@ -1,5 +1,6 @@
 """Compile immutable package snapshots before submitting any Workflow execution."""
 
+from collections.abc import Mapping
 from typing import Any
 
 import axcutor_core
@@ -17,9 +18,9 @@ class CompilationError(ValueError):
         super().__init__(f"Axcutor compilation failed: {summary}")
 
 
-def compile_bundle(entry: str, packages: dict[str, dict[str, Any]]) -> str:
-    """Compile a dotted package map without filesystem I/O or Python imports."""
-    result_json = axcutor_core.compile_workflow(dumps({"entry": entry, "packages": packages}))
+def compile_bundle(entry: str, mounts: Mapping[str, Any]) -> str:
+    """Compile root-owned source snapshots without filesystem I/O or Python imports."""
+    result_json = axcutor_core.compile_workflow(dumps({"entry": entry, "mounts": dict(mounts)}))
     result = loads(result_json)
     if result["bundle"] is None:
         raise CompilationError(result_json)

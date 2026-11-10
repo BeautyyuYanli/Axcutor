@@ -119,9 +119,9 @@ def openapi_schema() -> dict[str, Any]:
             "SubmittedSource": obj(
                 {
                     "entry": text,
-                    "packages": {"type": "object", "additionalProperties": ref("SourceDocument")},
+                    "mounts": {"type": "object", "additionalProperties": ref("MountUnit")},
                 },
-                ["entry", "packages"],
+                ["entry", "mounts"],
             ),
             "WorkspaceExecution": obj(
                 {

@@ -7,6 +7,7 @@ Only reachable workflow packages contribute contracts, matching compile_bundle.
 
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from .builtin import synthesize_contract_module
 from .bundle import compile_bundle
@@ -29,7 +30,7 @@ def _runs(root: JsonObject) -> Iterator[JsonObject]:
 
 def generate_contracts(
     entry: str,
-    packages: dict[str, dict[str, str]],
+    snapshot: Mapping[str, Any],
     mounts: Sequence[PackageMount],
     *,
     check: bool = False,
@@ -37,12 +38,14 @@ def generate_contracts(
 ) -> list[Path]:
     """Write deterministic module stubs or check them; conflicting contracts fail.
 
+    snapshot is the root map from snapshot_mounts/load_mounts, including static
+    resource headers and executor policies. mounts supplies physical destinations.
     References resolving to the same implementation file must share their complete
     normalized contract, including declaration order/branches. Template targets
     cannot shadow Python packages. No implementation files are created or modified.
     """
     roots = resolve_mounts(mounts)
-    bundle = loads(compile_bundle(entry, packages))
+    bundle = loads(compile_bundle(entry, snapshot))
     planned: dict[Path, str] = {}
     implementations: dict[Path, str] = {}
     for owner, root in bundle["workflows"].items():

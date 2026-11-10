@@ -70,9 +70,24 @@ def openapi_schema() -> dict[str, object]:
                 "text": {"type": "string"},
             },
         },
+        "MountUnit": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "packages": {"type": "object", "additionalProperties": ref("SourceDocument")},
+                "resources": {"type": "object", "additionalProperties": ref("SourceDocument")},
+                "allowed_executors": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": (
+                        "null permits all executors; an empty list permits no run nodes."
+                    ),
+                },
+            },
+        },
         "SubmitExecutionRequest": {
             "type": "object",
-            "required": ["entry", "packages"],
+            "required": ["entry", "mounts"],
             "additionalProperties": False,
             "properties": {
                 "entry": {
@@ -80,11 +95,11 @@ def openapi_schema() -> dict[str, object]:
                     "minLength": 1,
                     "description": "__main__ or a public absolute dotted package path.",
                 },
-                "packages": {
+                "mounts": {
                     "type": "object",
-                    "additionalProperties": ref("SourceDocument"),
+                    "additionalProperties": ref("MountUnit"),
                     "description": (
-                        "Dotted package names to workflow documents; "
+                        "Root names to workflow/resource snapshots and executor policies; "
                         "no Python files or Worker mount configuration."
                     ),
                 },
@@ -368,9 +383,9 @@ def create_app(service: ExecutionService) -> Starlette:
             return _error("invalid_json", str(error), 400)
         if not isinstance(body, dict):
             raise InvalidRequest("request body must be an object")
-        if not {"entry", "packages"} <= body.keys():
-            raise InvalidRequest("entry and packages are required")
-        if body.keys() - {"entry", "packages", "input", "execution_id"}:
+        if not {"entry", "mounts"} <= body.keys():
+            raise InvalidRequest("entry and mounts are required")
+        if body.keys() - {"entry", "mounts", "input", "execution_id"}:
             raise InvalidRequest("unknown request fields")
         if "input" in body and not isinstance(body["input"], dict):
             raise InvalidRequest("input must be an object")
@@ -379,7 +394,7 @@ def create_app(service: ExecutionService) -> Starlette:
         ):
             raise InvalidRequest("execution_id must be a nonempty string")
         execution = await service.submit(
-            body["entry"], body["packages"], body.get("input", {}), body.get("execution_id")
+            body["entry"], body["mounts"], body.get("input", {}), body.get("execution_id")
         )
         # quote() leaves unreserved dots intact. Escape them too so IDs such as
         # '.' and '..' survive the HTTP client's path normalization.

@@ -34,7 +34,7 @@ from axcutor_runtime.bundle import CompilationError, compile_bundle
 from axcutor_runtime.codec import JsonObject, dumps, loads
 from axcutor_runtime.contracts import generate_contracts
 from axcutor_runtime.module import module_executor
-from axcutor_runtime.packages import load_packages
+from axcutor_runtime.packages import load_mounts
 from axcutor_runtime.worker import ResourceWorker, create_worker
 from axcutor_runtime.workflow import AxcutorInterpreterWorkflow
 from temporalio.client import Client
@@ -50,7 +50,7 @@ _HEARTBEAT_INTERVAL_MS = 200
 
 class SubmittedSource(TypedDict):
     entry: str
-    packages: dict[str, dict[str, str]]
+    mounts: dict[str, JsonObject]
 
 
 class WorkspaceState(WorkspaceView):
@@ -218,12 +218,12 @@ class Playground:
                 raise InvalidRequest("entry and input must identify existing workspace files")
             mounts = discover_mounts(self.workspace.root)
             try:
-                entry_id, packages = load_packages(self.workspace.root / entry, mounts)
-                generate_contracts(entry_id, packages, mounts)
+                entry_id, snapshot = load_mounts(self.workspace.root / entry, mounts)
+                generate_contracts(entry_id, snapshot, mounts)
                 inputs = loads((self.workspace.root / input).read_text("utf-8")) if input else {}
                 if not isinstance(inputs, dict):
                     raise InvalidRequest("workflow input must be a JSON object")
-                bundle = loads(compile_bundle(entry_id, packages))
+                bundle = loads(compile_bundle(entry_id, snapshot))
                 try:
                     axcutor_core.validate_root_interface(
                         dumps(bundle["workflows"][entry_id]["input"]),
@@ -250,7 +250,7 @@ class Playground:
             record: LatestTrace = {
                 "execution_id": execution_id,
                 "execution": None,
-                "source": {"entry": entry_id, "packages": deepcopy(packages)},
+                "source": {"entry": entry_id, "mounts": deepcopy(snapshot)},
                 "spans": [],
                 "observed_at": None,
                 "complete": False,
@@ -259,7 +259,7 @@ class Playground:
             self.latest = record
 
         try:
-            execution = await self.executions.submit(entry_id, packages, inputs, execution_id)
+            execution = await self.executions.submit(entry_id, snapshot, inputs, execution_id)
             record["execution"] = execution
         except RuntimeUnavailable as error:
             raise RuntimeUnavailable(
@@ -273,7 +273,7 @@ class Playground:
             self._trace_observer = asyncio.create_task(self._observe_trace(record))
         return {
             "execution": execution,
-            "source": {"entry": entry_id, "packages": packages},
+            "source": {"entry": entry_id, "mounts": snapshot},
             "workspace": self.view(),
         }
 

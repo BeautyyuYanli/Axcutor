@@ -9,7 +9,7 @@ const scopes: ReturnType<typeof effectScope>[] = [];
 const response = (raw: string, status = 200) => new Response(raw, { status, headers: { 'content-type': 'application/json' } });
 const execution = (id: string) => `{"execution_id":"${id}","status":"completed","frames":[],"started_at":"2026-01-01T00:00:00Z","finished_at":"2026-01-01T00:00:01Z","result":{"branch":null,"output":{}},"error":null}`;
 const exactValue = '{"2":99999999999999999999999999999999999,"1":1.00000000000000000000001}';
-const record = (id: string, complete = true) => `{"execution_id":"${id}","execution":${execution(id)},"source":{"entry":"${id}","packages":{}},`
+const record = (id: string, complete = true) => `{"execution_id":"${id}","execution":${execution(id)},"source":{"entry":"${id}","mounts":{}},`
   + `"spans":[{"id":"${id}:1","parent_id":null,"address":"${id}/copy","kind":"builtin","frame_kind":"iteration","cursor":"copy",`
   + `"status":"completed","started_at":"2026-01-01T00:00:00Z","finished_at":"2026-01-01T00:00:00Z","input":{"source":${exactValue}},"output":{"value":${exactValue}},`
   + `"branch":null,"error":null,"events":[]}],"observed_at":"2026-01-01T00:00:01Z","complete":${complete},"trace_error":null}`;
@@ -61,7 +61,7 @@ describe('latest trace observation', () => {
 
   it('preserves the latest Execution/source/output after rejected preflight', async () => {
     vi.useFakeTimers();
-    const submitted = `{"execution":${execution('first')},"source":{"entry":"first","packages":{}},"workspace":{"revision":"r1","files":[],"busy":false,"execution_id":null}}`;
+    const submitted = `{"execution":${execution('first')},"source":{"entry":"first","mounts":{}},"workspace":{"revision":"r1","files":[],"busy":false,"execution_id":null}}`;
     const fetch = vi.fn().mockResolvedValueOnce(response(submitted, 202)).mockResolvedValueOnce(response('{"error":{"code":"input_validation_failed","message":"invalid input","details":null}}', 422));
     vi.stubGlobal('fetch', fetch);
     const state = inScope(() => useExecution('http://test'));

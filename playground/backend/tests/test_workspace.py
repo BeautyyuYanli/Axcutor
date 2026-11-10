@@ -234,7 +234,7 @@ async def test_handle_root_preflight_preserves_idle_state_and_latest_trace(
     previous = {
         "execution_id": "previous",
         "execution": None,
-        "source": {"entry": "previous", "packages": {}},
+        "source": {"entry": "previous", "mounts": {}},
         "spans": [],
         "observed_at": None,
         "complete": True,
@@ -249,6 +249,8 @@ async def test_handle_root_preflight_preserves_idle_state_and_latest_trace(
         edits(view)
         + [
             {"path": "handle.yaml", "text": dumps(document)},
+            {"path": "workflows/infra/__init__.py", "text": ""},
+            {"path": "workflows/infra/__ax_resources__.yaml", "text": "resources: {Tx: null}\n"},
             {
                 "path": "handle_input.json",
                 "text": dumps({"tx": None} if position == "input" else {}),

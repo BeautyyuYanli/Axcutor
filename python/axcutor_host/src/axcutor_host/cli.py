@@ -17,7 +17,7 @@ from pathlib import Path
 import uvicorn
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.contracts import generate_contracts
-from axcutor_runtime.packages import PackageMount, load_packages
+from axcutor_runtime.packages import PackageMount, load_mounts
 from axcutor_runtime.worker import create_worker
 from temporalio.client import Client
 
@@ -63,10 +63,10 @@ async def _worker(
 async def _run(args: argparse.Namespace) -> None:
     if args.command == "contracts":
         mounts = [PackageMount(name, Path(path)) for name, path in _pairs(args.mount)]
-        entry, packages = load_packages(args.workflow, mounts)
+        entry, snapshot = load_mounts(args.workflow, mounts)
         mapping = dict(_pairs(args.module_mount)) if args.module_mount else None
         for path in generate_contracts(
-            entry, packages, mounts, check=args.check, module_mounts=mapping
+            entry, snapshot, mounts, check=args.check, module_mounts=mapping
         ):
             print(path)
         return
@@ -78,11 +78,11 @@ async def _run(args: argparse.Namespace) -> None:
     service = ExecutionService(client, args.task_queue)
     if args.command == "run":
         mounts = [PackageMount(name, Path(path)) for name, path in _pairs(args.mount)]
-        entry, packages = load_packages(args.workflow, mounts)
+        entry, snapshot = load_mounts(args.workflow, mounts)
         inputs = loads(args.input.read_text(encoding="utf-8")) if args.input else {}
         if not isinstance(inputs, dict):
             raise ValueError("workflow input must be a JSON object")
-        execution = await service.submit(entry, packages, inputs, args.id)
+        execution = await service.submit(entry, snapshot, inputs, args.id)
         print(dumps(execution), flush=True)
         if not args.no_wait:
             execution = await service.wait(execution["execution_id"])

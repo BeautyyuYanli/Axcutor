@@ -124,25 +124,41 @@ def _failure(cause: BaseException) -> ExecutionError:
 
 
 def _validate_submission(
-    entry: str, packages: dict[str, dict[str, Any]], inputs: JsonObject, execution_id: str | None
+    entry: str, mounts: JsonObject, inputs: JsonObject, execution_id: str | None
 ) -> None:
     if not isinstance(entry, str) or not entry:
         raise InvalidRequest("entry must be __main__ or a public dotted package path")
     if entry != "__main__" and not package_path(entry, public=True):
         raise InvalidRequest("entry must be __main__ or a public dotted package path")
-    if not isinstance(packages, dict):
-        raise InvalidRequest("packages must be an object")
-    for path, source in packages.items():
-        if not isinstance(path, str) or not isinstance(source, dict):
-            raise InvalidRequest("packages must map dotted names to {format, text} objects")
-        if path != "__main__" and not package_path(path):
-            raise InvalidRequest("package names require dotted paths with public roots")
+    if not isinstance(mounts, dict):
+        raise InvalidRequest("mounts must be an object")
+    for root, mount in mounts.items():
         if (
-            source.keys() != {"format", "text"}
-            or source["format"] not in ("yaml", "json")
-            or not isinstance(source["text"], str)
+            not isinstance(root, str)
+            or not isinstance(mount, dict)
+            or mount.keys() - {"packages", "resources", "allowed_executors"}
         ):
-            raise InvalidRequest("each source requires format (yaml or json) and text (string)")
+            raise InvalidRequest("each mount requires packages, resources and/or allowed_executors")
+        for field in ("packages", "resources"):
+            sources = mount.get(field, {})
+            if not isinstance(sources, dict):
+                raise InvalidRequest(f"{field} must be an object")
+            for path, source in sources.items():
+                if not isinstance(path, str) or not isinstance(source, dict):
+                    raise InvalidRequest(f"{field} must map dotted names to source objects")
+                if (
+                    source.keys() != {"format", "text"}
+                    or source["format"] not in ("yaml", "json")
+                    or not isinstance(source["text"], str)
+                ):
+                    raise InvalidRequest(
+                        "each source requires format (yaml or json) and text (string)"
+                    )
+        allowed = mount.get("allowed_executors")
+        if allowed is not None and (
+            not isinstance(allowed, list) or any(not isinstance(item, str) for item in allowed)
+        ):
+            raise InvalidRequest("allowed_executors must be null or a list of strings")
     if not isinstance(inputs, dict):
         raise InvalidRequest("input must be an object")
     if execution_id is not None and (not isinstance(execution_id, str) or not execution_id):
@@ -181,7 +197,7 @@ class ExecutionService:
     async def submit(
         self,
         entry: str,
-        packages: dict[str, dict[str, Any]],
+        mounts: JsonObject,
         input: JsonObject | None = None,
         execution_id: str | None = None,
     ) -> Execution:
@@ -191,8 +207,8 @@ class ExecutionService:
         never create a durable execution or contact the backend.
         """
         inputs = {} if input is None else input
-        _validate_submission(entry, packages, inputs, execution_id)
-        bundle_json = compile_bundle(entry, packages)
+        _validate_submission(entry, mounts, inputs, execution_id)
+        bundle_json = compile_bundle(entry, mounts)
         bundle = loads(bundle_json)
         try:
             axcutor_core.validate_root_interface(

@@ -95,7 +95,7 @@ pub fn package_segment(s: &str) -> bool {
 pub fn package_path(s: &str) -> bool {
     !s.starts_with('_')
         && s.split('.')
-            .all(|p| package_segment(p) && p != "__axcutor__")
+            .all(|p| package_segment(p) && !matches!(p, "__axcutor__" | "__ax_resources__"))
         && !matches!(s.rsplit('.').next(), Some("yaml" | "yml" | "json"))
 }
 

@@ -31,7 +31,7 @@ run: {executor: module, content: .gateway}
 | `.gateway` | `billing.charge.gateway` | `billing/charge/gateway_contract.py` |
 | `.sub.gateway` | `billing.charge.sub.gateway` | `billing/charge/sub/gateway_contract.py` |
 
-路径段为 ASCII 标识符，排除 Python 硬关键字。工作流包根不能以 `_` 开头；包名不能包含 `__axcutor__`，不能使用 `.yaml`、`.yml`、`.json` 文件后缀。工作流引用禁止斜杠、`.`、`..` 相对寻址和 `workflow:__main__`。`module.content` 仅允许 `.` 或单个前导点后的局部路径，禁止绝对模块名与上级跳转。
+路径段为 ASCII 标识符，排除 Python 硬关键字。工作流包根不能以 `_` 开头；包名不能包含 `__axcutor__` 或 `__ax_resources__`，不能使用 `.yaml`、`.yml`、`.json` 文件后缀。工作流引用禁止斜杠、`.`、`..` 相对寻址和 `workflow:__main__`。`module.content` 仅允许 `.` 或单个前导点后的局部路径，禁止绝对模块名与上级跳转。
 
 独立 YAML/JSON 入口文件映射为 `__main__`。匿名入口没有 Python 包上下文，因此不能直接包含 `module` 节点，但可调用公开工作流包。
 
@@ -42,7 +42,26 @@ run: {executor: module, content: .gateway}
 uv run --locked axcutor run workflows/billing/charge --mount billing=workflows/billing
 ```
 
-同一根名重复出现、物理根重叠、包目录与同名 `.py` 并存均被拒绝。目录中的命名空间父包可省略 `__axcutor__.yaml`，但必须含 `__init__.py`。发现与编译仅读取工作流文档，不导入或执行任何 Python 初始化代码。
+同一根名重复出现、物理根重叠、包目录与同名 `.py` 并存均被拒绝。目录中的命名空间父包可省略 `__axcutor__.yaml`，但必须含 `__init__.py`。快照扫描 `__axcutor__.yaml` 和资源声明 `__ax_resources__.yaml`；文档与祖先包须为普通文件和目录，不能使用符号链接。发现与编译不导入 Python。
+
+编译请求按根组织为 `{entry, mounts}`。每个根单元包含 `packages`、`resources` 与可选 `allowed_executors`，其中两类文档均以完整点分包名为键。文档必须归属自己的挂载根；`__main__` 单元只允许同名工作流，不能声明资源。
+
+Python 宿主可为各根配置独立的执行器白名单：
+
+```python
+from pathlib import Path
+from axcutor_runtime.packages import PackageMount, snapshot_mounts
+from axcutor_runtime import compile_bundle
+
+# app 只允许 signal；std 中的模块仍按 std 自己的策略编译。
+mounts = snapshot_mounts([
+    PackageMount("app", Path("workflows/app"), allowed_executors=("signal",)),
+    PackageMount("std", Path("workflows/std"), allowed_executors=("module",)),
+])
+bundle = compile_bundle("app.main", mounts)
+```
+
+`allowed_executors` 省略或为 `null` 表示不限制，空列表表示禁止全部 `run`；确定性 `builtin:` 算子不受此列表限制。白名单覆盖该根工作流中的顶层与嵌套 `run`，不继承到其他根。违规在 `run.executor` 处报 `schema.executor_not_allowed`，无需 Worker 运行期策略参数。
 
 私有可见性按每个 `_` 开头的段分别判断：
 
@@ -52,7 +71,7 @@ uv run --locked axcutor run workflows/billing/charge --mount billing=workflows/b
 | `reporting.daily` 或 `__main__` | `billing._risk` | 拒绝：`visibility.private_workflow` |
 | `billing.checkout` | `billing._risk.tools._detail` | 拒绝，还需位于 `billing._risk.tools` 子树 |
 
-外部入口只能选择所有段均公开的包或 `__main__`。签名表在检查各包实现前收集完毕，循环引用不依赖 `packages` 的声明顺序。
+外部入口只能选择所有段均公开的包或 `__main__`。所有资源声明先检查并形成符号表，再编译入口的工作流依赖闭包。签名表在检查各包实现前收集完毕，循环引用不依赖挂载或文档的声明顺序。
 
 ## 生成契约与编写实现
 
@@ -90,7 +109,7 @@ async def execute(input: Input) -> ReturnType:
 
 模板只包含契约与模块级 `__axcutor_contract_sha256__`，不包含业务函数。指纹覆盖归一化的输入、输出与分支，包括声明顺序。多个引用指向同一实际实现文件时，全部契约必须一致，包括 `.` 与 `.__init__`。模板目标与已有 Python 包目录同名、覆盖实现文件或共享实现契约不一致时，生成与 `--check` 均在写入前拒绝。模板变更后应重新生成并随业务包部署。
 
-含[资源句柄](../../reference/05-resource-handles.md)时，contracts 同样支持可重复 `--module-mount ROOT=PYTHON_PACKAGE`，生成精确资源类的静态导入。`--mount` 只决定 DSL 发现和文件位置，不推导 Python 包名；纯资源包无需 DSL 挂载。静态检查环境必须能导入映射后的资源类。
+含[资源句柄](../../reference/05-resource-handles.md)时，contracts 同样支持可重复 `--module-mount ROOT=PYTHON_PACKAGE`，生成精确资源类的静态导入。`--mount` 决定工作流与资源声明的发现和文件位置，不推导 Python 包名；纯资源包也须挂载其资源头文件。静态检查环境必须能导入映射后的资源类。
 
 ## Worker 绑定与生命周期
 

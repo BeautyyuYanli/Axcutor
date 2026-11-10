@@ -22,17 +22,23 @@ Content-Type: application/json
 | 字段 | 类型 | 规则 |
 | --- | --- | --- |
 | `execution_id` | string，可省略 | 非空执行 ID；省略时生成 UUID。保留期内相同 ID 返回 `409`，不复用已有执行。 |
-| `entry` | string | `__main__` 或 `packages` 中各段均公开的绝对点分包名，如 `billing.charge`。 |
-| `packages` | object | 点分包名到 `{ "format": "yaml" 或 "json", "text": "源码" }` 的映射；应提供全部传递引用。 |
+| `entry` | string | `__main__` 或对应根 `packages` 中各段均公开的绝对点分包名，如 `billing.charge`。 |
+| `mounts` | object | 根名到挂载单元的映射；每个单元包含 `packages`、`resources` 和可选 `allowed_executors`。 |
 | `input` | object，可省略 | 默认 `{}`；字段集合和类型必须符合入口输入契约。 |
 
 局部字段示例：
 
 ```json
-{"entry":"__main__","packages":{"__main__":{"format":"yaml","text":"..."}},"input":{"n":7}}
+{"entry":"__main__","mounts":{"__main__":{"packages":{"__main__":{"format":"yaml","text":"..."}},"allowed_executors":["signal"]}},"input":{"n":7}}
 ```
 
-`text` 应为完整合法工作流，示例中的 `...` 只表示源码位置。`use: workflow:billing.verify` 精确引用 `packages["billing.verify"]`；禁止文件路径、扩展名、相对引用与 `workflow:__main__`。根包必须公开，每个私有段都限制调用方位于其父包子树。未被入口闭包引用的文档不参与编译，但所有包名均检查合法性，重复 JSON 键会被拒绝。
+`text` 应为完整合法工作流，示例中的 `...` 只表示源码位置。`use: workflow:billing.verify` 精确引用 `mounts["billing"].packages["billing.verify"]`；禁止文件路径、扩展名、相对引用与 `workflow:__main__`。根包必须公开，每个私有段都限制调用方位于其父包子树。
+
+单元字段均可省略：`packages` 和 `resources` 默认为 `{}`，值均为完整点分包名到 `{format, text}` 源文档的映射，`format` 为 `yaml` 或 `json`。每个文档必须属于当前根，违反时报 `schema.package_path`；非法根名报 `schema.mount_root`。`__main__` 单元只能包含同名工作流，不能包含资源声明。重复 JSON 键在解析时拒绝。
+
+`allowed_executors` 为 `null` 或省略时不限制；字符串列表只允许其中的 `run.executor`，空列表禁止全部 `run`。策略仅作用于所属根，包括内联图节点，跨根调用按被调根的策略检查；违规报 `schema.executor_not_allowed`。确定性 `builtin:` 算子不受此策略限制。根内列表项须为合法执行器标识符。
+
+未被入口闭包引用的工作流不解析正文，但所有文档路径和资源声明都会检查。`resources` 提供[资源头文件](05-resource-handles.md)；工作流递归使用未声明的 handle kind 会报 `type.unknown_resource`。上述语义错误均返回 `422 compilation_failed`。
 
 具名包中的 `module` 节点绑定 Worker 已安装的 Python 实现；请求不包含 Python 文件或 Worker 挂载配置。匿名 `__main__` 不能直接使用 `module`，可调用公开具名包。执行的工作流快照不会随源码文件更新，Python 依赖部署由宿主管理，见 [包与模块指南](../guide/01-foundations/04-packages-and-modules.md)。
 

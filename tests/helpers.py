@@ -1,5 +1,13 @@
 """Shared source documents, always compiled by Rust before real execution."""
 
+
+def source_mounts(packages):
+    mounts = {}
+    for name, source in packages.items():
+        mounts.setdefault(name.split(".")[0], {"packages": {}})["packages"][name] = source
+    return mounts
+
+
 INTEGER = {"type": "integer"}
 N = {"type": "number"}
 B = {"type": "boolean"}

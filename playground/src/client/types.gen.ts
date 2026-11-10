@@ -9,16 +9,29 @@ export type SourceDocument = {
     text: string;
 };
 
+export type MountUnit = {
+    packages?: {
+        [key: string]: SourceDocument;
+    };
+    resources?: {
+        [key: string]: SourceDocument;
+    };
+    /**
+     * null permits all executors; an empty list permits no run nodes.
+     */
+    allowed_executors?: Array<string> | null;
+};
+
 export type SubmitExecutionRequest = {
     /**
      * __main__ or a public absolute dotted package path.
      */
     entry: string;
     /**
-     * Dotted package names to workflow documents; no Python files or Worker mount configuration.
+     * Root names to workflow/resource snapshots and executor policies; no Python files or Worker mount configuration.
      */
-    packages: {
-        [key: string]: SourceDocument;
+    mounts: {
+        [key: string]: MountUnit;
     };
     /**
      * Lossless JSON object; preserve number tokens and key order.
@@ -148,8 +161,8 @@ export type RunWorkspaceRequest = {
 
 export type SubmittedSource = {
     entry: string;
-    packages: {
-        [key: string]: SourceDocument;
+    mounts: {
+        [key: string]: MountUnit;
     };
 };
 

@@ -44,8 +44,19 @@ pub fn compile_packages(
 ) -> CompileOutput {
     compile_workflow(CompileRequest {
         entry: entry.into(),
-        packages: packages.into_iter().collect(),
+        mounts: mounts(packages),
     })
+}
+pub fn mounts(packages: impl IntoIterator<Item = (String, SourceDocument)>) -> Ordered<MountUnit> {
+    let mut mounts: Ordered<MountUnit> = Ordered::new();
+    for (id, source) in packages {
+        mounts
+            .entry(id.split('.').next().unwrap().into())
+            .or_default()
+            .packages
+            .insert(id, source);
+    }
+    mounts
 }
 pub fn source(v: Value) -> SourceDocument {
     SourceDocument {

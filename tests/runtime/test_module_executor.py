@@ -15,7 +15,7 @@ from axcutor_runtime.builtin import compute_contract_sha256, synthesize_contract
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.contracts import generate_contracts
 from axcutor_runtime.module import execute_module, module_executor
-from axcutor_runtime.packages import PackageMount, load_packages, snapshot_packages
+from axcutor_runtime.packages import PackageMount, load_mounts, snapshot_packages
 from axcutor_runtime.worker import create_worker, workflow_runner
 from helpers import INTEGER, N, S, array, call, graph
 from temporalio import exceptions
@@ -54,7 +54,7 @@ def installed(tmp_path, monkeypatch):
             (current / "__init__.py").touch()
             current = current.parent
         implementation.write_text(source)
-        entry, packages = load_packages(flow, [mount])
+        entry, packages = load_mounts(flow, [mount])
         generate_contracts(entry, packages, [mount])
         bundle_json = compile_bundle(entry, packages)
         normalized = loads(bundle_json)["workflows"][entry]
@@ -381,14 +381,16 @@ async def test_module_in_anonymous_entry_calls_named_package_and_replays(server,
     )
     logical_root = "logical_" + name
     logical_owner = logical_root + ".flow"
-    packages[logical_owner] = packages.pop(owner)
+    packages[logical_root] = packages.pop(name)
+    sources = packages[logical_root]["packages"]
+    sources[logical_owner] = sources.pop(owner)
     entry = graph(
         {"call": call(logical_owner, {"value": "value"}, {"value": "value"})},
         ["start -> call", "call -> end"],
         inputs={"value": INTEGER},
         outputs={"value": INTEGER},
     )
-    packages["__main__"] = {"format": "json", "text": dumps(entry)}
+    packages["__main__"] = {"packages": {"__main__": {"format": "json", "text": dumps(entry)}}}
     bundle_json = compile_bundle("__main__", packages)
     queue = str(uuid4())
     async with create_worker(server.client, queue, module_mounts={logical_root: name}):
@@ -429,7 +431,7 @@ def test_mount_conflicts_and_generation_never_import_python(installed):
 @pytest.mark.parametrize("check", [False, True])
 def test_signal_contract_generation_needs_no_mount_and_creates_no_python(check):
     doc = {"input": {}, "output": {}, "run": {"executor": "signal"}}
-    packages = {"__main__": {"format": "json", "text": dumps(doc)}}
+    packages = {"__main__": {"packages": {"__main__": {"format": "json", "text": dumps(doc)}}}}
     assert generate_contracts("__main__", packages, [], check=check) == []
 
 
@@ -464,7 +466,7 @@ def test_contract_generation_plans_conflicts_before_writing(installed, check, co
     elif conflict == "implementation":
         document["graph"]["nodes"]["b"]["run"]["content"] = ".impl_contract"
         expected = "conflicts with a module implementation"
-    packages = {owner: {"format": "json", "text": dumps(document)}}
+    packages = {mount.name: {"packages": {owner: {"format": "json", "text": dumps(document)}}}}
     before = {
         path.relative_to(flow): path.read_bytes() for path in flow.rglob("*") if path.is_file()
     }
@@ -480,9 +482,9 @@ def test_contract_check_reports_missing_without_writing(installed):
     _, owner, _, flow, mount, prepare = installed
     _, _, packages = prepare("raise AssertionError('must not import')\n", local=".new")
     # Generate a different destination from the same valid source snapshot.
-    document = loads(packages[owner]["text"])
+    document = loads(packages[mount.name]["packages"][owner]["text"])
     document["run"]["content"] = ".missing"
-    packages[owner]["text"] = dumps(document)
+    packages[mount.name]["packages"][owner]["text"] = dumps(document)
     with pytest.raises(ValueError, match="missing or stale"):
         generate_contracts(owner, packages, [mount], check=True)
     assert not (flow / "missing_contract.py").exists()
@@ -498,7 +500,7 @@ def test_consistent_contracts_for_initializer_aliases_are_allowed(installed):
         },
         ["start -> a", "a -> b", "b -> end"],
     )
-    packages = {owner: {"format": "json", "text": dumps(document)}}
+    packages = {mount.name: {"packages": {owner: {"format": "json", "text": dumps(document)}}}}
     implementation = (flow / "__init__.py").read_bytes()
     paths = generate_contracts(owner, packages, [mount])
     assert set(paths) == {flow / "_contract.py", flow / "__init___contract.py"}
@@ -532,7 +534,7 @@ async def test_inline_iteration_keeps_owner_and_normalized_contract(server, inst
         outputs={"results": array()},
     )
     (flow / "__axcutor__.yaml").write_text(dumps(document))
-    entry, packages = load_packages(flow, [mount])
+    entry, packages = load_mounts(flow, [mount])
     generate_contracts(entry, packages, [mount])
     queue = str(uuid4())
     async with create_worker(server.client, queue, module_mounts={name: name}):

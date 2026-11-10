@@ -4,7 +4,7 @@
  */
 import { onMounted, ref, shallowRef, watch, type Ref } from 'vue';
 import init, { compile_workflow } from '../wasm-pkg/axcutor_wasm';
-import type { CompileOutput, CompileRequest, SourceDocument } from '../types/compiler';
+import type { CompileOutput, CompileRequest, MountUnit } from '../types/compiler';
 
 let initialization: Promise<unknown> | undefined;
 
@@ -12,7 +12,7 @@ export function compileSource(source: CompileRequest): CompileOutput {
   return JSON.parse(compile_workflow(JSON.stringify(source))) as CompileOutput;
 }
 
-export function useCompiler(entry: Ref<string>, packages: Ref<Record<string, SourceDocument>>) {
+export function useCompiler(entry: Ref<string>, mounts: Ref<Record<string, MountUnit>>) {
   const ready = ref(false);
   const error = ref<string | null>(null);
   const compileOutput = shallowRef<CompileOutput | null>(null);
@@ -20,7 +20,7 @@ export function useCompiler(entry: Ref<string>, packages: Ref<Record<string, Sou
   const compile = () => {
     if (!ready.value) return;
     try {
-      compileOutput.value = compileSource({ entry: entry.value, packages: packages.value });
+      compileOutput.value = compileSource({ entry: entry.value, mounts: mounts.value });
       error.value = null;
     } catch (cause) {
       compileOutput.value = null;
@@ -36,7 +36,7 @@ export function useCompiler(entry: Ref<string>, packages: Ref<Record<string, Sou
       compile();
     } catch (cause) { error.value = `WASM initialization failed: ${String(cause)}`; }
   });
-  watch([entry, packages], compile, { deep: true });
+  watch([entry, mounts], compile, { deep: true });
 
   return { ready, error, compileOutput };
 }

@@ -49,8 +49,8 @@ def logical_module(physical: str, mounts: Mapping[str, str] | None) -> str:
     raise LookupError(f"no logical root mounted for {physical!r}")
 
 
-def load_module(target: str, *, current_package: bool | None = None) -> ModuleType:
-    """None permits either layout at the last component (resource modules)."""
+def load_module(target: str, *, current_package: bool) -> ModuleType:
+    """Require package ancestors and the requested package/file layout at the target."""
     parts = target.split(".")
     for index in range(1, len(parts) + 1):
         name = ".".join(parts[:index])
@@ -64,6 +64,6 @@ def load_module(target: str, *, current_package: bool | None = None) -> ModuleTy
             if package.with_suffix(".py").is_file() and (package / "__init__.py").is_file():
                 raise ImportError(f"ambiguous Python package and module: {name!r}")
         expected = True if index < len(parts) else current_package
-        if expected is not None and is_package != expected:
+        if is_package != expected:
             raise ImportError(f"module target has incompatible package/file layout: {name!r}")
     return importlib.import_module(target)

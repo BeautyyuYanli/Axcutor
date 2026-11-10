@@ -21,7 +21,19 @@ from axcutor_host import (
 from axcutor_runtime import AxcutorInterpreterWorkflow
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.worker import create_worker
-from helpers import INTEGER, N, action, array, assign, builtin, call, graph, inline, literal
+from helpers import (
+    INTEGER,
+    N,
+    action,
+    array,
+    assign,
+    builtin,
+    call,
+    graph,
+    inline,
+    literal,
+    source_mounts,
+)
 from temporalio import workflow
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
@@ -37,10 +49,12 @@ class OtherWorkflow:
 
 
 def packages(document, **extra):
-    return {
-        "demo.main": {"format": "json", "text": dumps(document)},
-        **{name: {"format": "json", "text": dumps(value)} for name, value in extra.items()},
-    }
+    return source_mounts(
+        {
+            "demo.main": {"format": "json", "text": dumps(document)},
+            **{name: {"format": "json", "text": dumps(value)} for name, value in extra.items()},
+        }
+    )
 
 
 def empty():
@@ -94,10 +108,12 @@ async def test_host_rejects_recursive_handle_interfaces_before_backend_contact(p
             "items": {"type": ["handle", "null"], "kind": "infra:Tx"},
         }
     }
+    mounts = packages(document)
+    mounts["infra"] = {"resources": {"infra": {"format": "yaml", "text": "resources: {Tx: null}"}}}
     with pytest.raises(InputValidationError, match="pure values"):
         await service(client).submit(
             "demo.main",
-            packages(document),
+            mounts,
             {"resources": []} if position == "input" else {},
         )
 

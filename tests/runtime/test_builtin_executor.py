@@ -28,7 +28,11 @@ def request(content, inputs=None, outputs=None, branches=None, values=None):
         "branches": branches or {},
         "run": {"executor": "builtin", "content": content},
     }
-    bundle = loads(compile_bundle("main", {"main": {"format": "json", "text": dumps(document)}}))
+    bundle = loads(
+        compile_bundle(
+            "main", {"main": {"packages": {"main": {"format": "json", "text": dumps(document)}}}}
+        )
+    )
     root = bundle["workflows"]["main"]
     return {
         "run_spec": root["body"]["run"],
@@ -604,7 +608,9 @@ async def test_documented_workflows_execute_with_default_builtin(
 ):
     text = await asyncio.to_thread((MANUAL / path).read_text)
     source = text.split("```yaml\n")[block].split("```")[0]
-    bundle_json = compile_bundle("main", {"main": {"format": "yaml", "text": source}})
+    bundle_json = compile_bundle(
+        "main", {"main": {"packages": {"main": {"format": "yaml", "text": source}}}}
+    )
     async with execution() as run:
         handle = await run.server.client.start_workflow(
             AxcutorInterpreterWorkflow.run,
@@ -630,7 +636,11 @@ def test_keyword_list_matches_public_compiler_restrictions():
                 dumps(
                     {
                         "entry": "main",
-                        "packages": {"main": {"format": "json", "text": dumps(source)}},
+                        "mounts": {
+                            "main": {
+                                "packages": {"main": {"format": "json", "text": dumps(source)}}
+                            }
+                        },
                     }
                 )
             )

@@ -16,8 +16,8 @@
    * **匿名入口工作流（`__main__`）隔离约束**：当工作流为未挂载在任何具名 Python 包下的匿名入口文档（$\text{workflow\_id} = \texttt{"\_\_main\_\_"}$）时，因不存在对应的宿主物理 Python 包上下文，编译期静态禁止使用 `executor: "module"`（报 `module.anonymous_package` 错误）。
    * **闭合执行体**：`RunSpec::Module {content}` 只允许 `executor` 和 `content` 两个键；额外字段产生 `schema.unknown_field`，非法局部路径在 `/run/content` 产生 `schema.run`。匿名入口中任意嵌套层级均禁止 `module`。
 3. **编译请求与静态包加载**：
-   * 编译请求为闭合对象 `{entry, packages}`，其中 `packages` 是点分包名到 `SourceDocument {format, text}` 的有序映射，完全替代 `sources`；映射重复键在解析时拒绝。入口为各段均公开的包或 `__main__`。
-   * 宿主以显式根挂载构建快照，拒绝重复根、重叠物理树和同名包定义。编译器仅解析入口依赖闭包，先收集顶层签名，再检查实现；循环引用不依赖声明顺序，且不触发 Python 导入。
+   * 编译请求为闭合对象 `{entry, mounts}`。`mounts` 按公开顶层根或 `__main__` 组织，每项为闭合 `MountUnit {packages, resources, allowed_executors}`。两类文档均为点分包名到 `SourceDocument {format, text}` 的有序映射，默认空；执行器白名单默认为 `null`。重复键在解析时拒绝，文档只能归属自己的根。匿名根仅允许 `packages["__main__"]`，不能声明资源。
+   * 宿主以显式根挂载构建快照，拒绝重复根、重叠物理树和同名包定义。编译器先检查所有资源声明，再解析入口工作流依赖闭包，先收集顶层签名，再检查实现；循环引用不依赖声明顺序，且不触发 Python 导入。每个文档使用所属根的执行器白名单，所有根复用同一编译管线。
    * 规范化原子根和图内 `run` 节点保存所属 `workflow_id`，内联图与迭代不会改变归属。解释器将该字段传给 Activity，业务模块只在 Activity 内加载。包名与逐层私有可见性详见 [文档文法](../01-grammar-and-ast/01-document-and-node-grammar.md) 和 [跨包调用规则](../03-static-flow-analysis/01-cfg-topology-and-sese-validation.md)。
 
 ---

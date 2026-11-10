@@ -20,6 +20,8 @@
 | Worker Store | 真实实例、本地使用者和 pending 状态 |
 | Attempt Context | 获准输入、本次分配及成功交接前的孤儿责任 |
 
+资源 kind 的模块部分定位资源包的 `__init__.py` 公开导出。定义类须为同名顶层类，定义模块的 `__package__` 必须等于该资源包的物理模块路径；允许初始化文件和同包单文件子模块，禁止跨包重导出。反向登记从定义模块的 `__package__` 经 Worker 根映射得到逻辑 kind，并复核公开导出仍为同一类。Store 运行期不读取 `__ax_resources__.yaml`。
+
 ## Activity 与 Child 交接
 
 `resource_context.resources` 与按输入 schema 找到的 rid/kind 集合完全一致。未知 ID 不能凭自带 locator 注册。自定义 Executor 仍只返回 `{branch, output}`；全部 Activity 统一包装：

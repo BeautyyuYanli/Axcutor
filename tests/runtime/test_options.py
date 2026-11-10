@@ -129,7 +129,7 @@ async def test_direct_workflow_options_fail_terminally_before_dispatch(execution
             {
                 "bundle_json": compile_bundle(
                     "main",
-                    {"main": {"format": "json", "text": dumps(document)}},
+                    {"main": {"packages": {"main": {"format": "json", "text": dumps(document)}}}},
                 ),
                 "input_json": "{}",
                 "options": options,
@@ -203,8 +203,8 @@ async def test_legacy_heartbeat_history_resumes_with_new_defaults_and_old_child_
         "bundle_json": compile_bundle(
             "main",
             {
-                "main": {"format": "json", "text": dumps(root)},
-                "child": {"format": "json", "text": dumps(child)},
+                "main": {"packages": {"main": {"format": "json", "text": dumps(root)}}},
+                "child": {"packages": {"child": {"format": "json", "text": dumps(child)}}},
             },
         ),
         "input_json": "{}",
