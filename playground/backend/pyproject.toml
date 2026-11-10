@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "axcutor-playground"
 version = "0.1.0"
 requires-python = ">=3.11"
-description = "Persistent file workbench and resident Worker for Axcutor"
+description = "Execution HTTP API and persistent file workbench for Axcutor"
 dependencies = [
     "axcutor-host==0.1.0",
     "axcutor-runtime==0.1.0",

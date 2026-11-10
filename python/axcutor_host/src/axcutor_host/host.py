@@ -1,7 +1,7 @@
 """Compile before durable submission and project Temporal into Execution values.
 
-Temporal owns all execution state. This service holds only a client and immutable
-configuration, never execution records or a result cache. Each read pins one run;
+Temporal owns all execution state. This host holds only a client and immutable
+configuration, never a Worker, execution records or a result cache. Each read pins one run;
 closed executions use history and need no Worker. Live queries are bounded and
 rechecked against Describe so completion racing a query keeps terminal invariants.
 """
@@ -165,7 +165,7 @@ def _validate_submission(
         raise InvalidRequest("execution_id must be a nonempty string")
 
 
-class ExecutionService:
+class AxcutorHost:
     """One async client, a default queue and copied runtime options.
 
     A lazy Client lets controllers perform compile/input preflight even during a

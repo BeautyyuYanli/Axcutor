@@ -1,16 +1,44 @@
 # 04. Execution HTTP API
 
-`axcutor serve` 启动 HTTP 宿主，提交、查询、取消与信号投递接口统一返回 `Execution` 资源。源码闭包与初始输入在提交端同步编译、校验，通过后才创建执行。宿主不保存执行状态；重启宿主不会取消已提交的执行。
+`axcutor-playground api` 启动独立执行 API，提交、查询、取消与信号投递接口统一返回 `Execution` 资源。源码闭包与初始输入在提交端同步编译、校验，通过后才创建执行。API 使用惰性 Temporal Client，不创建 Worker、工作区或执行缓存；重启 API 不会取消已提交的执行。
+
+Worker 由独立的 `axcutor worker` 进程提供，提交和轮询必须使用相同的 namespace 与 task queue。例如，在两个终端分别启动：
+
+```sh
+uv run --locked axcutor worker --task-queue axcutor
+uv run --locked axcutor-playground api --task-queue axcutor --port 8000
+```
+
+两者均支持 `--address`、`--namespace`，默认读取 `TEMPORAL_ADDRESS`、`TEMPORAL_NAMESPACE`；队列默认读取 `AXCUTOR_TASK_QUEUE`。API 支持 `--host` 和 `--port`，默认监听 `127.0.0.1:8000`。
+
+不带子命令的 `axcutor-playground` 启动完整工作台，默认监听 `127.0.0.1:8080`。工作台拥有工作区和专用队列上的驻留 Worker，使用 `/v1/workspace/executions` 提交，执行前校验 revision 并限制 busy 期间写入，直到执行与本地清理结束；它不提供普通 `/v1/executions` 提交路由。查询、取消和信号投递沿用本文的执行契约。
 
 ## OpenAPI 契约
 
 `GET /openapi.json` 返回 OpenAPI 3.1 描述，包含 `submitExecution`、`getExecution`、`cancelExecution`、`signalExecution` 操作及执行、帧和错误模型。读取 Schema 不连接 Temporal。静态导出使用同一份定义：
 
 ```sh
-uv run --locked python -m axcutor_host.http --output openapi.json
+uv run --locked python -m axcutor_playground.execution_http --output openapi.json
 ```
 
 `input`、帧变量和输出为任意业务 JSON；生成的客户端类型不能替代无损 JSON 处理。
+
+工作台的 Schema 由 `axcutor_playground.http` 导出；在 `playground/` 运行 `npm run generate:client` 可更新工作台 OpenAPI 和客户端。
+
+## Python 宿主接口
+
+协议无关的执行管理由 `axcutor_host.AxcutorHost` 提供，异常基类为 `HostError`。它只持有 Temporal Client、队列与运行配置，通过队列提交工作流，不持有 Worker 或执行记录：
+
+```python
+from axcutor_host import AxcutorHost
+
+# client 为 Temporal Client；entry、mounts 和 inputs 使用下文的提交契约。
+host = AxcutorHost(client, task_queue="axcutor")
+execution = await host.submit(entry, mounts, inputs)
+final = await host.wait(execution["execution_id"])
+```
+
+`get`、`wait`、`cancel`、`signal` 固定执行轮次并保留协同取消和子工作流路由语义。取消调用方的 `wait` 只停止观察，不取消工作流。
 
 ## 提交执行
 

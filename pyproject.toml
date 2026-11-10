@@ -5,18 +5,20 @@ requires-python = ">=3.11"
 description = "Axcutor development workspace"
 
 [tool.uv.workspace]
-members = ["crates/axcutor-py", "python/axcutor_runtime", "python/axcutor_host", "playground/backend"]
+members = ["crates/axcutor-py", "python/axcutor_runtime", "python/axcutor_host", "python/axcutor_cli", "playground/backend"]
 
 [tool.uv.sources]
 axcutor-core = { workspace = true }
 axcutor-runtime = { workspace = true }
 axcutor-host = { workspace = true }
+axcutor-cli = { workspace = true }
 axcutor-playground = { workspace = true }
 
 [dependency-groups]
 dev = [
   "axcutor-runtime",
   "axcutor-host",
+  "axcutor-cli",
   "axcutor-playground",
   "httpx>=0.28,<1",
   "pytest>=8",
@@ -27,7 +29,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/runtime", "tests/host", "playground/backend/tests"]
+testpaths = ["tests/runtime", "tests/host", "tests/cli", "playground/backend/tests"]
+# Playground tests reuse the fixtures and helpers defined under tests/.
+pythonpath = [".", "tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
@@ -41,8 +45,8 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pyrefly]
 python-version = "3.11"
-project-includes = ["python/axcutor_runtime/src", "python/axcutor_host/src", "playground/backend/src"]
-search-path = ["python/axcutor_runtime/src", "python/axcutor_host/src", "playground/backend/src"]
+project-includes = ["python/axcutor_runtime/src", "python/axcutor_host/src", "python/axcutor_cli/src", "playground/backend/src"]
+search-path = ["python/axcutor_runtime/src", "python/axcutor_host/src", "python/axcutor_cli/src", "playground/backend/src"]
 check-unannotated-defs = true
 # The native Rust extension does not ship Python type stubs.
 replace-untyped-imports-with-any = ["axcutor_core"]

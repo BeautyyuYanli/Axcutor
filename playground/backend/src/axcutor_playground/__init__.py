@@ -1,5 +1,6 @@
-"""Local file workbench built on the public Axcutor execution and runtime APIs.
+"""Execution HTTP adapters and a local workbench built on Axcutor public APIs.
 
-This package owns workspace storage, HTTP and one resident Worker's lifecycle. Host
-and runtime packages remain independent of it; Temporal owns execution state.
+The default workbench owns workspace storage and one resident Worker's lifecycle.
+The independent API owns neither. Host and runtime remain independent of HTTP;
+Temporal owns execution state in both modes.
 """

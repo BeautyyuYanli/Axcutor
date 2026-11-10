@@ -14,15 +14,12 @@ import signal
 from datetime import timedelta
 from pathlib import Path
 
-import uvicorn
+from axcutor_host import AxcutorHost, InvalidRequest
 from axcutor_runtime.codec import dumps, loads
 from axcutor_runtime.contracts import generate_contracts
 from axcutor_runtime.packages import PackageMount, load_mounts
 from axcutor_runtime.worker import create_worker
 from temporalio.client import Client
-
-from .http import create_app
-from .service import ExecutionService, InvalidRequest
 
 
 def _pairs(values: list[str]) -> list[tuple[str, str]]:
@@ -75,17 +72,21 @@ async def _run(args: argparse.Namespace) -> None:
     client = await Client.connect(
         args.address, namespace=args.namespace, lazy=args.command != "worker"
     )
-    service = ExecutionService(client, args.task_queue)
+    if args.command == "worker":
+        mapping = dict(_pairs(args.module_mount)) if args.module_mount else None
+        await _worker(client, args.task_queue, mapping)
+        return
+    host = AxcutorHost(client, args.task_queue)
     if args.command == "run":
         mounts = [PackageMount(name, Path(path)) for name, path in _pairs(args.mount)]
         entry, snapshot = load_mounts(args.workflow, mounts)
         inputs = loads(args.input.read_text(encoding="utf-8")) if args.input else {}
         if not isinstance(inputs, dict):
             raise ValueError("workflow input must be a JSON object")
-        execution = await service.submit(entry, snapshot, inputs, args.id)
+        execution = await host.submit(entry, snapshot, inputs, args.id)
         print(dumps(execution), flush=True)
         if not args.no_wait:
-            execution = await service.wait(execution["execution_id"])
+            execution = await host.wait(execution["execution_id"])
             print(dumps(execution), flush=True)
             if execution["status"] != "completed":
                 raise SystemExit(1)
@@ -93,21 +94,14 @@ async def _run(args: argparse.Namespace) -> None:
         outputs = loads(args.output.read_text(encoding="utf-8")) if args.output else {}
         if not isinstance(outputs, dict):
             raise InvalidRequest("output must be an object")
-        execution = await service.signal(
+        execution = await host.signal(
             args.execution_id, args.target_address, outputs, args.branch, args.step
         )
         if args.wait and execution["status"] == "running":
-            execution = await service.wait(args.execution_id)
+            execution = await host.wait(args.execution_id)
         print(dumps(execution), flush=True)
         if args.wait and execution["status"] != "completed":
             raise SystemExit(1)
-    elif args.command == "worker":
-        mapping = dict(_pairs(args.module_mount)) if args.module_mount else None
-        await _worker(client, args.task_queue, mapping)
-    elif args.command == "serve":
-        await uvicorn.Server(
-            uvicorn.Config(create_app(service), host=args.host, port=args.port)
-        ).serve()
 
 
 def main() -> None:
@@ -146,9 +140,6 @@ def main() -> None:
     contracts.add_argument(
         "--check", action="store_true", help="fail on missing or stale contracts"
     )
-    serve = commands.add_parser("serve", parents=[connection], help="serve the HTTP execution API")
-    serve.add_argument("--host", default="127.0.0.1", help="HTTP bind address")
-    serve.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:

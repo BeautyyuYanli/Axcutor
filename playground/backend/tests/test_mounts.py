@@ -2,8 +2,8 @@
 
 import httpx
 import pytest
-from axcutor_host import ExecutionService
-from axcutor_host.http import create_app
+from axcutor_host import AxcutorHost
+from axcutor_playground.execution_http import create_app
 from axcutor_runtime.codec import dumps, loads
 from temporalio.client import Client
 
@@ -41,7 +41,7 @@ async def test_mount_semantic_errors_are_422_before_connecting(change, code, pat
     unit["packages"]["app"] = {"format": "json", "text": dumps(document)}
     backend = await Client.connect("127.0.0.1:1", lazy=True)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=create_app(ExecutionService(backend))),
+        transport=httpx.ASGITransport(app=create_app(AxcutorHost(backend))),
         base_url="http://test",
     ) as client:
         response = await client.post(
