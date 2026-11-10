@@ -156,10 +156,16 @@ export type RunWorkspaceRequest = {
      * Relative workspace source path
      */
     entry: string;
-    input?: string | null;
+    input?: {
+        [key: string]: unknown;
+    };
 };
 
 export type SubmittedSource = {
+    /**
+     * Relative workspace source path
+     */
+    entry_path: string;
     entry: string;
     mounts: {
         [key: string]: MountUnit;

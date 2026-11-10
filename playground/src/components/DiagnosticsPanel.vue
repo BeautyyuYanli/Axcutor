@@ -2,7 +2,7 @@
 import type { Diagnostic } from '../types/compiler';
 import type { ExecutionProblem } from '../composables/useExecution';
 
-defineProps<{ diagnostics: Diagnostic[]; compilerError: string | null; httpError: ExecutionProblem | null; workspaceError: string | null }>();
+defineProps<{ diagnostics: Diagnostic[]; compilerError: string | null; httpError: ExecutionProblem | null; workspaceError: string | null; inputError: string | null }>();
 const emit = defineEmits<{ locate: [diagnostic: Diagnostic] }>();
 </script>
 
@@ -11,13 +11,14 @@ const emit = defineEmits<{ locate: [diagnostic: Diagnostic] }>();
     <h2 class="sr-only">Diagnostics</h2>
     <p v-if="workspaceError" role="alert">{{ workspaceError }}</p>
     <p v-if="compilerError" role="alert">{{ compilerError }}</p>
+    <p v-if="inputError" id="input-error" role="alert">{{ inputError }}</p>
     <div v-if="httpError" role="alert">
       <p>HTTP {{ httpError.status ?? '—' }} / {{ httpError.code }}: {{ httpError.message }}</p>
       <details v-if="httpError.detailsRaw && httpError.detailsRaw !== 'null'">
         <summary>Response details</summary><pre><code>{{ httpError.detailsRaw }}</code></pre>
       </details>
     </div>
-    <p v-if="!diagnostics.length && !compilerError && !httpError && !workspaceError">No diagnostics.</p>
+    <p v-if="!diagnostics.length && !compilerError && !httpError && !workspaceError && !inputError">No diagnostics.</p>
     <div v-if="diagnostics.length" class="table-scroll"><table>
       <thead><tr><th>Location</th><th>Code</th><th>Message</th></tr></thead>
       <tbody>

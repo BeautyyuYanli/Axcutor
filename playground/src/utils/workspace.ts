@@ -4,10 +4,24 @@
  */
 import type { WorkspaceFile } from '../client/types.gen';
 import type { CompileRequest, MountUnit } from '../types/compiler';
+import { isMap, parseDocument } from 'yaml';
 
 const keywords = new Set('False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield'.split(' '));
 const segment = (part: string) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(part) && !keywords.has(part) && !['__axcutor__', '__ax_resources__'].includes(part);
 const packageName = (parts: string[]) => !parts[0]?.startsWith('_') && parts.every(segment) && !['yaml', 'yml', 'json'].includes(parts.at(-1) ?? '');
+
+/** Detect standalone workflow headers without converting any business values.
+ * Package declarations stay selectable even while their text is incomplete.
+ * Plain JSON/YAML input objects and resource headers are never Run entries.
+ */
+export function isWorkflowEntry(file: WorkspaceFile): boolean {
+  if (!/\.(yaml|yml|json)$/.test(file.path) || file.path.split('/').at(-1) === '__ax_resources__.yaml') return false;
+  if (file.path.startsWith('workflows/') && file.path.endsWith('/__axcutor__.yaml')) return true;
+  try {
+    const document = parseDocument(file.text, { schema: 'failsafe' });
+    return isMap(document.contents) && (document.contents.has('graph') || document.contents.has('run'));
+  } catch { return false; }
+}
 
 export function workspaceSource(files: WorkspaceFile[], entryPath: string): CompileRequest & { paths: Record<string, string> } {
   const byPath = new Map(files.map(file => [file.path, file]));

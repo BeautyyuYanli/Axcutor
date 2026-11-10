@@ -32,7 +32,7 @@ from temporalio.testing import WorkflowEnvironment
 
 EXAMPLES = Path(__file__).resolve().parents[3] / "examples"
 ENTRY = "workflows/playground_demo/main/__axcutor__.yaml"
-INPUT = "inputs/demo.json"
+INPUT = {"items": [3, 1, 2], "delay_seconds": 0}
 DOUBLE = "workflows/playground_demo/double/__init__.py"
 HELPER = "workflows/playground_demo/double/helper.py"
 SUMMARY = "workflows/playground_demo/main/summarize.py"
@@ -112,6 +112,74 @@ async def test_playground_persists_fast_interval_and_pairs_worker_throttling(pla
         assert event.heartbeat_timeout.ToMilliseconds() == 30000
 
 
+async def test_inline_input_reaches_temporal_losslessly_without_input_files(playground):
+    host = playground
+    value_schema = {
+        "type": "object",
+        "properties": {
+            "integer": {"type": "integer"},
+            "decimal": {"type": "number"},
+            "huge": {"type": "number"},
+            "ordered": {"type": "object", "additionalProperties": {"type": "integer"}},
+        },
+    }
+    document = {
+        "input": {"value": value_schema},
+        "output": {"result": value_schema},
+        "graph": {
+            "nodes": {
+                "copy": {
+                    "use": "builtin:assign",
+                    "with": {"input": {"source": "value"}, "output": {"value": "result"}},
+                }
+            },
+            "edges": ["start -> copy", "copy -> end"],
+        },
+    }
+    view = host.view()
+    view = await host.save(view["revision"], edit(view, {"inline.json": dumps(document)}))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_playground_app(host)), base_url="http://test"
+    ) as client:
+        integer = "99999999999999999999999999999999999999999999999999"
+        revision = view["revision"]
+        for number in (integer, "7"):
+            raw = (
+                '{"value":{"integer":'
+                + number
+                + ',"decimal":1.00000000000000000000001,"huge":1e10000,'
+                + '"ordered":{"2":2,"1":1,"z":3}}}'
+            )
+            response = await client.post(
+                "/v1/workspace/executions",
+                content='{"entry":"inline.json","revision":'
+                + dumps(revision)
+                + ',"input":'
+                + raw
+                + "}",
+            )
+            assert response.status_code == 202, response.text
+            submitted = loads(response.text)
+            assert submitted["source"]["entry_path"] == "inline.json"
+            assert submitted["source"]["entry"] == "__main__"
+            revision = submitted["workspace"]["revision"]
+            execution_id = submitted["execution"]["execution_id"]
+            final = await wait_for(host, execution_id)
+            result = final["result"]["output"]["result"]
+            assert result == loads(raw)["value"]
+            assert list(result["ordered"]) == ["2", "1", "z"]
+            assert "1.00000000000000000000001" in dumps(result)
+            history = await host.client.get_workflow_handle(execution_id).fetch_history()
+            started = history.events[0].workflow_execution_started_event_attributes
+            [request] = await host.client.data_converter.decode(started.input.payloads)
+            assert loads(request["input_json"]) == loads(raw)
+            assert list(loads(request["input_json"])["value"]["ordered"]) == ["2", "1", "z"]
+            assert host.view()["revision"] == revision
+            latest = loads((await client.get("/v1/workspace/trace")).text)
+            assert latest["source"]["entry_path"] == "inline.json"
+        assert not any("input" in file["path"] for file in host.view()["files"])
+
+
 async def test_resident_worker_reimports_python_helpers_contracts_and_deleted_modules(playground):
     host = playground
     worker = host._worker
@@ -130,7 +198,6 @@ async def test_resident_worker_reimports_python_helpers_contracts_and_deleted_mo
         edit(
             view,
             {
-                INPUT: '{"items":[3,1,2],"delay_seconds":0}',
                 DOUBLE: double,
                 HELPER: "FACTOR = 1\n",
                 "shared_helper/offset.py": "VALUE = 0\n",  # Ordinary namespace helper package.
@@ -146,6 +213,7 @@ async def test_resident_worker_reimports_python_helpers_contracts_and_deleted_mo
     helper.write_text("FACTOR = 2\n")
     os.utime(helper, (stamp, stamp))
     first = await host.submit(ENTRY, INPUT, host.view()["revision"])
+    assert first["source"]["entry_path"] == ENTRY
     assert first["source"]["entry"] == "playground_demo.main"
     assert (await wait_for(host, first["execution"]["execution_id"]))["result"]["output"] == {
         "doubled": [6, 2, 4],
@@ -215,7 +283,6 @@ async def test_busy_rejects_writes_immediately_but_keeps_graph_concurrency(playg
         edit(
             view,
             {
-                INPUT: '{"items":[3,1,2],"delay_seconds":1}',
                 DOUBLE: double,
                 HELPER: "active = 0\npeak = 0\n",
             },
@@ -228,7 +295,7 @@ async def test_busy_rejects_writes_immediately_but_keeps_graph_concurrency(playg
             "/v1/workspace/executions",
             json={
                 "entry": ENTRY,
-                "input": INPUT,
+                "input": {**INPUT, "delay_seconds": 1},
                 "revision": view["revision"],
             },
         )
@@ -281,11 +348,10 @@ async def execute(input: Input) -> ReturnType:
                     "import asyncio\nstarted = asyncio.Event()\n"
                     "cleaning = asyncio.Event()\nrelease = asyncio.Event()\n"
                 ),
-                INPUT: '{"items":[1],"delay_seconds":30}',
             },
         ),
     )
-    result = await host.submit(ENTRY, INPUT, view["revision"])
+    result = await host.submit(ENTRY, {"items": [1], "delay_seconds": 30}, view["revision"])
     execution_id = result["execution"]["execution_id"]
     helper = None
     try:
@@ -327,16 +393,7 @@ async def execute(input: Input) -> ReturnType:
             helper.release.set()
     final = await wait_for(host, execution_id)
     assert final["status"] == ("failed" if terminate else "cancelled")
-    view = await host.save(
-        host.view()["revision"],
-        edit(
-            host.view(),
-            {
-                INPUT: '{"items":[1],"delay_seconds":0}',
-            },
-        ),
-    )
-    next_run = await host.submit(ENTRY, INPUT, view["revision"])
+    next_run = await host.submit(ENTRY, {"items": [1], "delay_seconds": 0}, host.view()["revision"])
     assert (await wait_for(host, next_run["execution"]["execution_id"]))["status"] == "completed"
 
 
@@ -345,7 +402,7 @@ async def test_shutdown_cancels_demo_and_restart_uses_fresh_queue(server, tmp_pa
     await host.start()
     view = host.view()
     queue = host.queue
-    result = await host.submit(ENTRY, INPUT, view["revision"])
+    result = await host.submit(ENTRY, {**INPUT, "delay_seconds": 5}, view["revision"])
     await host.close()
     assert (await host.executions.wait(result["execution"]["execution_id"]))[
         "status"
@@ -387,11 +444,10 @@ async def execute(input: Input) -> ReturnType:
                     "import asyncio\nstarted = asyncio.Event()\n"
                     "cleaning = asyncio.Event()\nrelease = asyncio.Event()\n"
                 ),
-                INPUT: '{"items":[1],"delay_seconds":30}',
             },
         ),
     )
-    await host.submit(ENTRY, INPUT, view["revision"])
+    await host.submit(ENTRY, {"items": [1], "delay_seconds": 30}, view["revision"])
     async with asyncio.timeout(5):
         while "playground_demo.double.helper" not in sys.modules:  # noqa: ASYNC110
             await asyncio.sleep(0.01)
@@ -455,6 +511,7 @@ async def test_ambiguous_submission_retains_id_without_automatic_resubmission(
         assert host.execution_id == execution_id
         latest = loads((await client.get("/v1/workspace/trace")).text)
         assert latest["execution_id"] == execution_id
+        assert latest["source"]["entry_path"] == ENTRY
         assert latest["source"]["entry"] == "playground_demo.main"
         assert (await client.get(f"/v1/executions/{execution_id}")).status_code == 200
         await host.executions.cancel(execution_id)
@@ -484,10 +541,7 @@ async def test_latest_trace_retains_completed_calls_snapshot_and_replaces_only_a
         transport=httpx.ASGITransport(app=create_playground_app(host)), base_url="http://test"
     ) as client:
         assert (await client.get("/v1/workspace/trace")).text == "null"
-        view = await host.save(
-            host.view()["revision"],
-            edit(host.view(), {INPUT: '{"items":[3,1,2],"delay_seconds":0}'}),
-        )
+        view = host.view()
         first = await host.submit(ENTRY, INPUT, view["revision"])
         first_id = first["execution"]["execution_id"]
         await wait_for(host, first_id)
@@ -512,20 +566,16 @@ async def test_latest_trace_retains_completed_calls_snapshot_and_replaces_only_a
         assert len({span["id"] for span in record["spans"]}) == len(record["spans"])
         assert all(span["finished_at"] is not None for span in record["spans"])
         source = deepcopy(record["source"])
-        view = await host.save(
-            host.view()["revision"], edit(host.view(), {INPUT: '{"items":"wrong"}'})
-        )
         failed = await client.post(
             "/v1/workspace/executions",
-            json={"entry": ENTRY, "input": INPUT, "revision": view["revision"]},
+            json={"entry": ENTRY, "input": {"items": "wrong"}, "revision": host.view()["revision"]},
         )
         assert failed.status_code == 422
         recovered = loads((await client.get("/v1/workspace/trace")).text)
         assert recovered["execution_id"] == first_id and recovered["source"] == source
-        view = await host.save(
-            host.view()["revision"], edit(host.view(), {INPUT: '{"items":[4],"delay_seconds":0}'})
+        second = await host.submit(
+            ENTRY, {"items": [4], "delay_seconds": 0}, host.view()["revision"]
         )
-        second = await host.submit(ENTRY, INPUT, view["revision"])
         second_id = second["execution"]["execution_id"]
         assert second_id != first_id
         assert (
@@ -546,10 +596,7 @@ async def test_trace_outage_does_not_change_terminal_status_or_hold_cleanup(
         raise RuntimeUnavailable("trace query disconnected")
 
     monkeypatch.setattr(host, "_read_trace", unavailable)
-    view = await host.save(
-        host.view()["revision"], edit(host.view(), {INPUT: '{"items":[],"delay_seconds":0}'})
-    )
-    result = await host.submit(ENTRY, INPUT, view["revision"])
+    result = await host.submit(ENTRY, {"items": [], "delay_seconds": 0}, host.view()["revision"])
     final = await wait_for(host, result["execution"]["execution_id"])
     assert final["status"] == "completed" and not host.view()["busy"]
     assert host.latest["trace_error"] and not host.latest["complete"]
@@ -696,7 +743,7 @@ async def test_independent_console_entry_starts_http_serves_static_and_runs_modu
                     content=dumps(
                         {
                             "revision": view["revision"],
-                            "files": edit(view, {INPUT: '{"items":[3,1,2],"delay_seconds":0}'}),
+                            "files": edit(view, {}),
                         }
                     ),
                 )

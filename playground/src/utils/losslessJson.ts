@@ -91,17 +91,18 @@ export class JsonText {
     return token ? this.text.slice(token.start, token.end) : null;
   }
 
-  format(path: JsonPath = []): string | null {
+  format(path: JsonPath = [], compact = false): string | null {
     const token = this.at(path);
     if (!token) return null;
     const render = (node: JsonToken, depth: number): string => {
       if (node.kind === 'scalar') return this.text.slice(node.start, node.end);
       const object = node.kind === 'object';
       const values = object
-        ? [...node.entries!].map(([key, child]) => `${node.keys!.get(key)}: ${render(child, depth + 1)}`)
+        ? [...node.entries!].map(([key, child]) => `${node.keys!.get(key)}:${compact ? '' : ' '}${render(child, depth + 1)}`)
         : node.items!.map(child => render(child, depth + 1));
       const [open, close] = object ? ['{', '}'] : ['[', ']'];
       if (!values.length) return open + close;
+      if (compact) return `${open}${values.join(',')}${close}`;
       return `${open}\n${'  '.repeat(depth + 1)}${values.join(`,\n${'  '.repeat(depth + 1)}`)}\n${'  '.repeat(depth)}${close}`;
     };
     return render(token, 0);

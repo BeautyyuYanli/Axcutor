@@ -158,3 +158,26 @@ iteration 的 `variables` 包含父帧锁定快照中的全部已绑定变量及
 | 503 | `runtime_unavailable` | 后端不可达、超时或运行态 Worker 无响应。 |
 
 未知路径与不允许的方法也返回 JSON 错误结构；宿主内部意外错误返回 `500 / internal_error`。工作流已创建后的业务失败属于 `Execution.status = failed`，查询仍返回 `200`。
+
+## Playground 工作区执行
+
+Playground 使用独立的工作区接口。源码通过 `PUT /v1/workspace` 保存；运行输入直接在页面顶部的 Input 编辑区填写，不写入工作区文件。
+
+```http
+POST /v1/workspace/executions
+Content-Type: application/json
+
+{"revision":"<当前工作区 revision>","entry":"workflows/demo/main/__axcutor__.yaml","input":{"items":[3,1,2],"delay_seconds":5}}
+```
+
+`revision` 必填，须与当前工作区版本相同，否则返回 `409 workspace_conflict`。`entry` 是工作区内的相对工作流源文件路径。`input` 可省略，默认为 `{}`；显式非对象返回 `400 invalid_request`，不满足入口契约返回 `422 input_validation_failed`。成功返回 `202`，响应包含 `execution`、已提交的 `source` 和最新 `workspace`。
+
+提交响应与 `GET /v1/workspace/trace` 中的 `source` 包含必填字段 `entry_path`、`entry` 和 `mounts`。`entry_path` 是提交时的相对源文件路径，标识 Input 草稿所属入口；`entry` 是编译与运行时的逻辑工作流标识。独立工作流的逻辑标识均为 `__main__`，通过不同文件路径区分输入归属。例如，`source` 的入口字段可以为：
+
+```json
+{"entry_path":"scratch/a.json","entry":"__main__"}
+```
+
+页面根据入口契约生成 Input 默认骨架，在浏览器中执行 JSON 与 TypeSpec 预检。每个入口的已编辑草稿在当前页面内保留；刷新后，只有路径与 `source.entry_path` 相同且 Input 未被编辑的入口可从最近执行的根调用记录恢复输入。内容相同的其他文件保留各自的默认输入。运行前仅在源码有未保存改动时保存工作区，单独修改 Input 不改变源码版本。输入和源码在提交、运行及本地清理期间保持只读。
+
+工作区执行沿用上述无损 JSON 规则。自行调用接口时，也应避免通过普通 JavaScript 数值转换业务输入。

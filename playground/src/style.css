@@ -38,6 +38,12 @@ caption { text-align: left; padding: .35rem .5rem; }
 .run-config { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto; align-items: end; gap: .75rem; padding: .65rem 1rem; border-bottom: 1px solid #d5dde8; }
 .run-config label { font-size: .85rem; font-weight: 600; }
 .run-config select { width: 100%; font-size: .95rem; font-weight: 400; text-overflow: ellipsis; }
+.run-input { display: grid; min-width: 0; gap: .2rem; }
+.input-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.input-heading button { padding: 0 .3rem; font-size: .8rem; }
+#run-input { width: 100%; min-width: 0; max-height: 40dvh; resize: vertical; border: 1px solid #b8c2cf; border-radius: 4px; padding: .35rem .6rem; font-size: .95rem; line-height: 1.45; }
+#run-input[readonly] { background: #f4f5f7; }
+#run-input[aria-invalid="true"] { border-color: #b63d3d; }
 .workbench-status { grid-column: 1 / -1; font-size: .85rem; color: #536176; }
 .workbench { --files-width: 15rem; display: grid; grid-template-columns: var(--files-column, var(--files-width)) var(--editor-column, minmax(0, 1fr)) minmax(0, 1fr); min-height: 0; gap: 1px; background: #d5dde8; }
 .workbench[data-files-open="false"] { --files-column: 2.5rem; }

@@ -171,22 +171,20 @@ async def test_preflight_diagnostics_and_input_errors_never_submit(workspace_cli
     )
     assert response.status_code == 422
     assert loads(response.text)["error"]["details"]["diagnostics"]
-    for value in ('{"items":[1.0],"delay_seconds":0}', '{"items":[],"items":[]}'):
-        files = [
-            dict(file, text=value) if file["path"] == "inputs/demo.json" else file for file in files
-        ]
-        view = await workspace.save(view["revision"], files)
+    for value, status, code in (
+        ('{"items":[1.0],"delay_seconds":0}', 422, "input_validation_failed"),
+        ('{"items":[],"items":[]}', 400, "invalid_json"),
+    ):
         response = await client.post(
             "/v1/workspace/executions",
-            content=dumps(
-                {
-                    "entry": "workflows/demo/main/__axcutor__.yaml",
-                    "input": "inputs/demo.json",
-                    "revision": view["revision"],
-                }
-            ),
+            content='{"entry":"workflows/demo/main/__axcutor__.yaml","revision":'
+            + dumps(playground.view()["revision"])
+            + ',"input":'
+            + value
+            + "}",
         )
-        assert response.status_code in (400, 422), response.text
+        assert response.status_code == status, response.text
+        assert loads(response.text)["error"]["code"] == code
     assert not playground.execution_id
 
 
@@ -199,19 +197,16 @@ async def test_preflight_error_returns_generated_files_and_revision(workspace_cl
         else file
         for file in edits(view)
     ]
-    files = [
-        dict(file, text="[]") if file["path"] == "inputs/demo.json" else file for file in files
-    ]
     saved = await workspace.save(view["revision"], files)
     response = await client.post(
         "/v1/workspace/executions",
         json={
             "entry": "workflows/demo/main/__axcutor__.yaml",
-            "input": "inputs/demo.json",
+            "input": {"items": "wrong", "delay_seconds": 0},
             "revision": saved["revision"],
         },
     )
-    assert response.status_code == 400, response.text
+    assert response.status_code == 422, response.text
     state = loads(response.text)["error"]["details"]["workspace"]
     assert state["revision"] != saved["revision"]
     assert not state["busy"]
@@ -234,7 +229,7 @@ async def test_handle_root_preflight_preserves_idle_state_and_latest_trace(
     previous = {
         "execution_id": "previous",
         "execution": None,
-        "source": {"entry": "previous", "mounts": {}},
+        "source": {"entry_path": "previous.yaml", "entry": "previous", "mounts": {}},
         "spans": [],
         "observed_at": None,
         "complete": True,
@@ -251,15 +246,15 @@ async def test_handle_root_preflight_preserves_idle_state_and_latest_trace(
             {"path": "handle.yaml", "text": dumps(document)},
             {"path": "workflows/infra/__init__.py", "text": ""},
             {"path": "workflows/infra/__ax_resources__.yaml", "text": "resources: {Tx: null}\n"},
-            {
-                "path": "handle_input.json",
-                "text": dumps({"tx": None} if position == "input" else {}),
-            },
         ],
     )
     response = await client.post(
         "/v1/workspace/executions",
-        json={"entry": "handle.yaml", "input": "handle_input.json", "revision": saved["revision"]},
+        json={
+            "entry": "handle.yaml",
+            "input": {"tx": None} if position == "input" else {},
+            "revision": saved["revision"],
+        },
     )
     assert response.status_code == 422, response.text
     assert "pure values" in response.text
@@ -292,8 +287,49 @@ async def test_specialized_schema_reuses_execution_models(workspace_client):
     _, _, client = workspace_client
     response = await client.get("/openapi.json")
     assert loads(response.text) == openapi_schema()
+    assert loads(response.text)["components"]["schemas"]["RunWorkspaceRequest"]["properties"][
+        "input"
+    ] == {"type": "object", "additionalProperties": True, "default": {}}
+    assert set(loads(response.text)["components"]["schemas"]["SubmittedSource"]["required"]) == {
+        "entry_path",
+        "entry",
+        "mounts",
+    }
     assert "/v1/executions" not in loads(response.text)["paths"]
     assert (await client.post("/v1/workspace", content="{}")).status_code == 405
     assert (
         await client.put("/v1/workspace", content='{"revision":1,"revision":2}')
     ).status_code == 400
+
+
+@pytest.mark.parametrize("value", [None, [], "inputs/demo.json", True, 1])
+async def test_run_input_rejects_nonobjects_without_changing_sources(workspace_client, value):
+    workspace, playground, client = workspace_client
+    before = await workspace.get()
+    assert not any(file["path"] == "inputs/demo.json" for file in before["files"])
+    response = await client.post(
+        "/v1/workspace/executions",
+        json={
+            "entry": "workflows/demo/main/__axcutor__.yaml",
+            "revision": before["revision"],
+            "input": value,
+        },
+    )
+    assert response.status_code == 400, response.text
+    assert loads(response.text)["error"]["code"] == "invalid_request"
+    assert await workspace.get() == before
+    assert playground.latest is None and playground.execution_id is None
+
+
+async def test_omitted_run_input_uses_empty_object_contract_preflight(workspace_client):
+    workspace, playground, client = workspace_client
+    response = await client.post(
+        "/v1/workspace/executions",
+        json={
+            "entry": "workflows/demo/main/__axcutor__.yaml",
+            "revision": (await workspace.get())["revision"],
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert loads(response.text)["error"]["code"] == "input_validation_failed"
+    assert playground.latest is None and playground.execution_id is None

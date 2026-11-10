@@ -79,6 +79,7 @@ try {
   const status = page.getByRole('region', { name: 'Execution inspector' });
   const graph = page.getByRole('region', { name: 'Control flow graph' });
   const editor = page.locator('#source-text');
+  const input = page.getByLabel('Input', { exact: true });
   const executionButton = page.getByRole('button', { name: /^Execution(?: · .*)?$/ });
   const diagnosticsButton = page.getByRole('button', { name: /^Diagnostics \(/ });
   const openExecution = async () => {
@@ -154,8 +155,9 @@ try {
   };
   const expectEditing = async (target, enabled) => {
     const text = target.locator('#source-text');
-    if (enabled) await expect(text).toBeEditable();
-    else await expect(text).not.toBeEditable();
+    const runInput = target.getByLabel('Input', { exact: true });
+    if (enabled) { await expect(text).toBeEditable(); await expect(runInput).toBeEditable(); }
+    else { await expect(text).not.toBeEditable(); await expect(runInput).not.toBeEditable(); }
     for (const name of ['Create file', 'Delete file', 'Save files', /^(Run|Submitting…)$/]) {
       const control = target.getByRole('button', { name, exact: true });
       if (enabled) await expect(control).toBeEnabled();
@@ -192,7 +194,27 @@ try {
   const summaryPath = 'workflows/demo/main/summarize.py';
   await expect(run).toBeEnabled();
   await expect(page.getByLabel('Entry', { exact: true })).toHaveValue(mainPath);
-  await expect(page.getByLabel('Input file', { exact: true })).toHaveValue('inputs/demo.json');
+  await expect(input).toHaveValue('{"items":[3,1,2],"delay_seconds":5}');
+  await expect(page.getByLabel('Input file', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Entry', { exact: true }).locator('option')).toHaveCount(3);
+  await expect(file('inputs/demo.json')).toHaveCount(0);
+  // Drafts belong to physical entries, including entries with different schemas.
+  const demoDraft = '{"items":[8],"delay_seconds":0}';
+  await input.fill(demoDraft);
+  await page.getByLabel('Entry', { exact: true }).selectOption('workflows/demo/double/__axcutor__.yaml');
+  await expect(input).toHaveValue('{"value":0,"delay_seconds":0}');
+  await input.fill('{"value":7,"delay_seconds":0}');
+  await page.getByLabel('Entry', { exact: true }).selectOption(mainPath);
+  await expect(input).toHaveValue(demoDraft);
+  await page.getByRole('button', { name: 'Expand Input', exact: true }).click();
+  const multiline = '{\n  "items": [3, 1, 2],\n  "delay_seconds": 5\n}';
+  await input.fill(multiline);
+  await page.getByRole('button', { name: 'Collapse Input', exact: true }).click();
+  await expect(input).toHaveValue('{"items":[3,1,2],"delay_seconds":5}');
+  await page.getByRole('button', { name: 'Expand Input', exact: true }).click();
+  await expect(input).toHaveValue(multiline);
+  await page.getByRole('button', { name: 'Collapse Input', exact: true }).click();
+  await expect(page.locator('[data-workspace-state]')).toHaveText('Saved');
   await expect(page.getByLabel('Entry', { exact: true }).locator('option:checked')).toHaveText('demo.main');
   await expect(page.getByLabel('Entry', { exact: true })).toHaveAttribute('title', mainPath);
   await expect(page.getByLabel('Entry', { exact: true }).locator('option[value="workflows/demo/double/__axcutor__.yaml"]')).toHaveText('demo.double');
@@ -308,8 +330,8 @@ try {
   await expect(editorToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(editor).toHaveAttribute('readonly', '');
   await expect(page.getByRole('button', { name: 'Delete file', exact: true })).toBeDisabled();
-  await select('inputs/demo.json');
-  await editor.fill('{"items":[3,1,2],"delay_seconds":5}');
+  await input.fill('{"items":[3,1,2],"delay_seconds":5}');
+  await expect(page.locator('[data-workspace-state]')).toHaveText('Saved');
   // Modifier parameters stay in source. Both root and graph nodes display only
   // behavior labels, including when legal integers exceed JavaScript precision.
   const modifiedRun = '"run":{"executor":"builtin","content":"return Output(value=1)"},"timeout_ms":9007199254740993,"retry":{"max_attempts":3,"backoff_ms":9007199254740993}';
@@ -348,20 +370,34 @@ try {
   await page.getByRole('button', { name: 'Delete file', exact: true }).click();
   await save();
 
-  // Two real pages share one revision; a stale Run preserves edits and submits nothing.
+  // A clean stale page submits its existing revision without saving. A dirty
+  // stale page stops at Save. Both preserve their independent input/source edits.
   const second = await browser.newPage();
   await second.goto(baseUrl);
   await expect(second.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
   await create('scratch/kept.py', '# saved by the first page\n');
   await save();
-  await second.getByRole('navigation', { name: 'Workspace files', exact: true }).getByRole('button', { name: 'inputs/demo.json', exact: true }).click();
-  await second.locator('#source-text').fill('{"items":[99],"delay_seconds":0}');
   let staleRuns = 0;
-  second.on('request', request => { if (request.url().endsWith('/v1/workspace/executions')) staleRuns++; });
+  let staleSaves = 0;
+  second.on('request', request => {
+    if (request.url().endsWith('/v1/workspace/executions')) staleRuns++;
+    if (request.url().endsWith('/v1/workspace') && request.method() === 'PUT') staleSaves++;
+  });
+  const secondInput = second.getByLabel('Input', { exact: true });
+  await secondInput.fill('{"items":[99],"delay_seconds":0}');
   await second.getByRole('button', { name: 'Run', exact: true }).click();
-  await expect(second.getByRole('alert')).toContainText('Workspace conflict');
-  await expect(second.locator('#source-text')).toHaveValue('{"items":[99],"delay_seconds":0}');
-  expect(staleRuns).toBe(0);
+  await expect(second.getByRole('alert')).toContainText('workspace_conflict');
+  await expect(secondInput).toHaveValue('{"items":[99],"delay_seconds":0}');
+  await expect(second.locator('[data-workspace-state]')).toHaveText('Saved');
+  expect(staleRuns).toBe(1);
+  expect(staleSaves).toBe(0);
+  const secondText = mainSourceText + '\n# Unsaved in the stale page.\n';
+  await second.locator('#source-text').fill(secondText);
+  await second.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect(second.getByRole('alert').filter({ hasText: 'Workspace conflict' })).toBeVisible();
+  await expect(second.locator('#source-text')).toHaveValue(secondText);
+  expect(staleRuns).toBe(1);
+  expect(staleSaves).toBe(1);
 
   // Submission, execution and cleanup lock editing; browsing remains available.
   await select(doublePath);
@@ -372,6 +408,7 @@ try {
   await select(doubleWorkflow);
   const doubleWorkflowText = await editor.inputValue();
   await select(mainPath);
+  await editor.fill(mainSourceText + '\n# Saved before run.\n');
   let resumeSave;
   const heldSave = new Promise(resolve => { resumeSave = resolve; });
   const holdSave = async route => {
@@ -391,7 +428,7 @@ try {
   await expect(status).toHaveAttribute('data-status', 'running');
   await expectEditing(page, false);
   await expectEditing(second, false);
-  await expect(second.locator('#source-text')).toHaveValue('{"items":[99],"delay_seconds":0}');
+  await expect(second.locator('#source-text')).toHaveValue(secondText);
   await second.close();
   await expect(graph.locator('[data-node-kind="workflow"][data-active="true"]')).toHaveCount(1);
   await expect(graph).toContainText('Running items: [0], [1]');
@@ -463,6 +500,22 @@ try {
   await select(doublePath);
   await expectEditing(page, true);
   await expect(page.locator('[data-workspace-state]')).toHaveText('Saved');
+  // Editing only input must never issue PUT or change the source revision.
+  const cleanRevision = (await (await page.request.get(workspaceUrl)).json()).revision;
+  let inputOnlySaves = 0;
+  const countSaves = request => {
+    if (request.url().endsWith('/v1/workspace') && request.method() === 'PUT') inputOnlySaves++;
+  };
+  page.on('request', countSaves);
+  await input.fill('{"items":[4],"delay_seconds":0}');
+  await expect(page.locator('[data-workspace-state]')).toHaveText('Saved');
+  await startRun();
+  await expect(status).toHaveAttribute('data-status', 'completed');
+  await expectEditing(page, true);
+  expect(inputOnlySaves).toBe(0);
+  expect((await (await page.request.get(workspaceUrl)).json()).revision).toBe(cleanRevision);
+  page.off('request', countSaves);
+  await input.fill('{"items":[3,1,2],"delay_seconds":5}');
   await editor.fill(doubleText.replace('input.value * 2', 'int(input.value) * 3'));
   await select(summaryPath);
   await editor.fill(summaryText.replace('sum(input.doubled)', 'sum(input.doubled) + 100'));
@@ -608,17 +661,17 @@ try {
     page.off('request', record);
   }
 
-  // Standalone JSON and raw input files preserve arbitrary precision and key order.
+  // Standalone workflows and inline input preserve arbitrary precision and key order.
   const longField = 'field_' + 'projection_'.repeat(12);
   const longOutput = 'long-output-'.repeat(60);
   const schema = { type: 'object', properties: { integer: { type: 'integer' }, decimal: { type: 'number' }, ordered: { type: 'object', additionalProperties: { type: 'integer' } }, [longField]: { type: 'string' } }, required: ['integer', 'decimal', 'ordered'] };
   const document = { input: { value: schema }, output: { result: schema }, graph: { nodes: { copy: { use: 'builtin:assign', with: { input: { source: 'value' }, output: { value: 'result' } } } }, edges: ['start -> copy', 'copy -> end'] } };
   await create('scratch/main.json', JSON.stringify(document));
+  await create('scratch/main-copy.json', JSON.stringify(document));
   await page.getByLabel('Entry', { exact: true }).selectOption('scratch/main.json');
   await expect(page.getByLabel('Entry', { exact: true }).locator('option:checked')).toHaveText('__main__');
   const exactValue = '{"integer":99999999999999999999999999999999999999999999999999,"decimal":1.00000000000000000000001,"ordered":{"2":2,"1":1,"z":3},"' + longField + '":"' + longOutput + '"}';
-  await create('scratch/input.json', '{"value":' + exactValue + '}');
-  await page.getByLabel('Input file', { exact: true }).selectOption('scratch/input.json');
+  await input.fill('{"value":' + exactValue + '}');
   await startRun();
   await expect(canvas).toHaveAttribute('data-canvas-source', 'execution');
   await expect(graph.locator('.vue-flow__node[data-id="copy"]')).toBeVisible();
@@ -662,6 +715,10 @@ try {
     await expect(recoveryEditor).toBeEditable();
     const editedText = await recoveryEditor.inputValue() + '\n# Unsaved during trace recovery.\n';
     await recoveryEditor.fill(editedText);
+    await completedRecovery.getByLabel('Entry', { exact: true }).selectOption('scratch/main.json');
+    const recoveredInput = completedRecovery.getByLabel('Input', { exact: true });
+    const editedInput = '{"value":{"integer":99,"decimal":1.0,"ordered":{}}}';
+    await recoveredInput.fill(editedInput);
     await completedRecovery.getByRole('button', { name: 'Retry trace', exact: true }).click();
     await completedRecovery.getByRole('button', { name: /^Execution ·/ }).click();
     const recoveredStatus = completedRecovery.getByRole('region', { name: 'Execution inspector' });
@@ -675,6 +732,8 @@ try {
     await completedRecovery.getByRole('button', { name: 'Locate in Flow', exact: true }).click();
     await expect(recoveryCanvas).toHaveAttribute('data-canvas-source', 'execution');
     await expect(completedRecovery.locator('.cfg-node[data-selected="true"]')).toContainText('copy');
+    await expect(recoveredInput).toHaveValue(editedInput);
+    await completedRecovery.getByRole('navigation', { name: 'Workspace files', exact: true }).getByRole('button', { name: mainPath, exact: true }).click();
     await expect(recoveryEditor).toHaveValue(editedText);
     await expect(completedRecovery.locator('[data-workspace-state]')).toHaveText('Unsaved changes');
     await screenshot('trace-retry-completed', completedRecovery);
@@ -746,8 +805,12 @@ try {
   await screenshot('trace-fast-lossless-390');
   await page.setViewportSize({ width: 1600, height: 1000 });
   await openExecution();
+  // Identical standalone sources still own different drafts. Reload must restore
+  // only the submitted physical entry, including exact numbers and key order.
+  await page.getByLabel('Entry', { exact: true }).selectOption('scratch/main-copy.json');
+  await expect(input).toHaveValue('{"value":{"integer":0,"decimal":0.0,"ordered":{}}}');
   await page.getByLabel('Entry', { exact: true }).selectOption('scratch/main.json');
-  await page.getByLabel('Input file', { exact: true }).selectOption('scratch/input.json');
+  await expect(input).toHaveValue('{"value":' + exactValue + '}');
   await select('scratch/main.json');
   await editor.fill(JSON.stringify(document).replaceAll('copy', 'edited_copy'));
   await expect(graph.locator('.vue-flow__node[data-id="edited_copy"]')).toBeVisible();
@@ -781,8 +844,7 @@ try {
   } };
   await create('scratch/waiting.json', JSON.stringify(waitingDocument));
   await page.getByLabel('Entry', { exact: true }).selectOption('scratch/waiting.json');
-  await select('scratch/input.json');
-  await editor.fill('{"value":' + exactValue + ',"parent_note":"Parent context stays selected"}');
+  await input.fill('{"value":' + exactValue + ',"parent_note":"Parent context stays selected"}');
   const waitingId = await startRun();
   await expect(executionButton).toHaveText('Execution · Waiting for signal');
   await expect(stepData.getByRole('heading')).toHaveText('__main__ › collect › receive');
@@ -898,20 +960,23 @@ try {
   const integerRoot = { input: { value: { type: 'integer' } }, output: {}, run: { executor: 'builtin', content: 'return Output()' } };
   await select('scratch/main.json');
   await editor.fill(JSON.stringify(integerRoot));
-  await select('scratch/input.json');
-  await editor.fill('{"value":1.0}');
-  await run.click();
-  await expect(page.getByRole('region', { name: 'Diagnostics', exact: true })).toContainText('input_validation_failed');
+  let preflightSubmissions = 0;
+  const countPreflight = request => { if (request.url().endsWith('/v1/workspace/executions')) preflightSubmissions++; };
+  page.on('request', countPreflight);
+  await input.fill('{"value":1.0}');
+  await expect(run).toBeDisabled();
+  await expect(page.getByRole('region', { name: 'Diagnostics', exact: true })).toContainText('Input:');
   await expect(diagnosticsButton).toHaveAttribute('aria-pressed', 'true');
-  await editor.fill('{"value":1,"value":2}');
-  await run.click();
-  await expect(page.getByRole('region', { name: 'Diagnostics', exact: true })).toContainText('duplicate JSON key');
+  await input.fill('{"value":1,"value":2}');
+  await expect(run).toBeDisabled();
+  await expect(page.getByRole('region', { name: 'Diagnostics', exact: true })).toContainText(/duplicate .*key/);
+  expect(preflightSubmissions).toBe(0);
+  page.off('request', countPreflight);
   const keptTrace = await (await page.request.get(new URL('/v1/workspace/trace', baseUrl).href)).json();
   expect(keptTrace.execution_id).toBe(waitingId);
   await select('scratch/main.json');
   await editor.fill(JSON.stringify({ ...integerRoot, run: { executor: 'builtin', content: 'raise ValueError("demo failure")' } }));
-  await select('scratch/input.json');
-  await editor.fill('{"value":1}');
+  await input.fill('{"value":1}');
   await startRun();
   await expect(status).toHaveAttribute('data-status', 'failed', { timeout: 15000 });
   await expect(status.getByRole('region', { name: 'Execution failure' })).toContainText('demo failure');
@@ -932,7 +997,7 @@ try {
   await page.setViewportSize({ width: 1600, height: 1000 });
 
   await page.getByLabel('Entry', { exact: true }).selectOption(mainPath);
-  await page.getByLabel('Input file', { exact: true }).selectOption('inputs/demo.json');
+  await input.fill('{"items":[3,1,2],"delay_seconds":5}');
   await startRun();
   await expect(status).toHaveAttribute('data-status', 'running');
   await expect(status.locator('[data-frame-kind="iteration"]')).toHaveCount(2);
@@ -953,9 +1018,7 @@ try {
   await expectEditing(page, true);
   // A real waiting run must also regain status, source and Cancel after Retry.
   await page.getByLabel('Entry', { exact: true }).selectOption('scratch/waiting.json');
-  await page.getByLabel('Input file', { exact: true }).selectOption('scratch/input.json');
-  await select('scratch/input.json');
-  await editor.fill('{"value":' + exactValue + ',"parent_note":"Retry recovery"}');
+  await input.fill('{"value":' + exactValue + ',"parent_note":"Retry recovery"}');
   const recoveryId = await startRun();
   const runningRecovery = await openWithTraceOutage();
   try {

@@ -4,7 +4,7 @@ import { useExecution } from '../src/composables/useExecution';
 
 const view = (status = 'running', output = 'null') => `{"execution_id":"demo","status":"${status}","started_at":"2026-01-01T00:00:00Z","finished_at":${status === 'running' ? 'null' : '"2026-01-01T00:00:01Z"'},"frames":[],"result":${output},"error":null}`;
 const response = (raw: string, status = 200) => new Response(raw, { status, headers: { 'content-type': 'application/json' } });
-const submitted = (raw: string) => `{"execution":${raw},"source":{"entry":"demo.main","mounts":{}},"workspace":{"revision":"generated","files":[],"busy":true,"execution_id":"demo"}}`;
+const submitted = (raw: string) => `{"execution":${raw},"source":{"entry_path":"workflows/demo/main/__axcutor__.yaml","entry":"demo.main","mounts":{}},"workspace":{"revision":"generated","files":[],"busy":true,"execution_id":"demo"}}`;
 const uncertainSubmission = JSON.stringify({
   error: {
     code: 'runtime_unavailable',
@@ -25,6 +25,24 @@ function controller() {
 afterEach(() => { scopes.splice(0).forEach(scope => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('generated Hey API execution boundary', () => {
+  it.each(['null', '[]', '1', '"input.json"', '{"n":1,"n":2}', '{} , "revision":"injected"'])('rejects invalid raw input before sending %s', async raw => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const state = controller();
+    expect(await state.run('main.yaml', raw, 'revision')).toBe(false);
+    expect(state.error.value?.code).toBe('invalid_input');
+    expect(state.submitting.value).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('defaults input to an empty object and escapes envelope strings', async () => {
+    const fetch = vi.fn().mockResolvedValue(response(submitted(view('completed', '{"branch":null,"output":{}}')), 202));
+    vi.stubGlobal('fetch', fetch);
+    const state = controller();
+    expect(await state.run('main".yaml', undefined, 'r\n"1')).toBe(true);
+    expect(await (fetch.mock.calls[0][0] as Request).text()).toBe('{"entry":"main\\".yaml","input":{},"revision":"r\\n\\"1"}');
+  });
+
   it('waits for a slow poll before scheduling the next 300ms query and stops at terminal', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     const gets: Request[] = [];
@@ -39,7 +57,7 @@ describe('generated Hey API execution boundary', () => {
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main.yaml', null, 'revision');
+    await state.run('main.yaml', '{}', 'revision');
     await vi.advanceTimersByTimeAsync(299);
     expect(gets).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
@@ -71,12 +89,13 @@ describe('generated Hey API execution boundary', () => {
     expect(state.error.value).toBeNull();
   });
 
-  it('submits file paths, polls every 300ms, retains output tokens and stops on terminal', async () => {
+  it('submits raw input, polls every 300ms, retains output tokens and stops on terminal', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(response(submitted(view()), 202)).mockResolvedValueOnce(response(view('completed', '{"branch":null,"output":{"2":1.0,"1":999999999999999999999999999999}}')));
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    expect(await state.run('main.yaml', 'input.json', 'revision')).toBe(true);
-    expect(JSON.parse(await (fetch.mock.calls[0][0] as Request).text())).toEqual({ entry: 'main.yaml', input: 'input.json', revision: 'revision' });
+    const raw = '{"2":1.0,"1":999999999999999999999999999999,"decimal":1.00000000000000000001,"huge":1e10000}';
+    expect(await state.run('main.yaml', raw, 'revision')).toBe(true);
+    expect(await (fetch.mock.calls[0][0] as Request).text()).toBe(`{"entry":"main.yaml","input":${raw},"revision":"revision"}`);
     expect(fetch.mock.calls[0][0].url).toBe('http://test/v1/workspace/executions');
     expect(state.source.value?.entry).toBe('demo.main');
     await vi.waitFor(() => expect(state.execution.value?.status).toBe('completed'), { timeout: 2000 });
@@ -95,7 +114,7 @@ describe('generated Hey API execution boundary', () => {
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main.yaml', null, 'revision');
+    await state.run('main.yaml', '{}', 'revision');
     await state.cancel();
     expect(state.cancelRequested.value).toBe(true);
     expect(state.execution.value?.status).toBe('running');
@@ -117,12 +136,12 @@ describe('generated Hey API execution boundary', () => {
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    expect(await state.run('main.yaml', null, 'revision')).toBe(false);
+    expect(await state.run('main.yaml', '{}', 'revision')).toBe(false);
     expect(state.observedId.value).toBe('demo');
     expect(state.execution.value).toBeNull();
     expect(state.source.value).toBeNull();
     expect(state.workspace.value?.busy).toBe(true);
-    expect(await state.run('main.yaml', null, 'revision')).toBe(false);
+    expect(await state.run('main.yaml', '{}', 'revision')).toBe(false);
     await vi.advanceTimersByTimeAsync(300);
     expect(state.execution.value?.status).toBe('running');
     await vi.advanceTimersByTimeAsync(300);
@@ -150,7 +169,7 @@ describe('generated Hey API execution boundary', () => {
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main.yaml', null, 'revision');
+    await state.run('main.yaml', '{}', 'revision');
     await vi.advanceTimersByTimeAsync(300);
     expect(state.execution.value).toBeNull();
     expect(state.observedId.value).toBe('demo');
@@ -182,7 +201,7 @@ describe('generated Hey API execution boundary', () => {
     const fetch = vi.fn().mockResolvedValue(response(raw, status));
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    expect(await state.run('main.yaml', 'input.json', 'revision')).toBe(false);
+    expect(await state.run('main.yaml', '{}', 'revision')).toBe(false);
     expect(state.error.value).toMatchObject({ status, code });
     expect(state.execution.value).toBeNull();
     expect(state.observedId.value).toBeNull();
@@ -200,7 +219,7 @@ describe('generated Hey API execution boundary', () => {
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main.yaml', null, 'revision');
+    await state.run('main.yaml', '{}', 'revision');
     await vi.waitFor(() => expect(signal).not.toBeNull());
     scopes[0].stop();
     expect(signal!.aborted).toBe(true);
@@ -217,7 +236,7 @@ describe('generated Hey API execution boundary', () => {
     });
     vi.stubGlobal('fetch', fetch);
     const state = controller();
-    await state.run('main.yaml', null, 'revision');
+    await state.run('main.yaml', '{}', 'revision');
     await vi.waitFor(() => expect(pollSignal).not.toBeNull());
     await state.cancel();
     expect(pollSignal!.aborted).toBe(true);
