@@ -15,8 +15,8 @@ Axcutor 中所有的 `input`、`output` 及 `graph.variables` 均采用 **标准
 | **2. 强类型列表（Array）** | `type: array`<br>`items: <TypeSpec>` *(必填)* | 同质元素有序列表（支持 `for_each` 遍历、`builtin:length` 长度计算、`builtin:array_get` 下标随机访问、`builtin:array_shift` 首元素弹出、`builtin:array_append` 末尾追加、`builtin:array_concat` 列表拼接与 `builtin:array_flatten` 二维列表展平）。 |
 | **3. 强类型结构体（TypedDict）** | `type: object`<br>`properties: { <k>: <TypeSpec> }` *(必填非空，键名 `<k>` 须为合法受限标识符)*<br>`required: [...]` *(可选，省略时默认全部必填)* | 固定字段记录结构（支持通过 `builtin:object_merge` 不可变构造或覆盖更新字段；非空时支持 `var.field` 静态字段路径投影并配合 `builtin:assign` 提取嵌套字段，详见下方投影规则）。 |
 | **4. 强类型有序映射（Ordered Map）** | `type: object`<br>`additionalProperties: <TypeSpec>` *(必填，不可为布尔值)* | 动态 `string` 键、同质值的有序字典（运行时保持插入顺序，支持 `for_each` 遍历、`builtin:length` 键值对计数，以及 `builtin:map_get` 动态键查找、`builtin:map_set` 写入与 `builtin:map_delete` 移除）。 |
-| **5. 资源句柄（Handle）** | `type: handle`<br>`kind: <ModulePath>:<PublicClassName>` | 内部受管资源身份；同 kind 兼容，不支持字段投影。详见[资源句柄](./05-resource-handles.md)。 |
-| **显式可空修饰（`Optional<T>`）** | `type: [<BaseType>, "null"]`<br>*(配套字段与 `<BaseType>` 一致)* | 可通过 `builtin:unwrap` 收窄为非空 T；根接口及 signal 输出禁止句柄，包括可空句柄和句柄容器。 |
+| **5. 资源句柄（Handle）** | `type: handle`<br>`kind: <ModulePath>:<PublicClassName>` *(必填，须在挂载根的 `__ax_resources__.yaml` 中声明)* | 工作流内部传递受管 Python 对象的不透明身份句柄（支持 `builtin:assign`、`builtin:unwrap`、容器算子及同 `kind` 的 `builtin:compare` `eq`/`ne` 判等；不支持 `.field` 投影，且宿主根入口与 `signal` 输出禁止包含句柄）。详见 [05. 资源句柄](./05-resource-handles.md)。 |
+| **显式可空修饰（`Optional<T>`）** | `type: [<BaseType>, "null"]`<br>*(配套字段与 `<BaseType>` 一致)* | 允许值为 `null`，可通过 `builtin:unwrap` 收窄为非空 `<BaseType>`。 |
 
 > [!NOTE]
 > **结构体静态字段路径投影规则（`.field`）**
@@ -85,7 +85,12 @@ module_scores:
   additionalProperties:
     type: number
 
-# 7. graph.variables 中声明带 default 初值与未初始化局部变量
+# 7. 不透明资源句柄（Handle：type: handle + kind）
+db_tx:
+  type: handle
+  kind: infra.postgres:Tx
+
+# 8. graph.variables 中声明带 default 初值与未初始化局部变量
 graph:
   variables:
     # 标量带初值声明（TypeSpec + default）
@@ -102,6 +107,11 @@ graph:
       type: object
       additionalProperties: { type: string }
       default: {}
+    # 可空句柄初值声明（非空 handle 禁止字面量初值，可空 handle 允许 default: null）
+    cached_tx:
+      type: [handle, "null"]
+      kind: infra.postgres:Tx
+      default: null
     # 未初始化局部变量声明（仅声明 TypeSpec，省略 default，由后续节点写入定值）
     current_label:
       type: string
@@ -114,15 +124,16 @@ graph:
 Axcutor 严格区分**同帧同名变量声明（双向等价 $T_1 \equiv T_2$）**与**跨变量值流转及传参（单向子类型兼容 $T_{\text{actual}} <: T_{\text{expected}}$）**：
 
 * **同帧同名显式声明（$T_1 \equiv T_2$）**：同一张图内若多处显式声明同一个变量名的 `TypeSpec`（如同时在宿主 `output` 与 `ActionNode.output` 中声明），两处声明必须完全等价。
-* **值流转与契约消费（$T_{\text{actual}} <: T_{\text{expected}}$）**：在 `use: workflow:<PackagePath>` 传参与输出接收、`builtin:*` 算子赋值/更新以及 `for_each` 一阶集合提升写入位置，均支持以下五条静态子类型兼容规则（基于纯函数式写时复制不可变内存模型，容器协变在编译期 100% 类型安全）：
+* **值流转与契约消费（$T_{\text{actual}} <: T_{\text{expected}}$）**：在 `use: workflow:<PackagePath>` 传参与输出接收、`builtin:*` 算子赋值/更新以及 `for_each` 一阶集合提升写入位置，均支持以下六条静态子类型兼容规则（基于纯函数式写时复制不可变内存模型，容器协变在编译期 100% 类型安全）：
 
 | 子类型规则 | 兼容方向（$T_{\text{sub}} <: T_{\text{sup}}$） | 典型应用场景 |
 | :--- | :--- | :--- |
-| **1. 可空性单调提升** | 非空 `T` $<:$ 显式可空 `[T, "null"]`<br>*(反向禁止：可空不可直接赋给非空，须先 `builtin:unwrap`)* | 将已确认非空的 `string` 变量传入子工作流的可选参数 `[string, "null"]`，或赋给初始为 `null` 的可空状态变量。 |
+| **1. 可空性单调提升** | 非空 `T` $<:$ 显式可空 `[T, "null"]`<br>*(反向禁止：可空不可直接赋给非空，须先 `builtin:unwrap`)* | 将已确认非空的 `string` 或 `handle` 变量传入子工作流的可选参数，或赋给初始为 `null` 的可空状态变量。 |
 | **2. 数值与枚举拓宽** | • `integer` $<:$ `number`<br>• 子枚举 `enum: [a, b]` $<:$ 父枚举 `enum: [a, b, c]` $<:$ 无 `enum` 基础标量 | 将 `integer` 计数传给期望 `number` 的计算节点；将带 `enum` 的分类状态传给通用 `string` 日志参数。 |
 | **3. 列表协变（`Array`）** | 若 $T_1 <: T_2$，则 `Array<T1>` $<:$ `Array<T2>` | 将 `Array<integer>` 赋给 `Array<number>`，或将 `Array<string(enum)>` 传给期望 `Array<string>` 的子工作流。 |
 | **4. 有序映射协变（`OrderedMap`）** | 若 $V_1 <: V_2$，则 `OrderedMap<string, V1>` $<:$ `OrderedMap<string, V2>` | 将非空值映射 `OrderedMap<string, string>` 赋给允许空值的 `OrderedMap<string, [string, "null"]>`。 |
 | **5. 结构体深度协变与必填强化（`TypedDict`）** | 若 $T_1 <: T_2$，须同时满足：<br>• **必填集强化**：$\text{set}(T_2.\text{required}) \subseteq \text{set}(T_1.\text{required})$（目标必填字段在源类型中均必填）<br>• **字段集闭合**：$\text{dom}(T_1.\text{properties}) \subseteq \text{dom}(T_2.\text{properties})$（源类型不含目标未声明的多余字段）<br>• **共有属性协变**：$\forall f \in \text{dom}(T_1.\text{properties}),\ T_1.\text{properties}[f] <: T_2.\text{properties}[f]$ | 将全部字段必填且非空的精确结构体，赋给部分字段可选（非 `required`）或字段类型为可空/父类型的同构目标结构体。 |
+| **6. 资源句柄名义匹配（`Handle`）** | 当 `T1.kind == T2.kind` 时，非空 `handle` $<:$ 同 `kind` 的非空或可空 `[handle, "null"]`（不支持跨 `kind` 继承） | 将节点创建的非空 `handle` 写入初始为 `null` 的可空句柄变量，或放入同 `kind` 的句柄容器中。 |
 
 ```yaml
 graph:

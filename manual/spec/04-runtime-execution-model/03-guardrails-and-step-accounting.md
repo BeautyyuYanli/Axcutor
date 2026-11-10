@@ -51,16 +51,16 @@
    * **Activity 执行器节点**（`run.executor != "signal"`）：单次尝试的有效预算 $A$ 取节点显式声明的 `timeout_ms`，未声明时取运行选项 `activity_timeout_ms`（默认 $604800000\text{ ms}$，即 $7$ 天）。后端的 `start_to_close_timeout` 与 Activity 进程内的本地单调时钟 `deadline` 均从同一有效预算 $A$ 派生；**Activity 在任务队列中的排队等待时间不消耗预算 $A$**。
    * **复合节点**（内联 `graph` 与 `use: workflow:<PackagePath>`）：声明 `timeout_ms: T` 时，由工作流定时器约束该节点单次尝试的整体执行窗口（覆盖其内部后代节点的任务排队、执行尝试、重试退避与信号等待）；未声明 `timeout_ms` 时不设整体期限。外层复合节点的期限不会自动改写其内部 Activity 后代的本地 `deadline` 或心跳间隔。
    * **协作式信号等待节点**（`run.executor == "signal"`）：使用工作流计时器，每次重试重置等待期限；省略 `timeout_ms` 时无限期等待，不受 `activity_timeout_ms` 约束，也不占用 Activity Worker 槽位。若外部信号已在同一调度轮次内认领等待槽位，该认领结果优先于同轮次到期的尝试定时器；尚未认领时，超时清理槽位并按 `timeout` 重试或捕获，详见 [`04-signal-cooperative-executor.md`](../05-executor-abi/04-signal-cooperative-executor.md)。
-2. **重试重置与退避独立性**：
+2. **重试重置、退避独立性与原生重试下推条件**：
    * 计时器绑定在节点 $N$（或 `for_each` 下的单次元素迭代）的**每一次独立尝试（Attempt $a \in \{1, \dots, \text{max\_attempts}\}$）**上；
    * 每次进入重试时重置尝试期限，两次尝试之间的 `retry.backoff_ms` 退避等待不计入下一次尝试的超时预算。
-   * 对于 Activity 节点声明的 `retry`，仅当输入、输出均不含句柄，且 `retry.on` 包含 `"timeout"`、不包含 `"contract"`、$\text{backoff\_ms} > 0$ 且参数处于后端原生重试可表示范围内时，运行时可下推为固定退避系数 $1.0$ 的后端原生重试；其余情形（含句柄接口、默认 $\text{backoff\_ms} = 0$ 的立即重试或包含需工作流二次核验的 `"contract"`）均由工作流状态机循环驱动，二者对外保持完全一致的总尝试预算语义。
-3. **超时取消后的任务排空（Drain on Timeout）**：
-   * 当单次尝试触及超时边界时，运行时向该次尝试或复合节点内部所有在途后代任务发起取消。资源调用的取消排空与本轮清理共用 30 秒上限；完成收尾或耗尽预算后，旧调用的调度授权结束，丢弃局部结果并以 **`timeout`** 进入 `retry` / `catch`。`timeout_ms` 不是下游 `catch` 或下一次重试启动时刻的硬实时上界。
-   * 有界收尾结束不证明物理业务已经停止。Store 继续保活仍未实际排空的本地使用者及其资源，实际排空后再驱动已知清理。迟到结果不能提交；迟到副作用与后续尝试之间没有顺序或 exactly-once 保证。纯值 Activity 的原生重试仍由后端决定，信号节点只清理等待槽位。
-4. **本地结果与 Server 硬超时**：
-   * Activity 在业务及全部契约校验完成时，按本地预算 $A$ 确定结果；随后本地孤儿清理使用独立的有界清理预算，不因清理耗时把及时成功改为本地 `timeout`。真实取消仍撤销尚未移交的资源。
-   * Server 的 `start_to_close_timeout` 仍为 $A$，不增加清理时长。即使本地已确定成功，若清理期间 Server 的硬期限到达，Workflow 仍观察到后端 `timeout`；本地成功不构成 Server 已接受交接的证明。
+   * **后端原生重试下推条件**：对于 Activity 节点声明的 `retry`，仅当节点 `input` 与 `output` 均不包含 `handle` 类型，且 `retry.on` 包含 `"timeout"`、不包含 `"contract"`、$\text{backoff\_ms} > 0$ 且参数处于后端原生重试可表示范围内时，运行时可下推为固定退避系数 $1.0$ 的后端原生重试；其余情形（包括输入或输出含 `handle` 的资源调用、默认 $\text{backoff\_ms} = 0$ 的立即重试或包含需工作流二次核验的 `"contract"`）均禁用后端原生重试，统一由工作流状态机循环驱动，确保每次重试前完成资源账本核对、路由决策与孤儿回收（详见 [`05-resource-lifecycle.md`](../05-executor-abi/05-resource-lifecycle.md)）。
+3. **超时取消后的有界排空与资源使用保活（Bounded Drain on Timeout）**：
+   * 当单次尝试触及超时边界时，运行时向该次尝试或复合节点内部所有在途后代任务发起取消。涉及资源句柄的调用在取消排空与本轮已知资源清理阶段共享有界收尾预算（默认 $30\text{ s}$）；完成收尾或耗尽该预算后，工作流侧结束旧调用的调度授权，丢弃局部未提交结果并以 **`timeout`** 进入 `retry` / `catch` 状态机（故 `timeout_ms` 不是下游 `catch` 或下一次重试启动时刻的硬实时上界）。
+   * 工作流侧有界收尾结束并不等同于远端 Worker 上的物理业务协程已停止：Worker 进程内的 `ResourceStore` 持续追踪尚未实际排空的本地尝试并保活其正在借用的资源实例，待本地业务协程及派生任务实际排空后再驱动 `pending` 资源析构。迟到结果永不提交；迟到副作用与后续重试尝试之间无顺序或 `exactly-once` 保证。
+4. **Activity 本地结果裁决与 Server 硬超时边界**：
+   * Activity 在业务函数返回且完成全部输出契约校验的瞬间，按本地单调时钟预算 $A$ 裁定本次尝试的业务结果；随后的本地孤儿资源清理使用独立的有界清理预算，不会因孤儿清理耗时将已按时完成的业务结果改判为本地 `timeout`（若尝试在完成前已被外部真实取消，则仍撤销尚未移交的新分配资源）。
+   * 后端的 `start_to_close_timeout` 保持为有效尝试预算 $A$（不叠加额外清理时长）。若本地孤儿清理或网络响应期间触及后端的 `start_to_close_timeout` 硬期限，工作流仍观察到后端 `timeout` 异常——本地完成契约校验不等同于工作流已接受资源所有权移交。
 
 ---
 

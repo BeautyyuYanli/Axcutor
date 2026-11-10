@@ -53,7 +53,7 @@
        * 若一侧为引用表达式（类型为 $T$）且另一侧为非 `null` 常量字面量 $L$，则要求 $L \models \text{StripNull}(T)$（或当 $\text{BaseType}(\text{StripNull}(T)) \in \{\texttt{integer}, \texttt{number}\}$ 且 $L$ 为数值字面量时均视为可比）；
        * 若两侧均为引用表达式（类型为 $T_L, T_R$），则必须满足**可比性（Comparable）**：
          $$\text{StripNull}(T_L) <: \text{StripNull}(T_R) \;\lor\; \text{StripNull}(T_R) <: \text{StripNull}(T_L)$$
-         *(允许同构标量、列表、结构体或有序映射之间按 JSON 深度值相等比较，且允许可空类型与对应的非空类型或可空类型直接判等。)*
+         *(允许同构标量、相同 `kind` 的不透明句柄 `handle`、列表、结构体或有序映射之间按 JSON 深度值相等比较，且允许可空类型与对应的非空类型或可空类型直接判等。)*
     2. **当 `op` $\in \{\texttt{"lt"}, \texttt{"lte"}, \texttt{"gt"}, \texttt{"gte"}\}$（序比较）**：
        要求两侧均非空（$\text{Nullable}(T_L) = \texttt{false} \;\land\; \text{Nullable}(T_R) = \texttt{false}$，禁止传入 `null`），且满足以下二者之一：
        * **数值序比较**：$\text{BaseType}(T_L), \text{BaseType}(T_R) \in \{\texttt{integer}, \texttt{number}\}$；

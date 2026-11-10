@@ -4,15 +4,18 @@
 
 无论是内建的进程内受信任 Python 内联执行器（`executor: "builtin"`，详见 [`02-builtin-python-executor.md`](./02-builtin-python-executor.md)）、基于工作流包同构的模块级 Python 执行器（`executor: "module"`，详见 [`03-module-python-executor.md`](./03-module-python-executor.md)）、工作流内协作式等待执行器（`executor: "signal"`，详见 [`04-signal-cooperative-executor.md`](./04-signal-cooperative-executor.md)），还是在此基础上构建或独立注册的扩展执行器（如隔离沙箱、微服务 HTTP/RPC 调用、数据库事务操作或大模型结构化输出），均遵循统一的输出与控制分支契约。
 
-编译器依据节点所属根 `MountUnit.allowed_executors` 检查 `run.executor`。省略或 `null` 表示不限，空列表禁止全部 `run`；列表元素遵循 `Identifier`，不使用 Python 关键字排除规则。违规在对应 `run.executor` 处报 `schema.executor_not_allowed`，策略不跨根继承。确定性 `builtin:` 算子不属于 `run`。Worker 只消费编译后的快照，不重复接收白名单参数。
-
 ---
 
-## 一、 执行器调用的抽象函数签名
+## 一、 执行器调用的抽象函数签名与编译期白名单策略
 
-从运行时调度器的视角看，Activity 执行器（`builtin`、`module` 及扩展执行器）的单次尝试（Attempt）等价于调用如下异步契约函数（`signal` 执行器在工作流内部挂起并通过外部信号恢复，其等待与恢复协议见 [`04-signal-cooperative-executor.md`](./04-signal-cooperative-executor.md)）：
-
-$$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \text{OutputSchema}, \text{BranchesContract}, \text{AbortSignal}) \longrightarrow \text{Result}\langle \text{ExecutionSuccess}, \text{ExecutionError} \rangle$$
+1. **执行器调用的抽象函数签名**：
+   从运行时调度器的视角看，Activity 执行器（`builtin`、`module` 及扩展执行器）的单次尝试（Attempt）等价于调用如下异步契约函数（`signal` 执行器在工作流内部挂起并通过外部信号恢复，其等待与恢复协议见 [`04-signal-cooperative-executor.md`](./04-signal-cooperative-executor.md)）：
+   $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \text{OutputSchema}, \text{BranchesContract}, \text{AbortSignal}) \longrightarrow \text{Result}\langle \text{ExecutionSuccess}, \text{ExecutionError} \rangle$$
+2. **按挂载根隔离的编译期执行器白名单（`MountUnit.allowed_executors`）**：
+   * 编译器在检查工作流文档（含顶层 `RootRunNode`、图内 `ActionNode` 及任意深度嵌套的内联 `graph` 子节点）时，读取该文档所属挂载根单元的 `allowed_executors: Option<List<Identifier>>`（其中每个白名单项必须为合法的通用标识符 `Identifier`，不排除 Python 关键字）：
+     * 当 `allowed_executors` 省略或为 `null` 时：不对该根下的 `run.executor` 施加白名单限制；
+     * 当 `allowed_executors` 为显式列表 $E_{\text{allow}}$ 时：该根下所有 `run` 节点的 `executor` 必须满足 $\text{run.executor} \in E_{\text{allow}}$（若 $E_{\text{allow}} = []$，则该根禁止声明任何 `run` 节点），违反时在对应 `/run/executor` 路径处报告静态编译错误 **`schema.executor_not_allowed`**。
+   * **跨根隔离与零运行期侵入**：执行器白名单严格按工作流文档所属的挂载根独立生效，跨根调用（如受限根 `app` 调用标准库根 `std` 的工作流）各自按定义方所属根的白名单校验；确定性内建算子（`use: builtin:<op>`）不属于 `run` 节点，不受 `allowed_executors` 限制。运行时 Worker 仅消费通过编译校验的不可变快照，无需额外维护运行期白名单参数。
 
 ---
 
@@ -22,7 +25,7 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 
 | 字段 | 类型 | 契约说明 |
 | :--- | :--- | :--- |
-| **`workflow_id`** | `PackagePath` 或 `__main__` | 当前节点所属工作流标识，嵌套内联图与迭代沿用所属包。`module` 据此解析包内模块；Worker 的 Python 根映射不由提交者指定。 |
+| **`workflow_id`** | `PackagePath` 或 `"__main__"` | 当前节点所属的工作流包标识（内联 `graph` 与 `for_each` 迭代保持所属工作流包不变）。`module` 执行器据此结合 Worker 固定根映射解析目标 Python 模块。 |
 | **`run_spec`** | `RunSpec`（含鉴别键 `executor: Identifier`） | 节点声明的结构化执行体定义（如 `{ executor: "builtin", content: "..." }`、`{ executor: "module", content: ".<local_path>" }` 或其他扩展执行器配置对象）。 |
 | **`input_schema`** | `Map<RestrictedIdentifier, TypeSpec>` | **输入变量的静态类型契约表**：由编译器在阶段 2 符号表解析期间从当前作用域符号表提取并导出的归一化 JSON Schema `TypeSpec` 映射（即 $\Sigma|_{N.\text{input}}$ 或 `root.input`），供执行器在边界生成强类型输入模型或执行静态/动态入参投影。 |
 | **`input_snapshot`** | `ReadOnlyMap<RestrictedIdentifier, JSONValue>` | **最小权限只读输入快照**：仅包含该节点 `input: [...]` 声明的变量（或顶层 `RootRunNode` 的 `input`）在激活时刻的**深拷贝/不可变值（Deep-Frozen / Immutable Value）**。未在 `input` 中声明的图变量不出现在此映射中；执行器在本地内存或进程内对该快照的任何就地修改（In-place Mutation）均与运行时所属栈帧的 `variables` 物理隔离，不得产生任何跨节点副作用。 |
@@ -50,9 +53,9 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 }
 ```
 
-### 2. 运行时边界契约校验（Produces `contract` Exception on Violation）
+*(注：业务执行器始终返回上述 `{ branch, output }` 结构；外层 Activity 与独立 Child Workflow 在内部传输层统一封装为 `{ result: { branch, output }, resources: ... }` 外壳以完成资源句柄所有权与驻留账本交接，根工作流向外部宿主仍直接返回 `{ branch, output }`，详见 [`05-resource-lifecycle.md`](./05-resource-lifecycle.md)。)*
 
-业务返回形状不变。Activity 与独立 Child 在内部统一使用 `result/resources` 外壳，先完成资源接管，再提交或映射完整业务输出。根宿主仍返回原有业务形状，详见[资源交接](./05-resource-lifecycle.md)。
+### 2. 运行时边界契约校验（Produces `contract` Exception on Violation）
 
 运行时收到 Activity 的 `ExecutionSuccess` 后，在将其合并入图 `variables` 之前，在 Activity 出口与工作流接收边界均执行以下两项边界校验（任一项失败，或执行器在构造返回值期间显式报告契约校验失败，均丢弃返回值并产生可恢复的 **`contract` 异常**；对于 `executor: "signal"`，相同的两项契约校验在外部信号接收边界同步执行，校验失败时直接以 `422 signal_validation_failed` 拒绝外部请求并保持节点等待状态，详见 [`04-signal-cooperative-executor.md`](./04-signal-cooperative-executor.md)）：
 
@@ -61,7 +64,7 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
    * 若 `branches_contract` 非空（有分支节点）：`branch` 必须为非空字符串且满足 $\text{branch} \in \text{dom}(\text{branches\_contract})$，此时预期产出字段集为该分支关联的子集 $F_{\text{expected}} = \text{set}(\text{branches\_contract}[\text{branch}].\text{output})$。
 2. **输出字段子集与 `TypeSpec` Schema 校验**：
    * **必选字段完备性**：`output` 映射必须包含 $F_{\text{expected}}$ 中的每一个字段（$\forall f \in F_{\text{expected}}, f \in \text{dom}(\text{output})$）；若缺失任一预期字段，立即判定契约违约；
-   * **深层 `TypeSpec` Schema 校验**：对于每个 $f \in F_{\text{expected}}$，其值 `output[f]` 必须通过 `output_schema[f]` 的严格类型与结构校验（包括闭合结构体 `{ ... }` 内部禁止出现未声明属性 `additionalProperties: false`、枚举值匹配与非空检查）；
+   * **深层 `TypeSpec` Schema 校验**：对于每个 $f \in F_{\text{expected}}$，其值 `output[f]` 必须通过 `output_schema[f]` 的严格类型与结构校验（包括闭合结构体 `{ ... }` 内部禁止出现未声明属性 `additionalProperties: false`、枚举值匹配、非空检查以及 `handle` 闭合传输信封检查）；
    * **顶层额外字段过滤与原子写回边界**：对于顶层 `output` 映射中超出 $F_{\text{expected}}$ 的额外字段（即 $\text{dom}(\text{output}) \setminus F_{\text{expected}}$，如非当前激活分支关联的字段或执行器附带的冗余顶层键），运行时在边界处执行**静默过滤（白名单投影）**——既不对这些额外顶层字段执行 `TypeSpec` 校验，也不将其写入图状态；校验通过后，运行时**仅提取 $F_{\text{expected}}$ 内的字段（$\text{output}|_{F_{\text{expected}}}$）**并生成不可变深拷贝，原子写回所属栈帧。
 
 ### 3. 执行器运行期故障映射（Produces `execution` Exception）
@@ -72,7 +75,9 @@ $$\text{ExecuteRun}(\text{RunSpec}, \text{InputSchema}, \text{InputSnapshot}, \t
 
 Activity 单次尝试同时维护业务协程、本地单调时钟 `deadline`（预算 `attempt_timeout_ms`）、取消监听协程以及周期为 `heartbeat_interval_ms` 的心跳协程（心跳负责向后端上报存活并接收取消通知；若心跳协程自身发生基础设施异常，则中止尝试并转化为不可恢复的 `EngineError`）。当触发 `abort_signal` 时，执行器与运行时必须遵循以下契约：
 
-1. **执行器资源清理义务与任务排空**：`abort_signal` 置位后，业务应尽快中止 I/O、子进程和计算。Activity 取消并排空业务及派生任务，本轮排空与清理共用 30 秒预算；未实际排空的本地使用记录继续保留，排空后驱动 pending 清理。Workflow 的旧调度授权在有界收尾后结束，不无限等待失联任务。析构失败保留责任，不替换业务异常。
+1. **执行器资源清理义务与有界任务排空**：
+   * `abort_signal` 置位后，业务协程应尽快中止正在进行的外部 I/O、子进程和计算；
+   * Activity 取消并排空业务协程及其派生任务，单轮排空与已知资源清理共享有界时间预算（默认 $30\text{ s}$）；若业务任务在预算耗尽时仍未退出，本地 `ResourceStore` 继续保留其使用记录以阻止正在借用的资源实例被提前析构，待任务实际排空后再驱动 `pending` 资源清理；工作流侧的旧调度授权在有界收尾后结束，不无限期等待失联任务（详见 [`05-resource-lifecycle.md`](./05-resource-lifecycle.md)）。
 2. **提交前单调时钟复查与迟到结果静默丢弃（Late-Result Dropping）**：
    * `abort_signal` 触发的瞬间，该次尝试在运行时内部的生命周期即告终结（因超时触发者产生 `timeout` 异常并按需转入 `retry` / `catch` 状态机；因 `CancelledError` 触发者推进取消收敛流程）；
    * 即使业务协程在同步编译、序列化或 `validate_run_contract` 契约校验期间未让出事件循环而赶在 `deadline` 协程被调度前产出返回值，Activity 在最终返回前仍会复查本地单调时钟（`loop.time() >= expires_at`），一旦超期立即将 `abort_signal` 置为 `"timeout"` 并丢弃该迟到成功结果；

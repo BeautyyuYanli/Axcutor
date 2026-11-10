@@ -1,6 +1,6 @@
 # 02. 静态类型等价、子类型偏序与字面量实例兼容性算法
 
-本规范基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 中良构 `TypeSpec` 的公理化定义及类型观察与变换算子 $\text{BaseType}(T)$、$\text{Nullable}(T)$ 与 $\text{MakeNullable}(T)$，定义编译期判定两个 `TypeSpec` 静态结构化等价（$T_1 \equiv T_2$）与单向静态子类型偏序（$T_1 <: T_2$）的形式化算法，以及判定常量字面量 $L$ 兼容于目标类型 $T$（$L \models T$）的实例校验规则。
+本规范基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 中良构 `TypeSpec` 的公理化定义及类型观察与变换算子 $\text{BaseType}(T)$、$\text{Nullable}(T)$ 与 $\text{MakeNullable}(T)$，定义编译期判定两个 `TypeSpec` 静态结构化等价（$T_1 \equiv T_2$）与单向静态子类型偏序（$T_1 <: T_2$）的形式化算法，以及判定常量字面量 $L$ 兼容于目标类型 $T$（$L \models T$）与运行期实例校验规则。
 
 ---
 
@@ -22,6 +22,8 @@
      * 字段名集合相同：$\text{dom}(T_1.\text{properties}) = \text{dom}(T_2.\text{properties})$；
      * 规范化后的必填字段集合相同：$\text{set}(T_1.\text{required}) = \text{set}(T_2.\text{required})$；
      * 对每个字段 $f \in \text{dom}(T_1.\text{properties})$，均有 $T_1.\text{properties}[f] \equiv T_2.\text{properties}[f]$。
+6. **不透明句柄名义标识等价（Nominal Handle Equivalence）**：
+   * 若 $\text{BaseType}(T_1) = \texttt{handle}$，则 $T_1.\text{kind} = T_2.\text{kind}$。
 
 > **公理说明（Remark：基础类型严格区分与可空联合顺序无关性）**：
 > * **数值基础类型不对称**：在双向结构化等价判定中，$\text{BaseType}(T_1) = \text{BaseType}(T_2)$ 要求基础类型严格同一，故 $\texttt{integer} \not\equiv \texttt{number}$。
@@ -33,7 +35,7 @@
 
 在值流转与契约消费位置（包括 `use: workflow:<PackagePath>` 传参与返回值绑定、`builtin:*` 算子入参/出参校验及 `for_each` 一阶集合提升目标绑定），编译器采用**单向静态子类型偏序关系（$T_{\text{actual}} <: T_{\text{expected}}$）**。由于 Axcutor 栈帧与容器算子均遵循纯函数式写时复制（Copy-on-Write）不可变语义，不存在原地可变别名引用，`Array`、`OrderedMap` 与 `TypedDict` 均支持安全的结构化协变（Structural Covariance）。
 
-设 $T_1, T_2$ 为满足 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 的两个良构 `TypeSpec`。定义 $T_1$ 是 $T_2$ 的子类型（记作 $T_1 <: T_2$），当且仅当递归满足以下五条公理：
+设 $T_1, T_2$ 为满足 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 的两个良构 `TypeSpec`。定义 $T_1$ 是 $T_2$ 的子类型（记作 $T_1 <: T_2$），当且仅当递归满足以下六条公理：
 
 ### 1. 公理 1：可空性单调提升（Nullability Monotonicity）
 $$\text{Nullable}(T_1) \implies \text{Nullable}(T_2)$$
@@ -75,38 +77,35 @@ $$T_1.\text{additionalProperties} <: T_2.\text{additionalProperties}$$
   这意味着父类型 $T_2$ 要求必填的字段在子类型 $T_1$ 中也必须声明且必填；同时，子类型 $T_1$ 允许将 $T_2$ 中的可选字段（$f \in \text{dom}(T_2.\text{properties}) \setminus \text{set}(T_2.\text{required})$）强化为必填字段（加入 $\text{set}(T_1.\text{required})$），或从 $\text{dom}(T_1.\text{properties})$ 中完全省略该可选字段。
 * **推论 5.3（键可选性与值可空性正交，Corollary: Orthogonality of Key Optionality and Value Nullability）**：若可选属性 $f \notin \text{set}(T_2.\text{required})$ 在父类型中声明为非空类型（$\text{Nullable}(T_2.\text{properties}[f]) = \texttt{false}$），其在 JSON Schema 契约中表示“键 $f$ 要么在对象中缺省，要么存在且值非 `null`”。因此，若子类型 $T_1$ 保留了属性 $f \in \text{dom}(T_1.\text{properties})$，由条件 2 与公理 1 可知必须满足 $\text{Nullable}(T_1.\text{properties}[f]) = \texttt{false}$，禁止将可空属性类型（$\text{Nullable}(T_1.\text{properties}[f]) = \texttt{true}$）赋给非空的可选目标属性。
 
+### 6. 公理 6：不透明句柄名义子类型匹配（Nominal Handle Subtyping）
+当 $\text{BaseType}(T_1) = \text{BaseType}(T_2) = \texttt{handle}$ 时，在满足公理 1（可空性单调提升）的基础上，必须满足名义标识严格相等（不支持前缀或类继承拓宽）：
+$$T_1.\text{kind} = T_2.\text{kind}$$
+
 > **反对称性定理（Antisymmetry）与实例保持性定理（Value Preservation）**：
 > * **反对称性**：$T_1 \equiv T_2 \iff (T_1 <: T_2 \;\land\; T_2 <: T_1)$，即 $(\text{TypeSpec}, <:)$ 在结构化等价商集上构成偏序集（Poset）。
 > * **实例保持性**：$\forall v, \; (v \models T_{\text{actual}} \;\land\; T_{\text{actual}} <: T_{\text{expected}}) \implies v \models T_{\text{expected}}$。任何符合子类型 $T_{\text{actual}}$ 的运行期 JSON 实例，无需任何运行期格式转换，天然符合父类型 $T_{\text{expected}}$ 的 JSON Schema 契约。
 
 ---
 
-## 三、 名义句柄兼容与运行期校验
+## 三、 编译期字面量兼容性（$L \models_{\text{lit}} T$）与运行期实例校验（$v \models_{\text{rt}} T$）
 
-句柄等价要求 kind 与可空性分别相同。句柄子类型在满足可空性单调规则时，仅要求 kind 完全相同，不按前缀继承。数组、映射和结构体内递归应用相同规则。
-
-编译期 `accepts_literal` 在句柄位置拒绝非空字面量；可空位置的 null 及空容器合法。运行期 `accepts_runtime` 校验只有 `$handle`、`kind` 的闭合信封，两字段均为非空字符串且 kind 与声明相同。授权和资源属性由 Registry 与 Attempt 核对，类型校验不授予访问权限。
-
-```yaml
-cached: {type: [handle, "null"], kind: infra.postgres:Tx, default: null}
-```
-
-## 四、 字面量 Schema 实例兼容性校验（$L \models T$）
-
-当在 `graph.variables` 初值声明或 `use.with.input` 常量传参中向良构目标类型 $T$ 提供字面量 $L$ 时，基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 定义的 $\text{BaseType}(T)$ 与 $\text{Nullable}(T)$ 执行实例兼容性判定 $L \models T$：
+基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 定义的 $\text{BaseType}(T)$ 与 $\text{Nullable}(T)$，编译器与运行时分别对编译期静态字面量 $L$（用于 `graph.variables.default` 初值声明与 `use.with.input` 常量传参）及运行期传输值 $v$ 执行实例兼容性判定：
 
 1. **空值 `null` 规则**：
-   * 当 $L = \texttt{null}$ 时：$L \models T \iff \text{Nullable}(T) = \texttt{true}$。非空类型（$\text{Nullable}(T) = \texttt{false}$）禁止接受 `null` 字面量。
-2. **非空字面量规则（当 $L \neq \texttt{null}$ 时）**：
+   * 当 $L = \texttt{null}$（或运行期 $v = \texttt{null}$）时：兼容于 $T \iff \text{Nullable}(T) = \texttt{true}$。非空类型（$\text{Nullable}(T) = \texttt{false}$）禁止接受 `null`。
+2. **非空实例规则（当实例非 `null` 时）**：
    * **标量匹配**：
-     * $\text{BaseType}(T) = \texttt{string} \implies L$ 必须为字符串；
-     * $\text{BaseType}(T) = \texttt{integer} \implies L$ 必须为词法整数字面量（带小数点或指数的浮点数字面量如 `1.0` 不满足 `integer`，布尔值 `true` / `false` 亦不视为整数）；
-     * $\text{BaseType}(T) = \texttt{number} \implies L$ 允许为**整数字面量**（如 `0`）或**有限浮点数字面量**（如 `0.0`，布尔值不视为数值）；
-     * $\text{BaseType}(T) = \texttt{boolean} \implies L$ 必须为布尔值 `true` 或 `false`；
-     * 若 $T$ 声明了 `enum`，则还必须满足 $L \in T.\text{enum}$。
-   * **列表字面量匹配（$\text{BaseType}(T) = \texttt{array}$）**：
-     * $L$ 必须为 JSON 数组，且对每个元素 $e \in L$，递归满足 $e \models T.\text{items}$（空数组字面量 `[]` 对任意良构 `array` 类型均满足兼容性）。
-   * **有序映射字面量匹配（$T$ 为 `OrderedMap`）**：
-     * $L$ 必须为 JSON 对象，且对每个值 $v \in \text{values}(L)$，递归满足 $v \models T.\text{additionalProperties}$（空对象字面量 `{}` 对任意良构 `OrderedMap` 均满足兼容性）。
-   * **结构体字面量匹配（$T$ 为 `TypedDict`）**：
-     * $L$ 必须为 JSON 对象，$\text{set}(T.\text{required}) \subseteq \text{dom}(L) \subseteq \text{dom}(T.\text{properties})$，且对每个键 $k \in \text{dom}(L)$，递归满足 $L[k] \models T.\text{properties}[k]$。
+     * $\text{BaseType}(T) = \texttt{string} \implies$ 实例必须为字符串；
+     * $\text{BaseType}(T) = \texttt{integer} \implies$ 实例必须为词法整数字面量（带小数点或指数的浮点数字面量如 `1.0` 不满足 `integer`，布尔值 `true` / `false` 亦不视为整数）；
+     * $\text{BaseType}(T) = \texttt{number} \implies$ 实例允许为**整数字面量**（如 `0`）或**有限浮点数字面量**（如 `0.0`，布尔值不视为数值）；
+     * $\text{BaseType}(T) = \texttt{boolean} \implies$ 实例必须为布尔值 `true` 或 `false`；
+     * 若 $T$ 声明了 `enum`，则还必须满足实例属于 $T.\text{enum}$。
+   * **列表匹配（$\text{BaseType}(T) = \texttt{array}$）**：
+     * 实例必须为 JSON 数组，且对每个元素 $e$，递归满足对应兼容性规则 $T.\text{items}$（空数组 `[]` 对任意良构 `array` 类型均满足兼容性，含 `items: { type: "handle", ... }` 的空句柄列表）。
+   * **有序映射匹配（$T$ 为 `OrderedMap`）**：
+     * 实例必须为 JSON 对象，且对每个值 $u$，递归满足对应兼容性规则 $T.\text{additionalProperties}$（空对象 `{}` 对任意良构 `OrderedMap` 均满足兼容性，含值为 `handle` 的空句柄映射）。
+   * **结构体匹配（$T$ 为 `TypedDict`）**：
+     * 实例必须为 JSON 对象，$\text{set}(T.\text{required}) \subseteq \text{dom}(\text{obj}) \subseteq \text{dom}(T.\text{properties})$，且对每个键 $k \in \text{dom}(\text{obj})$，递归满足对应字段类型 $T.\text{properties}[k]$。
+   * **不透明句柄匹配（$\text{BaseType}(T) = \texttt{handle}$）**：
+     * **编译期静态字面量拒绝（$\text{accepts\_literal}$）**：非空句柄实例仅能由运行期执行器动态分配并注册，编译期静态字面量 $L \neq \texttt{null}$ 恒不满足 $\text{BaseType}(T) = \texttt{handle}$ 的兼容性（仅当 $\text{Nullable}(T) = \texttt{true}$ 时允许 `default: null` 或传入 `null` 字面量）；
+     * **运行期传输信封校验（$\text{accepts\_runtime}$）**：运行期非 `null` 句柄值 $v$ 必须为仅包含 `"$handle"` 与 `"kind"` 两个键的闭合 JSON 对象 $\{\texttt{"\$handle"}: h, \texttt{"kind"}: k\}$，其中 $h$ 为非空字符串且 $k = T.\text{kind}$。传输信封的形状匹配仅完成类型边界校验，实际资源访问授权与所有权由运行期 `WorkflowResourceRegistry` 与 `AttemptResourceContext` 独立核对（详见 [`05-resource-lifecycle.md`](../05-executor-abi/05-resource-lifecycle.md)）。

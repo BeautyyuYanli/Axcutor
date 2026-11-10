@@ -1,6 +1,6 @@
 # RFC-0018: 按根挂载编译单元（`MountUnit`）、`__ax_resources__.yaml` 资源声明与编译期执行器白名单机制
 
-* **状态**：Proposed
+* **状态**：Implemented
 * **所属分类**：按根命名空间挂载编译单元、`__ax_resources__.yaml` 静态资源包声明与编译期执行器白名单控制（Root-Mounted Compilation Units, Static Resource Package Declaration & Compile-Time Executor Allowlist）
 * **关联提案**：
   * [`RFC-0012: 结构化 run 执行器分派机制、移除自然语言变量正则提取与 builtin 可信 Python 执行器规范`](./0012-run-executor-and-builtin-python.md)

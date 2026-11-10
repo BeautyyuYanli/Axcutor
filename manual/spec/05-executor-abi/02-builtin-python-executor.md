@@ -16,9 +16,9 @@
 
 ## 二、 `TypeSpec` 到 Python / Pydantic 类型映射规则
 
-给定编译器前端导出的归一化 JSON Schema `TypeSpec`（`input_schema`、`output_schema` 与 `branches_contract`），`builtin` 执行器按以下规则生成强类型注解与 Pydantic v2 模型：
+给定编译器前端导出的归一化 JSON Schema `TypeSpec`（`input_schema`、`output_schema` 与 `branches_contract`），`builtin` 与 `module` 执行器按以下规则生成强类型注解与 Pydantic v2 模型：
 
-### 1. 基础标量与容器类型映射
+### 1. 基础标量、容器与资源句柄类型映射
 
 | 归一化 `TypeSpec` | `Input` 侧 Python 类型注解 | `Output` / `Branch` 侧 Python 类型注解 | 边界校验与转换语义 |
 | :--- | :--- | :--- | :--- |
@@ -27,13 +27,12 @@
 | `type: "number"`（无 `enum`） | `float`（经 `_coerce_input_float` 转换） | `Annotated[float \| int, BeforeValidator(_validate_output_number)]` | **非对称浮点边界（屏蔽传输层 `Decimal`）**：<br>• `Input` 侧将运行时 JSON 传输层的 `Decimal` / `int` / `float` 统一转换为 Python 原生 `float`，使 `input.<field>` 恒为 `float`；<br>• `Output` 侧静态类型注解与运行时校验同时接受原生 `float` 与 `int`（兼容 `Decimal`），拒绝 `bool` 与非有限数 `NaN` / `Inf`。 |
 | `type: "boolean"`（无 `enum`） | `StrictBool` (`bool`) | `StrictBool` (`bool`) | 严格要求 `bool`，拒绝 `0` / `1` 或 `"true"`。 |
 | 带 `enum: [v_1, ..., v_k]` 的标量 | `Literal[v_1, ..., v_k]` | `Literal[v_1, ..., v_k]` | 严格匹配枚举字面量（区分 `bool` 与 `int`）。 |
+| `type: "handle"`, `kind: "<M>:<C>"` | `Handle[<C>]`（运行期校验器绑定声明 `kind`） | `Handle[<C>]`（运行期校验器绑定声明 `kind`） | **名义资源句柄（`Handle[C]`）**：<br>• 精确资源类 `<C>` 按可选 `module_mounts` 映射在 `if TYPE_CHECKING:` 分支中静态导入（不触发运行期模块导入，且 `module_mounts` 不改变契约 SHA 指纹）；<br>• `Input` 侧将闭合传输信封 `{"$handle": rid, "kind": kind}` 反序列化为冻结的公共 `Handle(id=rid, kind=kind)`；<br>• `Output` 侧仅接受 `kind` 匹配的公共 `Handle` 实例（拒绝原始字典），并在序列化时先于通用 `BaseModel` 还原为两字段闭合信封。 |
 | 可空类型 `type: [b, "null"]` | `<MappedType> \| None` | `<MappedType> \| None` | 允许 `None`；但在顶层 `input`、`output` 或必填结构体属性中仍必须显式传参，不自动默认省略为 `None`。 |
 | `type: "array"`, `items: T` | `list[<Mapped_T>]` | `list[<Mapped_T>]` | 递归校验每个列表元素。 |
 | `OrderedMap`（`type: "object"`, `additionalProperties: V`） | `dict[StrictStr, <Mapped_V>]` | `dict[StrictStr, <Mapped_V>]` | 保持键插入顺序，递归校验每个映射值。 |
 
 ### 2. 强类型闭合结构体（`TypedDict`）的输入与输出映射
-
-句柄另映射为 `Handle[C]`，C 是按 module_mounts 解析的精确资源类，仅在 TYPE_CHECKING 下导入。输入由闭合信封构造公共 Handle；输出仅接受公共 Handle，并在一般 BaseModel 之前导出为两字段信封。builtin 前导注入 Handle/resources，资源类放在普通模块内。三种合成/生成接口均支持可选关键字 module_mounts，映射不参与 SHA；kind 与可空性参与 SHA。
 
 对于 `type: "object"` 且声明了 `properties` 的闭合结构体（路径记为 `<path>`，如 `user` 或 `user_address`）：
 
@@ -69,7 +68,7 @@
 
 ## 四、 虚拟 `.py` 模块确定性合成与源码行号映射
 
-编译器前端或运行时加载器可根据节点的 `(input_schema, output_schema, branches_contract, run.content)` 纯函数式地确定性合成完整的合法 Python 模块源码（供 IDE / Type Checker 静态检查或运行期 `compile()` 执行）：
+编译器前端或运行时加载器可根据节点的 `(input_schema, output_schema, branches_contract, run.content)`（及可选关键字参数 `module_mounts`）纯函数式地确定性合成完整的合法 Python 模块源码（供 IDE / Type Checker 静态检查或运行期 `compile()` 执行；合成前导区默认注入 `Handle` 与 `resources` 上下文对象）：
 
 1. **缩进归一化与函数体挂载**：
    * 对 `run.content` 先剥离首尾空行并执行公共前导空白去缩进（`textwrap.dedent`），再对每个非空行统一添加 4 个空格缩进，嵌入顶层异步入口函数：
