@@ -11,6 +11,7 @@ describe('lossless JSON boundary', () => {
     const formatted = new JsonText(slices.resultOutputRaw!);
     for (const key of ['integer', 'decimal', 'exponent', 'escaped']) expect(formatted.raw([key])).toBe(new JsonText(value).raw([key]));
     expect([...formatted.at(['ordered'])!.entries!.keys()]).toEqual(['2', '1', 'z']);
+    expect(formatted.format([], true)).toBe(value);
     expect(raw.raw(['frames', 99, 'variables'])).toBeNull();
   });
 

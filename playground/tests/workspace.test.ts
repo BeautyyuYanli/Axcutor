@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { effectScope } from 'vue';
 import type { WorkspaceFile } from '../src/client/types.gen';
 import { useWorkspace } from '../src/composables/useWorkspace';
-import { workspaceSource } from '../src/utils/workspace';
+import { isWorkflowEntry, workspaceSource } from '../src/utils/workspace';
 
 const file = (path: string, text = ''): WorkspaceFile => ({ path, text, generated: path.endsWith('_contract.py') });
 const response = (value: object, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
@@ -15,6 +15,23 @@ function controller() {
 afterEach(() => { scopes.splice(0).forEach(scope => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('physical files and browser source preview', () => {
+  it('selects package declarations and standalone workflow bodies while excluding input and resource files', () => {
+    const files = [
+      file('workflows/app/__axcutor__.yaml'),
+      file('main.json', '{"input":{},"output":{},"graph":{}}'),
+      file('main.yml', 'input: {}\noutput: {}\nrun: {executor: signal}'),
+      file('flow.yaml', '{"input": {}, "graph": {}}'),
+      file('quoted.yaml', '"run": {executor: signal}'),
+      file('input.json', '{"items":[3,1,2],"n":999999999999999999999999999}'),
+      file('input.yaml', 'value: {graph: "data", run: "data"}'),
+      file('workflows/app/__ax_resources__.yaml', 'resources: {}'),
+      file('helper.py', 'graph = {}'),
+    ];
+    expect(files.filter(isWorkflowEntry).map(file => file.path)).toEqual([
+      'workflows/app/__axcutor__.yaml', 'main.json', 'main.yml', 'flow.yaml', 'quoted.yaml',
+    ]);
+  });
+
   it('includes resource-only roots and preserves both diagnostic files for colocated headers', () => {
     const files = [
       file('workflows/app/__init__.py'),

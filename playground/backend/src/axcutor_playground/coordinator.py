@@ -49,6 +49,13 @@ _HEARTBEAT_INTERVAL_MS = 200
 
 
 class SubmittedSource(TypedDict):
+    """Snapshot with the physical draft owner and the compiler's logical entry.
+
+    Standalone files all compile as __main__, even when their paths differ.
+    entry_path belongs only to workbench recovery, never the compiler request.
+    """
+
+    entry_path: str
     entry: str
     mounts: dict[str, JsonObject]
 
@@ -207,22 +214,17 @@ class Playground:
     async def submit(self, entry: Any, input: Any, revision: Any) -> WorkspaceExecution:
         self._require_idle()
         entry = source_path(entry)
-        if input is not None:
-            input = source_path(input)
-            if not input.endswith(".json"):
-                raise InvalidRequest("input must be a JSON file")
+        if not isinstance(input, dict):
+            raise InvalidRequest("workflow input must be a JSON object")
         async with self.workspace.lock:
             current = self.workspace.check_revision(revision)
             paths = {file["path"] for file in current["files"]}
-            if entry not in paths or (input is not None and input not in paths):
-                raise InvalidRequest("entry and input must identify existing workspace files")
+            if entry not in paths:
+                raise InvalidRequest("entry must identify an existing workspace file")
             mounts = discover_mounts(self.workspace.root)
             try:
                 entry_id, snapshot = load_mounts(self.workspace.root / entry, mounts)
                 generate_contracts(entry_id, snapshot, mounts)
-                inputs = loads((self.workspace.root / input).read_text("utf-8")) if input else {}
-                if not isinstance(inputs, dict):
-                    raise InvalidRequest("workflow input must be a JSON object")
                 bundle = loads(compile_bundle(entry_id, snapshot))
                 try:
                     axcutor_core.validate_root_interface(
@@ -230,7 +232,7 @@ class Playground:
                         dumps(bundle["workflows"][entry_id]["output"]),
                     )
                     axcutor_core.validate_input(
-                        dumps(inputs), dumps(bundle["workflows"][entry_id]["input"])
+                        dumps(input), dumps(bundle["workflows"][entry_id]["input"])
                     )
                 except (ValueError, TypeError, OverflowError) as error:
                     raise InputValidationError(str(error)) from error
@@ -250,7 +252,7 @@ class Playground:
             record: LatestTrace = {
                 "execution_id": execution_id,
                 "execution": None,
-                "source": {"entry": entry_id, "mounts": deepcopy(snapshot)},
+                "source": {"entry_path": entry, "entry": entry_id, "mounts": deepcopy(snapshot)},
                 "spans": [],
                 "observed_at": None,
                 "complete": False,
@@ -259,7 +261,7 @@ class Playground:
             self.latest = record
 
         try:
-            execution = await self.executions.submit(entry_id, snapshot, inputs, execution_id)
+            execution = await self.executions.submit(entry_id, snapshot, input, execution_id)
             record["execution"] = execution
         except RuntimeUnavailable as error:
             raise RuntimeUnavailable(
@@ -273,7 +275,7 @@ class Playground:
             self._trace_observer = asyncio.create_task(self._observe_trace(record))
         return {
             "execution": execution,
-            "source": {"entry": entry_id, "mounts": snapshot},
+            "source": {"entry_path": entry, "entry": entry_id, "mounts": snapshot},
             "workspace": self.view(),
         }
 

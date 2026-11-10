@@ -9,18 +9,21 @@ import TraceInspector from './components/TraceInspector.vue';
 import { compileSource, useCompiler } from './composables/useCompiler';
 import { useExecution } from './composables/useExecution';
 import { useLatestTrace } from './composables/useLatestTrace';
+import { useRunInput } from './composables/useRunInput';
 import { useWorkspace } from './composables/useWorkspace';
-import { workspaceSource } from './utils/workspace';
+import { isWorkflowEntry, workspaceSource } from './utils/workspace';
 import type { CompileOutput, Diagnostic, Scope } from './types/compiler';
 import type { Frame } from './client/types.gen';
 import { locateFrame, sameScope } from './utils/graphLayout';
 import { executionSteps, executionSummary, flattenSteps } from './utils/executionView';
 import { locateSpan } from './utils/traceView';
+import { DEMO_ENTRY } from './utils/runInput';
+import { JsonText } from './utils/losslessJson';
 
 const workspace = useWorkspace();
 const { files, busy, serverBusy, dirty, loaded, problem: workspaceProblem } = workspace;
-const entryPath = ref('workflows/demo/main/__axcutor__.yaml');
-const inputPath = ref('inputs/demo.json');
+const entryPath = ref(DEMO_ENTRY);
+const inputExpanded = ref(false);
 const selectedFile = ref(entryPath.value);
 const preview = computed(() => {
   try { return { source: workspaceSource(files.value, entryPath.value), error: null }; }
@@ -34,7 +37,19 @@ const selectedFrameKey = ref<string | null>(null);
 const selectedSpanId = ref<string | null>(null);
 const canvasSource = ref<'editor' | 'execution'>('editor');
 const submitted = shallowRef<CompileOutput | null>(null);
-const { ready, error: compilerError, compileOutput } = useCompiler(entry, mounts);
+const { ready, error: compilerError, compileOutput, compileJson } = useCompiler(entry, mounts);
+const inputSchema = computed(() => compileOutput.value?.bundle
+  ? compileJson.value?.raw(['bundle', 'workflows', entry.value, 'input']) ?? null : null);
+const { inputRaw, inputError, restore: restoreInput } = useRunInput(entryPath, inputSchema);
+// Collapsing changes only the presentation. Run still sends the original draft.
+const inputDisplay = computed({
+  get() {
+    if (inputExpanded.value) return inputRaw.value;
+    try { return new JsonText(inputRaw.value).format([], true) ?? inputRaw.value; }
+    catch { return inputRaw.value; }
+  },
+  set(text: string) { inputRaw.value = text; },
+});
 const { execution, observedId, slices, source: submittedSource, workspace: runWorkspace, error: httpError, submitting, cancelRequested, run, cancel, restore: restoreExecution } = useExecution();
 const trace = useLatestTrace();
 const { view: traceView, problem: traceProblem } = trace;
@@ -76,6 +91,16 @@ watch([traceView, preparing], ([value, isPreparing]) => {
     value.json.raw(['execution']), value.metadata.execution_id, value.metadata.source,
   );
 });
+watch([traceView, entryPath, loaded, preparing, inputSchema, currentId], ([value, , isLoaded, isPreparing, schema]) => {
+  if (!value || !isLoaded || !schema || isPreparing || submitting.value
+    || value.metadata.execution_id !== currentId.value || value.metadata.source.entry_path !== entryPath.value) return;
+  // Only the submitted physical path owns this input. Logical IDs and identical
+  // source text cannot distinguish separate standalone workflows.
+  const index = value.metadata.spans.findIndex(span => span.parent_id === null
+    && span.kind === 'workflow' && span.address === value.metadata.source.entry);
+  const raw = index < 0 ? null : value.json.raw(['spans', index, 'input']);
+  if (raw !== null) restoreInput(raw, value.metadata.execution_id);
+});
 const current = computed(() => canvasSource.value === 'execution' ? submitted.value : compileOutput.value);
 const bundle = computed(() => current.value?.bundle ?? null);
 const analysis = computed(() => current.value?.analysis.find(item => sameScope({
@@ -85,8 +110,7 @@ const diagnostics = computed(() => [...(compileOutput.value?.diagnostics ?? []),
 const frames = computed(() => canvasSource.value === 'execution' && execution.value?.status === 'running' ? execution.value.frames : []);
 const writeBlocked = computed(() => serverBusy.value || preparing.value || submitting.value || observedId.value !== null);
 const readOnly = computed(() => busy.value || writeBlocked.value || !loaded.value);
-const workflowFiles = computed(() => files.value.filter(file => /\.(yaml|yml|json)$/.test(file.path) && file.path.split('/').at(-1) !== '__ax_resources__.yaml').sort((a, b) => a.path.localeCompare(b.path)));
-const inputFiles = computed(() => workflowFiles.value.filter(file => file.path.endsWith('.json')));
+const workflowFiles = computed(() => files.value.filter(isWorkflowEntry).sort((a, b) => a.path.localeCompare(b.path)));
 const entryOptions = computed(() => workflowFiles.value.map(file => {
   // Use the same discovery as preview and Run; standalone documents are __main__.
   try { return { path: file.path, name: workspaceSource(files.value, file.path).entry }; }
@@ -121,7 +145,7 @@ const workspaceNotice = computed(() => {
   if (serverBusy.value && !currentId.value) return 'The shared workspace is busy in another page.';
   return '';
 });
-const diagnosticCount = computed(() => diagnostics.value.length + Number(!!(preview.value.error ?? compilerError.value)) + Number(!!workspaceProblem.value) + Number(!!httpError.value));
+const diagnosticCount = computed(() => diagnostics.value.length + Number(!!(preview.value.error ?? compilerError.value)) + Number(!!workspaceProblem.value) + Number(!!httpError.value) + Number(!!inputError.value));
 function showPanel(panel: 'execution' | 'trace' | 'diagnostics') { activePanel.value = panel; panelOpen.value = true; }
 function togglePanel(panel: 'execution' | 'trace' | 'diagnostics') {
   if (activePanel.value === panel) panelOpen.value = !panelOpen.value;
@@ -135,6 +159,7 @@ watch(() => !compilerError.value && (!loaded.value || !ready.value) ? '' : JSON.
   if (value !== previous && (preview.value.error || compilerError.value || compileOutput.value?.diagnostics.length)) showPanel('diagnostics');
 });
 watch(workspaceProblem, value => { if (value) showPanel('diagnostics'); });
+watch(inputError, value => { if (value) showPanel('diagnostics'); });
 
 function navigate(target: Scope) { scope.value = target; selectedNode.value = null; }
 function selectFile(path: string) {
@@ -204,13 +229,13 @@ function locateSelectedSpan() {
   selectedNode.value = target.nodeId ?? null;
 }
 async function submit() {
-  if (!compileOutput.value?.bundle || preparing.value) return;
+  if (readOnly.value || !compileOutput.value?.bundle || inputError.value) return;
   showPanel('execution');
   preparing.value = true;
   const path = entryPath.value;
-  const input = inputPath.value || null;
+  const input = inputRaw.value;
   try {
-    const revision = await workspace.save();
+    const revision = dirty.value ? await workspace.save() : workspace.revision.value;
     if (!revision) { showPanel('diagnostics'); return; }
     const accepted = await run(path, input, revision);
     // An uncertain submission with an ID still belongs in the execution view.
@@ -224,8 +249,7 @@ watch(entry, value => { if (canvasSource.value === 'editor') navigate({ workflow
 onMounted(async () => {
   void trace.restore();
   await workspace.load();
-  if (!files.value.some(file => file.path === entryPath.value)) entryPath.value = files.value.find(file => /\.(yaml|yml|json)$/.test(file.path))?.path ?? '';
-  if (!files.value.some(file => file.path === inputPath.value)) inputPath.value = '';
+  if (!workflowFiles.value.some(file => file.path === entryPath.value)) entryPath.value = workflowFiles.value[0]?.path ?? '';
 });
 </script>
 
@@ -237,14 +261,15 @@ onMounted(async () => {
           <option v-for="option in entryOptions" :key="option.path" :value="option.path" :title="option.path">{{ option.name }}</option>
         </select>
       </label>
-      <label>Input file
-        <select v-model="inputPath" aria-label="Input file" :title="inputPath || 'Empty input {}'">
-          <option value="">Empty input {}</option>
-          <option v-for="file in inputFiles" :key="file.path" :value="file.path">{{ file.path }}</option>
-        </select>
-      </label>
+      <div class="run-input">
+        <div class="input-heading">
+          <label for="run-input">Input</label>
+          <button type="button" :aria-expanded="inputExpanded" aria-controls="run-input" @click="inputExpanded = !inputExpanded">{{ inputExpanded ? 'Collapse Input' : 'Expand Input' }}</button>
+        </div>
+        <textarea id="run-input" v-model="inputDisplay" aria-label="Input" :rows="inputExpanded ? 8 : 1" :wrap="inputExpanded ? 'soft' : 'off'" :readonly="readOnly" :aria-invalid="!!inputError" :aria-describedby="inputError ? 'input-error' : undefined" spellcheck="false" />
+      </div>
       <div class="run-actions" role="group" aria-label="Run actions">
-        <button class="primary-action" type="button" :disabled="readOnly || !ready || !preview.source || !compileOutput?.bundle" @click="submit">{{ preparing || submitting ? 'Submitting…' : 'Run' }}</button>
+        <button class="primary-action" type="button" :disabled="readOnly || !ready || !preview.source || !compileOutput?.bundle || !!inputError" @click="submit">{{ preparing || submitting ? 'Submitting…' : 'Run' }}</button>
         <button type="button" :disabled="observedId === null || cancelRequested" @click="cancel">{{ cancelRequested ? 'Cancelling…' : 'Cancel' }}</button>
       </div>
       <div v-if="compilerError || !ready || preview.error || compileOutput?.diagnostics.length" class="workbench-status" role="status">
@@ -277,7 +302,7 @@ onMounted(async () => {
           </div>
         </div>
         <div id="diagnostics-panel" v-show="activePanel === 'diagnostics'">
-          <DiagnosticsPanel :diagnostics="diagnostics" :compiler-error="compilerError ?? preview.error" :http-error="httpError" :workspace-error="workspaceProblem" @locate="locateDiagnostic" />
+          <DiagnosticsPanel :diagnostics="diagnostics" :compiler-error="compilerError ?? preview.error" :http-error="httpError" :workspace-error="workspaceProblem" :input-error="inputError" @locate="locateDiagnostic" />
         </div>
       </div>
     </section>

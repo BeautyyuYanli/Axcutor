@@ -126,9 +126,17 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
     } finally { polling = false; schedule(); }
   }
 
-  async function run(entry: string, input: string | null, revision: string) {
+  async function run(entry: string, inputRaw = '{}', revision: string) {
     if (disposed || submitting.value || observedId.value) return false;
-    const body = { entry, input, revision };
+    // Validate the envelope boundary even for callers outside the editor. Never
+    // turn business numbers or integer-like keys into JavaScript values.
+    try {
+      if (new JsonText(inputRaw).root.kind !== 'object') throw new TypeError('Input must be a JSON object');
+    } catch (cause) {
+      error.value = { status: null, code: 'invalid_input', message: String(cause), detailsRaw: null, diagnostics: [] };
+      return false;
+    }
+    const body = { entry, revision };
     generation++;
     clearTimer();
     abortRequests();
@@ -137,7 +145,10 @@ export function useExecution(baseUrl = globalThis.location?.origin ?? 'http://lo
     cancelRequested.value = false;
     submitting.value = true;
     try {
-      const accepted = await request(signal => runWorkspace({ client, body, signal }), generation, true);
+      const accepted = await request(signal => runWorkspace({
+        client, body, signal,
+        bodySerializer: () => `{"entry":${JSON.stringify(entry)},"input":${inputRaw},"revision":${JSON.stringify(revision)}}`,
+      }), generation, true);
       schedule();
       return accepted;
     } finally { submitting.value = false; }

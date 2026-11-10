@@ -1,8 +1,8 @@
 """Independent workspace HTTP, Execution controls and static assets.
 
-The standalone API never installs these writable routes. Business input is read
-from workspace files using the Python codec, never parsed by the browser or an
-HTTP framework's JSON conversion. OpenAPI here is the workbench SDK source.
+The standalone API never installs these writable routes. Inline business input
+uses the lossless Python codec, never an HTTP framework's JSON conversion.
+OpenAPI here is the workbench SDK source.
 """
 
 from collections.abc import AsyncIterator
@@ -87,16 +87,17 @@ def openapi_schema() -> dict[str, Any]:
                 {
                     "revision": text,
                     "entry": path,
-                    "input": {"anyOf": [path, {"type": "null"}]},
+                    "input": {"type": "object", "additionalProperties": True, "default": {}},
                 },
                 ["revision", "entry"],
             ),
             "SubmittedSource": obj(
                 {
+                    "entry_path": path,
                     "entry": text,
                     "mounts": {"type": "object", "additionalProperties": ref("MountUnit")},
                 },
-                ["entry", "mounts"],
+                ["entry_path", "entry", "mounts"],
             ),
             "WorkspaceExecution": obj(
                 {
@@ -240,7 +241,7 @@ def create_playground_app(playground: Playground, static: Path | None = None) ->
         if not {"revision", "entry"} <= body.keys() or body.keys() - {"revision", "entry", "input"}:
             raise InvalidRequest("entry, revision and optional input are required")
         try:
-            result = await playground.submit(body["entry"], body.get("input"), body["revision"])
+            result = await playground.submit(body["entry"], body.get("input", {}), body["revision"])
         except CompilationError as error:
             return error_response(
                 "compilation_failed",

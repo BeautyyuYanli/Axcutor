@@ -12,14 +12,14 @@ docker compose up
 
 首次启动会自动构建镜像，并将 `examples/` 复制到宿主机 `playground/workspace/`（挂载到容器 `/workspace`，不纳入 Git 跟踪）。
 
-2. **试跑内置工作流**：打开 [Playground](http://localhost:8080)，顶部默认已选中 **Entry** `demo.main` 与 **Input file** `inputs/demo.json`。直接点击 **Run**，在底部 **Execution** 与 **Trace** 面板观察子工作流并发倍增与菱形并发汇总（`total: 12, spread: 4`）。
+2. **试跑内置工作流**：打开 [Playground](http://localhost:8080)，顶部默认已选中 **Entry** `demo.main`，**Input** 预填 `{"items":[3,1,2],"delay_seconds":5}`。直接点击 **Run**，在底部 **Execution** 与 **Trace** 面板观察子工作流并发倍增与菱形并发汇总（`total: 12, spread: 4`）。
 3. **用 Agent 创建新工作流**：在仓库根目录向你的 Coding Agent 发送：
 
 ```text
-阅读 manual/docs/guide，在 playground/workspace 下创建一个用辗转相除法求最大公约数的工作流包和示例输入
+阅读 manual/docs/guide，在 playground/workspace 下创建一个用辗转相除法求最大公约数的工作流包，并给出示例 Input JSON
 ```
 
-4. **运行新工作流**：刷新 Playground 页面，在顶部 **Entry** 选择新工作流（如 `gcd.main`），在 **Input file** 选择对应输入文件（如 `inputs/gcd.json`，可在左侧 **Workspace files** 点击并在 **Editor** 中修改数值），点击 **Run**。
+4. **运行新工作流**：刷新 Playground 页面，在顶部 **Entry** 选择新工作流（如 `gcd.main`），直接编辑 **Input** JSON，必要时点击 **Expand Input** 展开。Input 根据入口契约生成默认骨架，校验通过后可点击 **Run**。各入口的已编辑草稿在当前页面内保留；Input 不写入工作区文件，单独修改 Input 不会保存源码。刷新页面后，仅文件路径与最近提交相同且 Input 未被编辑的入口可从根调用记录恢复输入；内容相同的其他文件保留各自的默认输入。
 
 ## 文档
 
