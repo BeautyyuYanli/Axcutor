@@ -137,7 +137,7 @@ pub(super) fn root(
     analyses: &mut Vec<GraphAnalysis>,
 ) {
     match &mut root.body {
-        RootBody::Run { run, .. } => check_signal(run, &root.output, a, ds),
+        RootBody::Run { .. } => (),
         RootBody::Graph { graph: g } => graph(
             g,
             &root.input,
@@ -241,14 +241,12 @@ fn graph(
         let mut normal_ports = vec![];
         match &mut node.body {
             NodeBody::Run {
-                run,
                 input,
                 input_schema,
                 output,
                 branches,
                 ..
             } => {
-                check_signal(run, output, &at, ds);
                 for (i, n) in input.iter().enumerate() {
                     if let Some(t) = local.get(n) {
                         input_schema.insert(n.clone(), t.clone());
@@ -451,17 +449,6 @@ fn graph(
                 node.definite_in = None;
             }
         }
-    }
-}
-
-fn check_signal(run: &RunSpec, output: &Symbols, a: &Address, ds: &mut Vec<Diagnostic>) {
-    if matches!(run, RunSpec::Signal) && output.values().any(TypeSpec::contains_handle) {
-        a.at("output").error(
-            ds,
-            "node",
-            "type.signal_handle",
-            "signal output must contain only pure values",
-        );
     }
 }
 

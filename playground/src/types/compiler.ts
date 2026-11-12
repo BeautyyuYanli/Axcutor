@@ -101,7 +101,8 @@ export interface NormalizedRoot {
     kind: 'run'; workflow_id: string; run: RunSpec; input_schema: Symbols; timeout_ms: number | null; retry: Retry | null;
   };
 }
-export interface WorkflowBundle { entry: string; workflows: Record<string, NormalizedRoot> }
+export interface ResourceSpec { description?: string; locator?: TypeSpec }
+export interface WorkflowBundle { entry: string; resources: Record<string, ResourceSpec>; workflows: Record<string, NormalizedRoot> }
 export type NormalizedAst = NormalizedRoot;
 export interface CompileOutput { diagnostics: Diagnostic[]; analysis: GraphAnalysis[]; bundle: WorkflowBundle | null }
 export interface Scope { workflowId: string; scopeGraphPath: string[] }

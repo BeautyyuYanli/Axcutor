@@ -230,9 +230,12 @@ class Playground:
                     axcutor_core.validate_root_interface(
                         dumps(bundle["workflows"][entry_id]["input"]),
                         dumps(bundle["workflows"][entry_id]["output"]),
+                        dumps(bundle["resources"]),
                     )
-                    axcutor_core.validate_input(
-                        dumps(input), dumps(bundle["workflows"][entry_id]["input"])
+                    axcutor_core.validate_external_input(
+                        dumps(input),
+                        dumps(bundle["workflows"][entry_id]["input"]),
+                        dumps(bundle["resources"]),
                     )
                 except (ValueError, TypeError, OverflowError) as error:
                     raise InputValidationError(str(error)) from error
@@ -244,7 +247,10 @@ class Playground:
             for mount in mounts:
                 if mount.name in sys.modules:
                     raise InvalidRequest(f"Python package name already in use: {mount.name!r}")
-            self._module = module_executor({mount.name: mount.name for mount in mounts})
+            module_mounts = {mount.name: mount.name for mount in mounts}
+            self._module = module_executor(module_mounts)
+            if self._worker is not None:
+                self._worker.store.mounts = module_mounts
             execution_id = str(uuid4())
             self.execution_id = execution_id
             if self._trace_observer:

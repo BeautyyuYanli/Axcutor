@@ -424,8 +424,43 @@ pub struct NormalizedRoot {
 
 pub type NormalizedAst = NormalizedRoot;
 
+/// Public resource interface; persistence remains a Worker implementation detail.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ResourceSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locator: Option<TypeSpec>,
+}
+
+impl<'de> Deserialize<'de> for ResourceSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            description: Option<String>,
+            locator: Option<TypeSpec>,
+        }
+        let fields = Fields::deserialize(d)?;
+        if fields
+            .locator
+            .as_ref()
+            .is_some_and(|t| t.nullable || t.contains_handle())
+        {
+            return Err(serde::de::Error::custom(
+                "locator must be a non-nullable pure value TypeSpec",
+            ));
+        }
+        Ok(Self {
+            description: fields.description,
+            locator: fields.locator,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkflowBundle {
     pub entry: String,
+    pub resources: Ordered<ResourceSpec>,
     pub workflows: Ordered<NormalizedAst>,
 }

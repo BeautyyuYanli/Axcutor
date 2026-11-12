@@ -15,7 +15,7 @@ Axcutor 中所有的 `input`、`output` 及 `graph.variables` 均采用 **标准
 | **2. 强类型列表（Array）** | `type: array`<br>`items: <TypeSpec>` *(必填)* | 同质元素有序列表（支持 `for_each` 遍历、`builtin:length` 长度计算、`builtin:array_get` 下标随机访问、`builtin:array_shift` 首元素弹出、`builtin:array_append` 末尾追加、`builtin:array_concat` 列表拼接与 `builtin:array_flatten` 二维列表展平）。 |
 | **3. 强类型结构体（TypedDict）** | `type: object`<br>`properties: { <k>: <TypeSpec> }` *(必填非空，键名 `<k>` 须为合法受限标识符)*<br>`required: [...]` *(可选，省略时默认全部必填)* | 固定字段记录结构（支持通过 `builtin:object_merge` 不可变构造或覆盖更新字段；非空时支持 `var.field` 静态字段路径投影并配合 `builtin:assign` 提取嵌套字段，详见下方投影规则）。 |
 | **4. 强类型有序映射（Ordered Map）** | `type: object`<br>`additionalProperties: <TypeSpec>` *(必填，不可为布尔值)* | 动态 `string` 键、同质值的有序字典（运行时保持插入顺序，支持 `for_each` 遍历、`builtin:length` 键值对计数，以及 `builtin:map_get` 动态键查找、`builtin:map_set` 写入与 `builtin:map_delete` 移除）。 |
-| **5. 资源句柄（Handle）** | `type: handle`<br>`kind: <ModulePath>:<PublicClassName>` *(必填，须在挂载根的 `__ax_resources__.yaml` 中声明)* | 工作流内部传递受管 Python 对象的不透明身份句柄（支持 `builtin:assign`、`builtin:unwrap`、容器算子及同 `kind` 的 `builtin:compare` `eq`/`ne` 判等；不支持 `.field` 投影，且宿主根入口与 `signal` 输出禁止包含句柄）。详见 [05. 资源句柄](./05-resource-handles.md)。 |
+| **5. 资源句柄（Handle）** | `type: handle`<br>`kind: <ModulePath>:<PublicClassName>` *(必填，须在挂载根的 `__ax_resources__.yaml` 中声明)* | 受管资源的名义类型。支持赋值、容器与同 `kind` 的 `eq` / `ne`，不支持字段投影；声明公开 `locator: TypeSpec` 后可通过闭合外部信封进入根接口与 `signal output`。详见 [05. 资源句柄](./05-resource-handles.md)。 |
 | **显式可空修饰（`Optional<T>`）** | `type: [<BaseType>, "null"]`<br>*(配套字段与 `<BaseType>` 一致)* | 允许值为 `null`，可通过 `builtin:unwrap` 收窄为非空 `<BaseType>`。 |
 
 > [!NOTE]

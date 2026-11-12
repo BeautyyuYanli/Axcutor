@@ -1,5 +1,26 @@
 [
   {
+    "entry": "__main__",
+    "mounts": {
+      "__main__": {"packages": {"__main__": {"format": "yaml", "text": "input: {files: {type: array, items: {type: handle, kind: 'infra:File'}}}\noutput: {file: {type: handle, kind: 'infra:File'}}\nrun: {executor: signal}\n"}}},
+      "infra": {"resources": {"infra": {"format": "yaml", "text": "resources: {File: {description: public, locator: {type: integer, enum: [123456789012345678901234567890]}}, Unused: null}\n"}}}
+    }
+  },
+  {
+    "entry": "__main__",
+    "mounts": {
+      "__main__": {"packages": {"__main__": {"format": "yaml", "text": "input: {file: {type: handle, kind: 'infra:File'}}\noutput: {}\nrun: {executor: signal}\n"}}},
+      "infra": {"resources": {"infra": {"format": "yaml", "text": "resources: {File: null}\n"}}}
+    }
+  },
+  {
+    "entry": "main",
+    "mounts": {
+      "main": {"packages": {"main": {"format": "yaml", "text": "input: {}\noutput: {}\nrun: {executor: signal}\n"}}},
+      "infra": {"resources": {"infra": {"format": "yaml", "text": "resources: {File: {locator: {type: [string, 'null']}}}\n"}}}
+    }
+  },
+  {
     "entry": "main",
     "mounts": {"main":{"packages":{"main":{"format":"yaml","text":"input: {tx: {type: handle, kind: 'infra.postgres:Tx'}}\noutput: {same: {type: boolean}}\ngraph:\n  nodes:\n    compare:\n      use: builtin:compare\n      with: {input: {op: {value: eq}, left: tx, right: tx}, output: {result: same}}\n  edges: ['start -> compare', 'compare -> end']\n"}}},"infra":{"resources":{"infra.postgres":{"format":"yaml","text":"resources: {Tx: null}\n"}}}}
   },

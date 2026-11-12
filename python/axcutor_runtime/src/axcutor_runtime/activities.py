@@ -101,7 +101,9 @@ class RunActivities:
             if timeout <= 0 or interval <= 0:
                 raise ValueError("attempt timeout and heartbeat interval must be positive")
             context = ResourceContext(
-                self.store, request.get("resource_context", {}).get("resources", [])
+                self.store,
+                request.get("resource_context", {}).get("resources", []),
+                request.get("resource_context", {}).get("locator_schemas"),
             )
             if scan(request["input_snapshot"], request["input_schema"]) != {
                 rid: descriptor["kind"] for rid, descriptor in context.allowed.items()

@@ -187,7 +187,7 @@ struct Document {
 /// apply to the document's owning root, never to its callers or callees.
 pub fn compile_workflow(request: CompileRequest) -> CompileOutput {
     let mut diagnostics = vec![];
-    let mut resources = HashSet::new();
+    let mut resources = Ordered::new();
     for (root, mount) in &request.mounts {
         if root != "__main__" && (!package_segment(root) || root.starts_with('_')) {
             Address::root(root).error(
@@ -351,6 +351,27 @@ pub fn compile_workflow(request: CompileRequest) -> CompileOutput {
     });
     let bundle = diagnostics.is_empty().then(|| WorkflowBundle {
         entry: request.entry,
+        resources: {
+            let mut kinds = HashSet::new();
+            for document in documents.values() {
+                if let Some(root) = &document.root {
+                    for t in root.input.values().chain(root.output.values()) {
+                        kinds.extend(t.handle_kinds().into_iter().map(str::to_owned));
+                    }
+                }
+            }
+            // Graph analyses include local declarations, run interfaces and inferred
+            // builtin/call types, including every nested graph and iteration scope.
+            for graph in &analysis {
+                for t in graph.symbols.values() {
+                    kinds.extend(t.handle_kinds().into_iter().map(str::to_owned));
+                }
+            }
+            resources
+                .into_iter()
+                .filter(|(k, _)| kinds.contains(k))
+                .collect()
+        },
         workflows: documents
             .into_iter()
             .filter_map(|(id, d)| d.root.map(|r| (id, r)))

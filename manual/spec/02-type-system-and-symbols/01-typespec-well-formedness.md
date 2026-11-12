@@ -66,16 +66,24 @@ $$\mathcal{B} = \{\texttt{"string"}, \texttt{"integer"}, \texttt{"number"}, \tex
 
 ---
 
-## 三、 静态资源符号表核对与纯值边界约束
+## 三、 静态资源符号表核对与外部边界约束
 
-`TypeSpec` 的词法与结构解析不依赖编译上下文；在进入静态检查阶段后，编译器与宿主对包含 `handle` 的类型附加以下全局存在性、可见性与边界约束：
+`TypeSpec` 的词法与结构解析不依赖编译上下文；在进入静态检查阶段后，编译器与宿主对包含 `handle` 的类型附加以下全局存在性、可见性与外部边界可寻址性约束：
 
 1. **全局静态资源符号表 $\Sigma_{\text{res}}$ 与存在性/可见性核验**：
    * 编译器在阶段 1 扫描所有挂载根单元 `MountUnit.resources` 中的 `__ax_resources__.yaml` 头文件，构建全局资源符号表：
-     $$\Sigma_{\text{res}} = \{ \texttt{"}\langle\text{ModulePath}\rangle\texttt{:}\langle\text{PublicClassName}\rangle\texttt{"} \}$$
-   * 对工作流 `input`、`output`、`graph.variables` 及节点 `output` 中递归出现的每一个句柄类型 `{ type: "handle", kind: "<M>:<C>" }`：
-     * **存在性核验**：必须满足 $\texttt{"}\langle M \rangle\texttt{:}\langle C \rangle\texttt{"} \in \Sigma_{\text{res}}$，否则在对应 `TypeSpec` 路径处报告编译期错误 **`type.unknown_resource`**；
-     * **包可见性核验**：设当前工作流标识为 $W \in \text{PackagePath} \cup \{\texttt{"\_\_main\_\_"}\}$，$M$ 必须满足与跨包工作流相同的 `_` 前缀私有段可见性谓词 $\text{Visible}(W, M)$（详见 [`01-cfg-topology-and-sese-validation.md`](../03-static-flow-analysis/01-cfg-topology-and-sese-validation.md) 第四节），否则报告编译期错误 **`visibility.private_resource`**。
-2. **纯 JSON 值边界（Pure-Value Boundary）**：
-   * **协作式等待节点（`executor: "signal"`）输出限制**：`signal` 节点的输出由外部调用方通过 HTTP/CLI 直接提供纯 JSON 负载，外部调用方不持有运行时资源注册表授权。因此当 `run.executor == "signal"` 时，其 `output` 中任何字段的 `TypeSpec` 严禁包含或递归嵌套 `handle`，否则在编译期报告 **`type.signal_handle`**（`signal` 节点的 `input` 仅用于编译期定值依赖分析，允许引用句柄变量）。
-   * **宿主根执行入口（Root Ingress / Egress）限制**：可复用的具名工作流包允许在顶层 `input` 与 `output` 中声明含 `handle` 的类型（供其他工作流通过 `use: workflow:<PackagePath>` 在内部传递句柄，或通过 `axcutor contracts` 生成契约桩）；但当某工作流作为根执行入口启动时，宿主与运行时在创建根执行前递归检查入口工作流的顶层 `input` 与 `output`，若包含 `handle`（含可空句柄或容器内嵌句柄）则直接拒绝启动。
+     $$\Sigma_{\text{res}} : \text{HandleKind} \rightharpoonup \text{ResourceSpec}$$
+   * 对工作流 `input`、`output`、`graph.variables` 及节点 `output` 中递归出现的每一个句柄叶子 `{ type: "handle", kind: "<M>:<C>" }`：
+     * **存在性核验**：必须满足 $\texttt{"}\langle M \rangle\texttt{:}\langle C \rangle\texttt{"} \in \text{dom}(\Sigma_{\text{res}})$，否则在对应 `/kind` 路径处报告编译期错误 **`type.unknown_resource`**；
+     * **包可见性核验**：设当前工作流标识为 $W \in \text{PackagePath} \cup \{\texttt{"\_\_main\_\_"}\}$，$M$ 必须满足与跨包工作流相同的 `_` 前缀私有段可见性谓词 $\text{Visible}(W, M)$（详见 [`01-cfg-topology-and-sese-validation.md`](../03-static-flow-analysis/01-cfg-topology-and-sese-validation.md) 第四节），否则在对应 `/kind` 路径处报告编译期错误 **`visibility.private_resource`**。
+2. **静态资源规格 `ResourceSpec`、公开定位符良构性与 `WorkflowBundle.resources` 裁剪**：
+   * 每个 `__ax_resources__.yaml` 文档必须为仅包含顶层键 `resources: Map<PublicClassName, ResourceSpec | null>` 的非空闭合映射（缺失或为空映射报 `schema.resources`，类名非法报 `schema.identifier`，额外字段报 `schema.unknown_field`）；
+   * 每个非空资源项 `ResourceSpec ::= { description?: String, locator?: TypeSpec }` 为闭合映射（资源持久性 `persistent` 属于 Worker Python `@resource` 类协议，严禁在静态头文件中重复声明，未知字段报 `schema.unknown_field`）；
+   * 若声明了公开 `locator: L`，则 $L$ 必须为满足**顶层非可空**且**纯值无句柄**的良构 `TypeSpec`：
+     $$\text{Nullable}(L) = \text{false} \;\land\; \lnot \text{ContainsHandle}(L)$$
+     违反上述任一条件时，在 `/resources/<Class>/locator` 处报告编译期错误 **`type.schema`**（`target_kind = "resource"`）。这确保可空句柄 `type: ["handle", "null"]` 的空值唯一由顶层 `null` 表达，且定位符不递归嵌套受管句柄；
+   * **可达性裁剪与边界反序列化不变量**：编译产物 `WorkflowBundle { entry, resources, workflows }` 的 `resources` 映射仅保留 `workflows` 依赖闭包内实际引用到的 `HandleKind -> ResourceSpec` 条目；跨语言边界反序列化 `ResourceSpec`（如 `validate_root_interface`、`validate_external_input`、`validate_external_output`）时同步强制校验上述公开 `locator` 非可空纯值不变量。
+3. **外部边界公开可寻址约束（Root Interface & `executor: "signal"`）**：
+   * **`executor: "signal"` 输出约束**：`signal` 节点的 `input` 仅声明编译期只读定值依赖，允许引用内部私有句柄；但其 `output` 中递归出现的每个句柄叶子 `{ type: "handle", kind: K }` 必须已声明公开定位符（$\Sigma_{\text{res}}(K).\text{locator} \neq \bot$），否则在对应 `/kind` 路径处报告编译期错误 **`type.signal_handle`**；
+   * **根工作流接口约束（`validate_root_interface` 与 `"__main__"`）**：具名工作流包允许在顶层 `input` / `output` 中声明内部不可寻址句柄（供 `use: workflow:<PackagePath>` 跨包调用），并在其被选作宿主根入口启动时通过 `validate_root_interface(input, output, resources)` 递归核验顶层 `input` 与 `output` 中的所有句柄均具备公开 `locator`；匿名入口 `"__main__"` 不可被其他工作流调用，编译器直接对 `"__main__"` 的顶层 `input` 与 `output` 执行同一静态检查，违例时在对应 `/kind` 路径处报告编译期错误 **`type.root_handle`**（`target_kind = "variable"`）；
+   * **结构校验与访问授权正交**：公开 `locator` 的 `TypeSpec` 校验仅验证名义 `kind` 与定位符的纯值数据结构（具体实例信封兼容性见 [`02-type-equivalence-and-compatibility.md`](./02-type-equivalence-and-compatibility.md)），不隐含跨租户或调用方访问授权；外部传入定位符的归属核验由宿主控制面入口或业务资源类的签名定位符协议负责。

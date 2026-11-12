@@ -1,6 +1,6 @@
 # 02. 静态类型等价、子类型偏序与字面量实例兼容性算法
 
-本规范基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 中良构 `TypeSpec` 的公理化定义及类型观察与变换算子 $\text{BaseType}(T)$、$\text{Nullable}(T)$ 与 $\text{MakeNullable}(T)$，定义编译期判定两个 `TypeSpec` 静态结构化等价（$T_1 \equiv T_2$）与单向静态子类型偏序（$T_1 <: T_2$）的形式化算法，以及判定常量字面量 $L$ 兼容于目标类型 $T$（$L \models T$）与运行期实例校验规则。
+本规范基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 中良构 `TypeSpec` 的公理化定义及类型观察与变换算子 $\text{BaseType}(T)$、$\text{Nullable}(T)$ 与 $\text{MakeNullable}(T)$，定义编译期判定两个 `TypeSpec` 静态结构化等价（$T_1 \equiv T_2$）与单向静态子类型偏序（$T_1 <: T_2$）的形式化算法，以及静态字面量兼容性（$L \models_{\text{lit}} T$）、内部运行期能力信封兼容性（$v \models_{\text{rt}} T$）与外部定位符信封兼容性（$v \models_{\text{ext}, R} T$）三类实例校验谓词。
 
 ---
 
@@ -83,17 +83,21 @@ $$T_1.\text{kind} = T_2.\text{kind}$$
 
 > **反对称性定理（Antisymmetry）与实例保持性定理（Value Preservation）**：
 > * **反对称性**：$T_1 \equiv T_2 \iff (T_1 <: T_2 \;\land\; T_2 <: T_1)$，即 $(\text{TypeSpec}, <:)$ 在结构化等价商集上构成偏序集（Poset）。
-> * **实例保持性**：$\forall v, \; (v \models T_{\text{actual}} \;\land\; T_{\text{actual}} <: T_{\text{expected}}) \implies v \models T_{\text{expected}}$。任何符合子类型 $T_{\text{actual}}$ 的运行期 JSON 实例，无需任何运行期格式转换，天然符合父类型 $T_{\text{expected}}$ 的 JSON Schema 契约。
+> * **实例保持性**：对上述任一实例兼容性谓词 $\models_\star \in \{\models_{\text{lit}}, \models_{\text{rt}}, \models_{\text{ext}, R}\}$ 均有 $\forall v, \; (v \models_\star T_{\text{actual}} \;\land\; T_{\text{actual}} <: T_{\text{expected}}) \implies v \models_\star T_{\text{expected}}$。任何符合子类型 $T_{\text{actual}}$ 的 JSON 实例，无需任何格式转换，天然符合父类型 $T_{\text{expected}}$ 在同一边界下的契约。
 
 ---
 
-## 三、 编译期字面量兼容性（$L \models_{\text{lit}} T$）与运行期实例校验（$v \models_{\text{rt}} T$）
+## 三、 字面量、内部能力信封与外部定位符信封兼容性
 
-基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 定义的 $\text{BaseType}(T)$ 与 $\text{Nullable}(T)$，编译器与运行时分别对编译期静态字面量 $L$（用于 `graph.variables.default` 初值声明与 `use.with.input` 常量传参）及运行期传输值 $v$ 执行实例兼容性判定：
+基于 [`01-typespec-well-formedness.md`](./01-typespec-well-formedness.md) 定义的 $\text{BaseType}(T)$ 与 $\text{Nullable}(T)$，编译器与运行时定义以下三类结构同构的实例兼容性谓词——三者完全共享空值、标量与容器的递归判定规则，仅在非 `null` 的 `handle` 叶子位置采用边界专属的闭合信封规则：
+
+* **静态字面量兼容 `accepts_literal`（记作 $L \models_{\text{lit}} T$）**：用于校验工作流源码中的静态常量与默认值（如 `graph.variables.default`、`use.with.input` 字面量参数），以及验证公开资源定位符 `locator` 的纯值实例；
+* **内部运行期能力信封兼容 `accepts_runtime`（记作 $v \models_{\text{rt}} T$）**：用于校验工作流栈帧变量环境、Activity 执行器及独立 Child Workflow 之间传递的内部运行期载荷；
+* **外部定位符信封兼容 `accepts_external`（记作 $v \models_{\text{ext}, R} T$，其中 $R = \text{bundle.resources}$）**：用于校验宿主根工作流 `input`、根工作流 `output` 与 `executor: "signal"` `output` 的跨宿主边界载荷。
 
 1. **空值 `null` 规则**：
-   * 当 $L = \texttt{null}$（或运行期 $v = \texttt{null}$）时：兼容于 $T \iff \text{Nullable}(T) = \texttt{true}$。非空类型（$\text{Nullable}(T) = \texttt{false}$）禁止接受 `null`。
-2. **非空实例规则（当实例非 `null` 时）**：
+   * 当实例 $v = \texttt{null}$ 时：$v \models_\star T \iff \text{Nullable}(T) = \texttt{true}$。非空类型（$\text{Nullable}(T) = \texttt{false}$）在所有边界均拒绝 `null`。
+2. **非空实例规则（当实例 $v \neq \texttt{null}$ 时）**：
    * **标量匹配**：
      * $\text{BaseType}(T) = \texttt{string} \implies$ 实例必须为字符串；
      * $\text{BaseType}(T) = \texttt{integer} \implies$ 实例必须为词法整数字面量（带小数点或指数的浮点数字面量如 `1.0` 不满足 `integer`，布尔值 `true` / `false` 亦不视为整数）；
@@ -101,11 +105,12 @@ $$T_1.\text{kind} = T_2.\text{kind}$$
      * $\text{BaseType}(T) = \texttt{boolean} \implies$ 实例必须为布尔值 `true` 或 `false`；
      * 若 $T$ 声明了 `enum`，则还必须满足实例属于 $T.\text{enum}$。
    * **列表匹配（$\text{BaseType}(T) = \texttt{array}$）**：
-     * 实例必须为 JSON 数组，且对每个元素 $e$，递归满足对应兼容性规则 $T.\text{items}$（空数组 `[]` 对任意良构 `array` 类型均满足兼容性，含 `items: { type: "handle", ... }` 的空句柄列表）。
+     * 实例必须为 JSON 数组，且对每个元素 $e$，递归满足对应谓词 $e \models_\star T.\text{items}$（空数组 `[]` 对任意良构 `array` 类型均满足兼容性，含 `items: { type: "handle", ... }` 的空句柄列表）。
    * **有序映射匹配（$T$ 为 `OrderedMap`）**：
-     * 实例必须为 JSON 对象，且对每个值 $u$，递归满足对应兼容性规则 $T.\text{additionalProperties}$（空对象 `{}` 对任意良构 `OrderedMap` 均满足兼容性，含值为 `handle` 的空句柄映射）。
+     * 实例必须为 JSON 对象，且对每个值 $u$，递归满足对应谓词 $u \models_\star T.\text{additionalProperties}$（空对象 `{}` 对任意良构 `OrderedMap` 均满足兼容性，含值为 `handle` 的空句柄映射）。
    * **结构体匹配（$T$ 为 `TypedDict`）**：
-     * 实例必须为 JSON 对象，$\text{set}(T.\text{required}) \subseteq \text{dom}(\text{obj}) \subseteq \text{dom}(T.\text{properties})$，且对每个键 $k \in \text{dom}(\text{obj})$，递归满足对应字段类型 $T.\text{properties}[k]$。
+     * 实例必须为 JSON 对象，$\text{set}(T.\text{required}) \subseteq \text{dom}(\text{obj}) \subseteq \text{dom}(T.\text{properties})$，且对每个键 $k \in \text{dom}(\text{obj})$，递归满足对应字段谓词 $\text{obj}[k] \models_\star T.\text{properties}[k]$。
    * **不透明句柄匹配（$\text{BaseType}(T) = \texttt{handle}$）**：
-     * **编译期静态字面量拒绝（$\text{accepts\_literal}$）**：非空句柄实例仅能由运行期执行器动态分配并注册，编译期静态字面量 $L \neq \texttt{null}$ 恒不满足 $\text{BaseType}(T) = \texttt{handle}$ 的兼容性（仅当 $\text{Nullable}(T) = \texttt{true}$ 时允许 `default: null` 或传入 `null` 字面量）；
-     * **运行期传输信封校验（$\text{accepts\_runtime}$）**：运行期非 `null` 句柄值 $v$ 必须为仅包含 `"$handle"` 与 `"kind"` 两个键的闭合 JSON 对象 $\{\texttt{"\$handle"}: h, \texttt{"kind"}: k\}$，其中 $h$ 为非空字符串且 $k = T.\text{kind}$。传输信封的形状匹配仅完成类型边界校验，实际资源访问授权与所有权由运行期 `WorkflowResourceRegistry` 与 `AttemptResourceContext` 独立核对（详见 [`05-resource-lifecycle.md`](../05-executor-abi/05-resource-lifecycle.md)）。
+     * **静态字面量拒绝（$\models_{\text{lit}}$）**：非 `null` 静态字面量恒不满足 $\text{BaseType}(T) = \texttt{handle}$（仅当 $\text{Nullable}(T) = \texttt{true}$ 时允许 `default: null` 或传入 `null` 字面量）；外部边界使用独立谓词 $\models_{\text{ext}, R}$ 接收定位符信封，不扩大工作流内静态字面量的句柄构造能力；
+     * **内部能力信封校验（$\models_{\text{rt}}$）**：运行期非 `null` 句柄值 $v$ 必须为仅包含 `"$handle"` 与 `"kind"` 两个键的闭合 JSON 对象 $\{\texttt{"\$handle"}: h, \texttt{"kind"}: k\}$，其中 $h$ 为非空字符串（运行期 `rid`）且 $k = T.\text{kind}$；信封形状匹配仅完成类型边界校验，实际资源访问授权与所有权由 `WorkflowResourceRegistry` 与 `AttemptResourceContext` 独立核对（详见 [`05-resource-lifecycle.md`](../05-executor-abi/05-resource-lifecycle.md)）；
+     * **外部定位符信封校验（$\models_{\text{ext}, R}$）**：外部边界非 `null` 句柄值 $v$ 必须为仅包含 `"$handle"` 与 `"locator"` 两个键的闭合 JSON 对象 $\{\texttt{"\$handle"}: k, \texttt{"locator"}: u\}$，满足 $k = T.\text{kind}$、资源表 $R[k]$ 存在且声明了非可空纯值定位符类型 $S = R[k].\text{locator} \neq \bot$，同时定位符载荷满足纯值字面量兼容性 $u \models_{\text{lit}} S$。外部谓词仅验证静态值结构，不隐含跨租户访问授权；通过校验的外部信封在根入口或 Signal 恢复时由 `WorkflowResourceRegistry` 按规范身份物化为内部能力信封。

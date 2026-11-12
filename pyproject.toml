@@ -48,8 +48,6 @@ python-version = "3.11"
 project-includes = ["python/axcutor_runtime/src", "python/axcutor_host/src", "python/axcutor_cli/src", "playground/backend/src"]
 search-path = ["python/axcutor_runtime/src", "python/axcutor_host/src", "python/axcutor_cli/src", "playground/backend/src"]
 check-unannotated-defs = true
-# The native Rust extension does not ship Python type stubs.
-replace-untyped-imports-with-any = ["axcutor_core"]
 
 [tool.pyrefly.errors]
 implicit-any-parameter = "error"

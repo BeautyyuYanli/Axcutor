@@ -34,7 +34,9 @@ from .resource_model import (
     RegistryEntry,
     ResourceRegistry,
     description,
+    handle_kinds,
     has_handles,
+    map_handles,
     pool,
     scan,
 )
@@ -326,7 +328,7 @@ class AxcutorInterpreterWorkflow:
                         if queue in entry.cleaned or workflow.time() >= expires:
                             continue
                         status = await self._dispose_resource(
-                            d, queue, expires, deleted=entry.deleted
+                            d, queue, expires, deleted=entry.deleted or d["external"]
                         )
                         if status == "disposed":
                             entry.cleaned.add(queue)
@@ -336,15 +338,20 @@ class AxcutorInterpreterWorkflow:
                             entry.cleaned.add(queue)
                         else:
                             entry.failed.add(queue)
-                    if d["persistent"] and not entry.deleted and workflow.time() < expires:
+                    if (
+                        not d["external"]
+                        and d["persistent"]
+                        and not entry.deleted
+                        and workflow.time() < expires
+                    ):
                         status = await self._dispose_resource(
                             d, pool(d["creator_queue"]), expires, restore=True
                         )
                         entry.deleted = status == "disposed"
                     if set(d["resident_queues"]) <= entry.cleaned and (
-                        not d["persistent"] or entry.deleted
+                        d["external"] or not d["persistent"] or entry.deleted
                     ):
-                        if entry.deleted:
+                        if entry.deleted or d["external"]:
                             for call in self._resource_calls.values():
                                 if rid in call["owned"]:
                                     call["deleted"].add(rid)
@@ -550,9 +557,18 @@ class AxcutorInterpreterWorkflow:
             if not isinstance(envelope, dict) or envelope.keys() != {"result", "resources"}:
                 raise ValueError("Activity and Child responses require result/resources")
             result = _contract(envelope["result"], body)
-            self._registry.accept(
+            aliases = self._registry.accept(
                 envelope["resources"], allowed, scan(result["output"], body["output"])
             )
+            if aliases:
+                result["output"] = map_handles(
+                    result["output"],
+                    body["output"],
+                    lambda value, kind: {
+                        "$handle": aliases.get(value["$handle"], value["$handle"]),
+                        "kind": kind,
+                    },
+                )
             default = envelope["resources"].get("default_queue")
             if default is not None:
                 if not isinstance(default, str) or not default:
@@ -569,9 +585,13 @@ class AxcutorInterpreterWorkflow:
 
     @workflow.run
     async def run(self, request: JsonObject) -> str:
-        """Run {bundle_json,input_json,options?}; return {branch,output} JSON text.
+        """Execute a checked bundle with JSON-text values and optional runtime options.
 
-        _entry and _call_depth are reserved for interpreter Child Workflows.
+        Real parent=None selects host ingress: external locator envelopes enter
+        input_json and leave in {branch, output}. Independent Children instead
+        consume internal capability envelopes and return {result, resources};
+        resource_context supplies exact parent Run/call IDs, authorizations and
+        the default queue. _entry and _call_depth are reserved for these Children.
         Root ingress failures are terminal and cannot enter a DSL node catch.
         """
         parent = workflow.info().parent
@@ -579,11 +599,14 @@ class AxcutorInterpreterWorkflow:
         cancelled = False
         evicted = False
         result: JsonObject | None = None
+        external_result: JsonObject | None = None
         failure: BaseException | None = None
         exported: set[str] = set()
+        expires: float | None = None
         try:
             self._bundle_json = request["bundle_json"]
             self._bundle = loads(self._bundle_json)
+            self._registry = ResourceRegistry(self._bundle["resources"], workflow.info().run_id)
             self._options = parse_runtime_options(request.get("options", {}))
             depth = request.get("_call_depth", 1)
             if type(depth) is not int or depth < 1:
@@ -592,23 +615,58 @@ class AxcutorInterpreterWorkflow:
             if not isinstance(entry, str):
                 raise ValueError("entry must be a string")
             root = self._bundle["workflows"][entry]
+            external_values: JsonObject = {}
             if parent is None:
-                axcutor_core.validate_root_interface(dumps(root["input"]), dumps(root["output"]))
+                axcutor_core.validate_root_interface(
+                    dumps(root["input"]), dumps(root["output"]), dumps(self._bundle["resources"])
+                )
+                external_values = loads(
+                    axcutor_core.validate_external_input(
+                        request["input_json"],
+                        dumps(root["input"]),
+                        dumps(self._bundle["resources"]),
+                    )
+                )
+                values = self._registry.materialize_external_inputs(external_values, root["input"])
             else:
                 if context.get("parent_run_id") != parent.run_id:
                     raise ValueError("Child resource context must match the real parent Run")
-            values = loads(axcutor_core.validate_input(request["input_json"], dumps(root["input"])))
-            if parent is not None:
+                values = loads(
+                    axcutor_core.validate_input(request["input_json"], dumps(root["input"]))
+                )
                 self._registry.borrow(context.get("resources", []), values, root["input"])
                 self._default_queue = context.get("default_queue")
-            with self._trace_call("workflow", entry, values) as span:
+            with self._trace_call(
+                "workflow",
+                entry,
+                external_values if parent is None else values,
+                None if parent is None else root["input"],
+            ) as span:
                 if span is not None:
                     span["frame_kind"] = "function"
                     span["cursor"] = "run" if root["body"]["kind"] == "run" else "start"
                 result = await self._exec_root(entry, values, depth, None, entry)
-                self._trace_result(span, result)
-                if parent is not None:
-                    exported = set(scan(result["output"], root["output"]))
+                exported = set(scan(result["output"], root["output"]))
+                if parent is None:
+                    # Keep result's internal GC root throughout handler drainage.
+                    # The host result is an independent schema-guided copy.
+                    external_result = self._registry.dematerialize_external_outputs(
+                        result, root["output"]
+                    )
+                    try:
+                        external_result = loads(
+                            axcutor_core.validate_external_output(
+                                dumps(external_result),
+                                dumps(root["output"]),
+                                dumps(root["branches"]),
+                                dumps(self._bundle["resources"]),
+                            )
+                        )
+                    except (ValueError, TypeError) as error:
+                        raise Recoverable("contract", str(error)) from error
+                    self._trace_result(span, external_result)
+                else:
+                    self._trace_result(span, result, root["output"])
         except GeneratorExit:
             evicted = True
             raise
@@ -620,7 +678,8 @@ class AxcutorInterpreterWorkflow:
         finally:
             if not evicted:
                 expires = workflow.time() + CLEANUP_SECONDS
-                await self._collect_resources(final=True, exported=exported, expires=expires)
+                if failure is not None or workflow.cancellation_reason() is not None:
+                    exported.clear()
                 if not workflow.all_handlers_finished():
                     handlers = asyncio.create_task(
                         workflow.wait_condition(
@@ -639,11 +698,18 @@ class AxcutorInterpreterWorkflow:
                         workflow.logger.warning(
                             "resource final handlers did not drain within budget"
                         )
-                    await self._collect_resources(final=True, exported=exported, expires=expires)
-                if workflow.cancellation_reason() is not None:
-                    cancelled = True
-                    failure = asyncio.CancelledError()
-                    await self._collect_resources(final=True, expires=expires)
+                if self._signal_init_timer is not None:
+                    await cancel_and_drain([self._signal_init_timer])
+                await self._collect_resources(final=True, exported=exported, expires=expires)
+                if result is not None:
+                    self._release_result(result)
+                if failure is not None or workflow.cancellation_reason() is not None:
+                    if workflow.cancellation_reason() is not None:
+                        cancelled = True
+                        failure = asyncio.CancelledError()
+                    if exported:
+                        exported.clear()
+                        await self._collect_resources(final=True, expires=expires)
             if cancelled and parent is not None:
                 try:
                     await workflow.get_external_workflow_handle(
@@ -660,11 +726,6 @@ class AxcutorInterpreterWorkflow:
                     )
                 except exceptions.FailureError:
                     workflow.logger.warning("Child resource final update could not be delivered")
-            if not evicted and self._signal_init_timer is not None:
-                # This task only owns a Workflow sleep. Propagate cancellation
-                # of the run while gathering its cancellation/completion.
-                self._signal_init_timer.cancel()
-                await asyncio.gather(self._signal_init_timer, return_exceptions=True)
         if failure is not None:
             if isinstance(failure, (asyncio.CancelledError, exceptions.CancelledError)):
                 raise failure
@@ -683,19 +744,30 @@ class AxcutorInterpreterWorkflow:
                 type=selector,
                 non_retryable=True,
             ) from failure
-        assert result is not None
-        self._release_result(result)
+        assert result is not None and expires is not None
         if parent is not None:
             metadata = self._registry.metadata(exported)
             metadata["default_queue"] = self._default_queue
             for rid in exported:
                 self._registry.entries[rid].owned = False
             return dumps({"result": result, "resources": metadata})
-        return dumps(result)
+        # Success is now locked. Revoke deletion in the live ledger and every
+        # historical call before the cancellation-shielded cache eviction.
+        for rid in exported:
+            self._registry.entries[rid].descriptor["external"] = True
+        for call in self._resource_calls.values():
+            for d in call["allowed"]:
+                if d["rid"] in exported:
+                    d["external"] = True
+                    call["deleted"].add(d["rid"])
+        if exported:
+            await self._collect_resources(final=True, expires=expires)
+        assert external_result is not None
+        return dumps(external_result)
 
     @contextmanager
     def _trace_call(
-        self, kind: str, address: str, values: JsonObject
+        self, kind: str, address: str, values: JsonObject, symbols: JsonObject | None = None
     ) -> Iterator[JsonObject | None]:
         """Optional cumulative observations, reconstructed using Workflow time.
 
@@ -717,7 +789,9 @@ class AxcutorInterpreterWorkflow:
             "started_at": workflow.now().isoformat(),
             "finished_at": None,
             "status": "running",
-            "input_json": dumps(values),
+            "input_json": dumps(
+                self._registry.project_values(values, symbols) if symbols is not None else values
+            ),
             "output_json": None,
             "branch": None,
             "error": None,
@@ -750,10 +824,15 @@ class AxcutorInterpreterWorkflow:
                 span["finished_at"] = workflow.now().isoformat()
                 self._trace_parent.reset(token)
 
-    @staticmethod
-    def _trace_result(span: JsonObject | None, result: JsonObject) -> None:
+    def _trace_result(
+        self, span: JsonObject | None, result: JsonObject, symbols: JsonObject | None = None
+    ) -> None:
         if span is not None:
-            span["output_json"] = dumps(result["output"])
+            span["output_json"] = dumps(
+                self._registry.project_values(result["output"], symbols)
+                if symbols is not None
+                else result["output"]
+            )
             span["branch"] = result["branch"]
 
     def _trace_current(self) -> JsonObject | None:
@@ -765,10 +844,10 @@ class AxcutorInterpreterWorkflow:
         if span is not None:
             span["events"].append({"kind": kind, "at": workflow.now().isoformat(), **details})
 
-    def _trace_input(self, values: JsonObject) -> None:
+    def _trace_input(self, values: JsonObject, symbols: JsonObject) -> None:
         span = self._trace_current()
         if span is not None:
-            span["input_json"] = dumps(values)
+            span["input_json"] = dumps(self._registry.project_values(values, symbols))
             if span["kind"] == "attempt" and span["parent_id"] is not None:
                 self._trace[span["parent_id"] - 1]["input_json"] = span["input_json"]
 
@@ -803,7 +882,7 @@ class AxcutorInterpreterWorkflow:
                 ],
                 "steps": frame.steps,
                 "max_steps": frame.max_steps,
-                "env_json": dumps(frame.env),
+                "env_json": dumps(self._registry.project_values(frame.env, frame.symbols)),
                 "children": [],
                 **(
                     {"child_execution": dict(frame.child_execution)}
@@ -863,12 +942,14 @@ class AxcutorInterpreterWorkflow:
                 non_retryable=True,
             )
         try:
-            if has_handles(loads(waiter.output_schema_json)):
-                raise ValueError("signal output must contain only pure values")
-            validated = axcutor_core.validate_run_contract(
+            validated = axcutor_core.validate_external_output(
                 dumps({"branch": request.get("branch"), "output": request["output"]}),
                 waiter.output_schema_json,
                 waiter.branches_contract_json,
+                dumps(self._bundle["resources"]),
+            )
+            self._registry.validate_external_values(
+                loads(validated)["output"], loads(waiter.output_schema_json)
             )
         except (
             axcutor_core.ContractError,
@@ -929,7 +1010,14 @@ class AxcutorInterpreterWorkflow:
                 raise asyncio.CancelledError
             assert waiter.response is not None
             self._trace_event("signal_delivered", address=address)
-            return waiter.response
+            result = {
+                "branch": waiter.response["branch"],
+                "output": self._registry.materialize_external_inputs(
+                    waiter.response["output"], body["output"]
+                ),
+            }
+            # No await between materialization and the result's GC root.
+            return self._retain_result(result, body["output"])
         finally:
             if waiter.status == "pending":
                 waiter.status = "expired"
@@ -1081,9 +1169,9 @@ class AxcutorInterpreterWorkflow:
                 each = node["modifiers"]["for_each"]
                 names = dict.fromkeys([each["source"]["root"], *_read_names(node["body"])])
                 values = {name: env[name] for name in names if name in env}
-            with self._trace_call("for_each", address, values) as span:
+            with self._trace_call("for_each", address, values, frame.symbols) as span:
                 result = await self._for_each(frame, node, env, address, node_id)
-                self._trace_result(span, result)
+                self._trace_result(span, result, frame.symbols)
                 return result
         self._tick(frame)
         return await self._state_machine(
@@ -1178,7 +1266,7 @@ class AxcutorInterpreterWorkflow:
         injected: JsonObject,
         address: str,
     ) -> JsonObject:
-        with self._trace_call(node["body"]["kind"], address, snapshot) as span:
+        with self._trace_call(node["body"]["kind"], address, snapshot, symbols) as span:
             if span is not None:
                 # A root run is inside its callee function at the same address;
                 # a graph node/iteration still points to the caller's node.
@@ -1199,7 +1287,7 @@ class AxcutorInterpreterWorkflow:
                     frame, node, snapshot, symbols, injected, address
                 )
                 self._retain_result(result, self._output_types(node["body"], symbols))
-                self._trace_result(span, result)
+                self._trace_result(span, result, self._output_types(node["body"], symbols))
                 return result
             except GeneratorExit:
                 # Cache eviction discards reconstructed state; it is not a
@@ -1230,11 +1318,16 @@ class AxcutorInterpreterWorkflow:
         if body["kind"] == "builtin":
             span = self._trace_current()
             if span is not None:
-                span["input_json"] = dumps(
+                self._trace_input(
                     {
                         name: loads(axcutor_core.eval_arg(dumps(arg), dumps(snapshot)))
                         for name, arg in body["bindings"]["input"].items()
-                    }
+                    },
+                    {
+                        name: _path_type(symbols, arg["path"])
+                        for name, arg in body["bindings"]["input"].items()
+                        if arg["kind"] == "path"
+                    },
                 )
             return loads(
                 axcutor_core.eval_builtin(
@@ -1267,7 +1360,7 @@ class AxcutorInterpreterWorkflow:
             roots_before = set(root_scope or ())
             try:
                 with (
-                    self._trace_call("attempt", address, snapshot)
+                    self._trace_call("attempt", address, snapshot, symbols)
                     if attempts > 1
                     else nullcontext(None)
                 ) as attempt_span:
@@ -1288,7 +1381,7 @@ class AxcutorInterpreterWorkflow:
                             self._deadline_scope.reset(token)
                     else:
                         result = await operation
-                    self._trace_result(attempt_span, result)
+                    self._trace_result(attempt_span, result, self._output_types(body, symbols))
                     return result
             except Recoverable as error:
                 if root_scope is not None:
@@ -1338,13 +1431,11 @@ class AxcutorInterpreterWorkflow:
         if depth > self._options["max_call_depth"]:
             raise StackOverflowError("maximum call depth exceeded")
         if body["kind"] == "graph":
-            span = self._trace_current()
-            if span is not None:
-                self._trace_input({**snapshot, **injected})
             inputs = {
                 **{name: symbols[name] for name in body["input"]},
                 **{name: symbols[name] for name in injected},
             }
+            self._trace_input({**snapshot, **injected}, inputs)
             return await self._exec_graph(
                 body["graph"],
                 body,
@@ -1368,7 +1459,7 @@ class AxcutorInterpreterWorkflow:
         values = loads(axcutor_core.validate_input(dumps(values), dumps(root["input"])))
         span = self._trace_current()
         if span is not None:
-            self._trace_input(values)
+            self._trace_input(values, root["input"])
         threshold = self._options["child_workflow_history_events"]
         use_child = workflow.info().is_continue_as_new_suggested() or (
             threshold is not None and workflow.info().get_current_history_length() >= threshold
@@ -1484,6 +1575,7 @@ class AxcutorInterpreterWorkflow:
             "attempt_timeout_ms": timeout,
             "heartbeat_interval_ms": self._options["heartbeat_interval_ms"],
         }
+        output_kinds = handle_kinds(body["output"])
         try:
             allowed = self._registry.authorize(snapshot, body["input_schema"])
             base = (
@@ -1491,12 +1583,18 @@ class AxcutorInterpreterWorkflow:
                 or self._default_queue
                 or workflow.info().task_queue
             )
-            queue = self._registry.route(base, allowed, has_handles(body["output"]))
+            queue = self._registry.route(base, allowed, bool(output_kinds))
         except ValueError as error:
             raise Recoverable("execution", str(error)) from error
-        resource_call = bool(allowed) or has_handles(body["output"])
+        resource_call = bool(allowed) or bool(output_kinds)
         call_id = self._resource_call(allowed, workflow.info().run_id)
         request["resource_context"] = {"resources": allowed, "call_id": call_id}
+        if output_kinds:
+            request["resource_context"]["locator_schemas"] = {
+                kind: self._bundle["resources"][kind]["locator"]
+                for kind in sorted(output_kinds)
+                if self._bundle["resources"].get(kind, {}).get("locator") is not None
+            }
         request["workflow_queue"] = self._default_queue or workflow.info().task_queue
         try:
             while True:

@@ -64,8 +64,8 @@
      * 在具名根 $R$ 的 `MountUnit` 中，`packages` 与 `resources` 的每个键均必须为合法的 `PackagePath`，且其首段必须严格等于 $R$（即 $k = R \;\lor\; \text{starts\_with}(k, R \mathbin{\Vert} \texttt{"."})$，违反时报 `schema.package_path`），任何挂载单元均无法向其他根命名空间注入或遮蔽包定义；
      * `"__main__"` 为系统保留的独立匿名入口标识，其 `MountUnit` 仅允许包含 `packages["__main__"]` 且 `resources` 必须为空；`"__main__"` 不属于可被调用的 `PackagePath`，严禁在 `use: workflow:...` 中引用。
    * **静态资源头文件（`__ax_resources__.yaml`）良构性**：
-     * `MountUnit.resources` 中的每份源文档必须为仅包含顶层键 `resources: Map<PublicSegment, ResourceItemSpec | null>` 的非空闭合映射（其中 `ResourceItemSpec` 仅允许包含可选字段 `description: String`）；
-     * 编译器在阶段 1 遍历全部挂载单元的 `resources` 构建全局资源符号表 $\Sigma_{\text{res}} = \{ \texttt{"}\langle\text{ModulePath}\rangle\texttt{:}\langle\text{PublicClassName}\rangle\texttt{"} \}$，无需导入任何 Python 模块即可静态核验所有 `handle` `kind`。
+     * `MountUnit.resources` 中的每份源文档必须为仅包含顶层键 `resources: Map<PublicSegment, ResourceSpec | null>` 的非空闭合映射。`ResourceSpec` 仅允许可选字段 `description: String` 与 `locator: TypeSpec`；公开 `locator` 须满足[TypeSpec 良构性规范](../02-type-system-and-symbols/01-typespec-well-formedness.md)规定的顶层非空纯值约束；
+     * 编译器在阶段 1 遍历全部挂载单元的 `resources` 构建全局资源符号表 $\Sigma_{\text{res}} = \{ \texttt{"}\langle\text{ModulePath}\rangle\texttt{:}\langle\text{PublicClassName}\rangle\texttt{"} \}$，无需导入任何 Python 模块即可静态核验所有 `handle` `kind`。编译结果的 `WorkflowBundle.resources` 保留可达工作流实际使用的 `HandleKind -> ResourceSpec` 元数据，包括公开定位符 Schema 与说明；未使用的声明不进入结果。
 2. **基于 `_` 前缀的编译期硬性私有可见性边界（Compile-Time Package & Resource Visibility）**：
    * 设目标包路径（被调用工作流包路径或句柄资源的 `ModulePath`）为 $T = s_1 . s_2 . \dots . s_k \in \text{PackagePath}$（其中首段 $s_1 \in \text{PublicSegment}$）：
      * 若 $\forall i \in \{1, \dots, k\},\; s_i \in \text{PublicSegment}$（所有路径段均不以 `_` 开头），则 $T$ 为**公开包（Public Package）**，可被任意工作流及外部匿名入口 `"__main__"` 访问；

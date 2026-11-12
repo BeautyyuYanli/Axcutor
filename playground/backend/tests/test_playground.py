@@ -112,6 +112,73 @@ async def test_playground_persists_fast_interval_and_pairs_worker_throttling(pla
         assert event.heartbeat_timeout.ToMilliseconds() == 30000
 
 
+async def test_new_resource_mount_can_restore_external_input_in_resident_worker(playground):
+    host = playground
+    initial = await host.submit(ENTRY, INPUT, host.view()["revision"])
+    assert (await wait_for(host, initial["execution"]["execution_id"]))["status"] == "completed"
+    h = {"type": "handle", "kind": "playground_external:Conn"}
+    document = {
+        "input": {"f": h},
+        "output": {"value": {"type": "integer"}},
+        "run": {
+            "executor": "builtin",
+            "content": (
+                "import unmounted_pkg\n"
+                "try:\n"
+                "    await resources.put(unmounted_pkg.Conn(0))\n"
+                "except LookupError:\n"
+                "    pass\n"
+                "else:\n"
+                "    raise AssertionError('unmounted resource package was accepted')\n"
+                "return Output(value=(await resources.get(input.f)).value)"
+            ),
+        },
+    }
+    module = (
+        "from axcutor_runtime import resource\n"
+        "disposed: list[int] = []\n"
+        "@resource\n"
+        "class Conn:\n"
+        "    def __init__(self, value: int) -> None:\n"
+        "        self.value = value\n"
+        "    def locator(self) -> dict[str, int]:\n"
+        "        return {'value': self.value}\n"
+        "    @classmethod\n"
+        "    def restore(cls, locator: dict[str, int]) -> 'Conn':\n"
+        "        return cls(locator['value'])\n"
+        "    def dispose(self) -> None:\n"
+        "        disposed.append(self.value)\n"
+    )
+    view = host.view()
+    saved = await host.save(
+        view["revision"],
+        edit(
+            view,
+            {
+                "external.yaml": dumps(document),
+                "unmounted_pkg/__init__.py": module,
+                "workflows/playground_external/__init__.py": module,
+                "workflows/playground_external/__ax_resources__.yaml": (
+                    "resources: {Conn: {locator: {type: object, "
+                    "properties: {value: {type: integer}}}}}"
+                ),
+            },
+        ),
+    )
+    try:
+        submitted = await host.submit(
+            "external.yaml",
+            {"f": {"$handle": h["kind"], "locator": {"value": 42}}},
+            saved["revision"],
+        )
+        final = await wait_for(host, submitted["execution"]["execution_id"])
+        assert final["status"] == "completed"
+        assert final["result"]["output"] == {"value": 42}
+        assert sys.modules["playground_external"].disposed == [42]
+    finally:
+        sys.modules.pop("unmounted_pkg", None)
+
+
 async def test_inline_input_reaches_temporal_losslessly_without_input_files(playground):
     host = playground
     value_schema = {

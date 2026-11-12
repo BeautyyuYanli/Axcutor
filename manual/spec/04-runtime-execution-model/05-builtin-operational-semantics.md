@@ -74,7 +74,7 @@
   * **相等性比较（$op \in \{\texttt{"eq"}, \texttt{"ne"}\}$）**：按 JSON 深度结构化值相等（Deep Structural Equality）判定 $x \equiv_{\text{val}} y$：
     * 数值类型跨 `integer` 与 `number` 按精确十进制实数值相等判定（例如 $1 \equiv_{\text{val}} 1.0$）；
     * 字符串按 UTF-8 / Unicode 码点序列精确匹配；
-    * 不透明句柄 `handle` 按其闭合传输信封 $\{\texttt{"\$handle"}: h, \texttt{"kind"}: k\}$ 的身份标识 $h$ 与类型标识 $k$ 精确匹配；
+    * 不透明句柄 `handle` 按其内部能力信封 $\{\texttt{"\$handle"}: h, \texttt{"kind"}: k\}$ 的身份标识 $h$ 与类型标识 $k$ 精确匹配（由于 `WorkflowResourceRegistry` 对声明了公开 `locator` 的资源在当前顶层执行内维持 `(kind, locator)` 到唯一规范 `rid` 的双射归并，该匹配对公开可寻址资源恒等价于 `(kind, locator)` 字面量判等，对内部私有资源等价于分配身份判等；详见 [`05-resource-lifecycle.md`](../05-executor-abi/05-resource-lifecycle.md)）；
     * 列表 `Array<T>` 按长度相等且对应下标元素递归满足 $\equiv_{\text{val}}$ 判定；
     * 结构体 `TypedDict` 与有序映射 `OrderedMap` 按键集合相同且每个键对应的值递归满足 $\equiv_{\text{val}}$ 判定（相等性比较忽略键的插入顺序）；
     * $\texttt{null}$ 仅与 $\texttt{null}$ 相等；

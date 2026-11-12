@@ -6,7 +6,8 @@ residencies may grow, but identity/protocol fields cannot be rewritten.
 """
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,18 +36,8 @@ def base_type(schema: JsonObject) -> str:
     return next(t for t in value if t != "null") if isinstance(value, list) else value
 
 
-def contains_handle(schema: JsonObject) -> bool:
-    return base_type(schema) == "handle" or any(
-        contains_handle(child)
-        for child in (
-            *schema.get("properties", {}).values(),
-            *[schema[key] for key in ("items", "additionalProperties") if key in schema],
-        )
-    )
-
-
 def has_handles(symbols: JsonObject) -> bool:
-    return any(contains_handle(schema) for schema in symbols.values())
+    return bool(handle_kinds(symbols))
 
 
 def handles(value: Any, schema: JsonObject) -> Iterator[tuple[str, str]]:
@@ -85,6 +76,55 @@ def scan(values: JsonObject, symbols: JsonObject) -> dict[str, str]:
     return found
 
 
+def map_handles(
+    values: JsonObject, symbols: JsonObject, convert: Callable[[JsonObject, str], JsonObject]
+) -> JsonObject:
+    """Copy values, transforming only schema-declared non-null handle slots."""
+
+    def visit(value: Any, schema: JsonObject) -> Any:
+        if value is None:
+            return None
+        base = base_type(schema)
+        if base == "handle":
+            return convert(value, schema["kind"])
+        if base == "array":
+            return [visit(item, schema["items"]) for item in value]
+        if base == "object":
+            return {
+                key: visit(
+                    item,
+                    schema["properties"][key]
+                    if "properties" in schema
+                    else schema["additionalProperties"],
+                )
+                for key, item in value.items()
+            }
+        return deepcopy(value)
+
+    return {
+        key: visit(value, symbols[key]) if key in symbols else deepcopy(value)
+        for key, value in values.items()
+    }
+
+
+def handle_kinds(symbols: JsonObject) -> set[str]:
+    """Kinds needed by an output contract, without inspecting runtime values."""
+    result: set[str] = set()
+
+    def visit(schema: JsonObject) -> None:
+        if base_type(schema) == "handle":
+            result.add(schema["kind"])
+        for child in schema.get("properties", {}).values():
+            visit(child)
+        for key in ("items", "additionalProperties"):
+            if key in schema:
+                visit(schema[key])
+
+    for schema in symbols.values():
+        visit(schema)
+    return result
+
+
 def pool(queue: str) -> str:
     match = _QUEUE.fullmatch(queue)
     if match is None:
@@ -96,19 +136,23 @@ def description(value: JsonObject) -> JsonObject:
     if (
         not isinstance(value, dict)
         or value.keys()
-        != {"rid", "kind", "locator", "persistent", "creator_queue", "resident_queues"}
+        != {"rid", "kind", "locator", "persistent", "creator_queue", "external", "resident_queues"}
         or not isinstance(value["rid"], str)
         or not value["rid"]
         or not isinstance(value["kind"], str)
         or not valid_kind(value["kind"])
-        or type(value["persistent"]) is not bool
-        or (value["persistent"] and value["locator"] is None)
-        or not isinstance(value["creator_queue"], str)
+        or (value["persistent"] is not None and type(value["persistent"]) is not bool)
+        or type(value["external"]) is not bool
+        or ((value["persistent"] is None) != (value["creator_queue"] is None))
+        or (value["persistent"] is None and not value["external"])
+        or ((value["persistent"] or value["external"]) and value["locator"] is None)
+        or (value["creator_queue"] is not None and not isinstance(value["creator_queue"], str))
         or not isinstance(value["resident_queues"], list)
         or any(not isinstance(q, str) for q in value["resident_queues"])
     ):
         raise ValueError("invalid resource description")
-    pool(value["creator_queue"])
+    if value["creator_queue"] is not None:
+        pool(value["creator_queue"])
     for queue in value["resident_queues"]:
         pool(queue)
     return loads(dumps(value))
@@ -116,8 +160,8 @@ def description(value: JsonObject) -> JsonObject:
 
 def same_identity(left: JsonObject, right: JsonObject) -> bool:
     return axcutor_core.literal_equal(
-        dumps({k: v for k, v in left.items() if k != "resident_queues"}),
-        dumps({k: v for k, v in right.items() if k != "resident_queues"}),
+        dumps({k: v for k, v in left.items() if k not in {"resident_queues", "external"}}),
+        dumps({k: v for k, v in right.items() if k not in {"resident_queues", "external"}}),
     )
 
 
@@ -133,11 +177,93 @@ class RegistryEntry:
 
 
 class ResourceRegistry:
-    """Run-local identity and cleanup responsibility, without slot reference counts."""
+    """Run-local canonical identity and cleanup responsibility, without slot counts.
 
-    def __init__(self) -> None:
+    Public (kind, locator) pairs have one active surrogate ID. Duplicate wrappers
+    remain pending under their own IDs until eviction. Run ownership coordinates
+    residencies independently of the descriptor's external deletion permission.
+    """
+
+    def __init__(self, resources: JsonObject | None = None, run_id: str = "") -> None:
         self.entries: dict[str, RegistryEntry] = {}
         self.sticky: dict[str, str] = {}
+        self.resources = resources or {}
+        self._run_id = run_id
+        self._external_sequence = 0
+
+    def _canonical(self, kind: str, locator: Any) -> str | None:
+        if self.resources.get(kind, {}).get("locator") is None:
+            return None
+        for rid, entry in self.entries.items():
+            if (
+                not entry.pending
+                and entry.descriptor["kind"] == kind
+                and axcutor_core.literal_equal(dumps(entry.descriptor["locator"]), dumps(locator))
+            ):
+                return rid
+        return None
+
+    def validate_external_values(self, values: JsonObject, symbols: JsonObject) -> None:
+        """Read-only rejection of locators whose internal entity is being deleted."""
+
+        def check(value: JsonObject, kind: str) -> JsonObject:
+            for entry in self.entries.values():
+                d = entry.descriptor
+                if (
+                    entry.pending
+                    and not d["external"]
+                    and d["kind"] == kind
+                    and axcutor_core.literal_equal(dumps(d["locator"]), dumps(value["locator"]))
+                ):
+                    raise ValueError("resource locator is pending external deletion")
+            return value
+
+        map_handles(values, symbols, check)
+
+    def materialize_external_inputs(self, values: JsonObject, symbols: JsonObject) -> JsonObject:
+        """Synchronous materialization; callers attach GC roots before yielding."""
+        self.validate_external_values(values, symbols)
+
+        def convert(value: JsonObject, kind: str) -> JsonObject:
+            locator = value["locator"]
+            rid = self._canonical(kind, locator)
+            if rid is None:
+                self._external_sequence += 1
+                rid = f"res_ext_{self._run_id}_{self._external_sequence}"
+                self.entries[rid] = RegistryEntry(
+                    description(
+                        {
+                            "rid": rid,
+                            "kind": kind,
+                            "locator": locator,
+                            "persistent": None,
+                            "creator_queue": None,
+                            "external": True,
+                            "resident_queues": [],
+                        }
+                    ),
+                    True,
+                )
+            return {"$handle": rid, "kind": kind}
+
+        return map_handles(values, symbols, convert)
+
+    def project_values(self, values: JsonObject, symbols: JsonObject) -> JsonObject:
+        """Project now, while descriptors still exist; history stores no private IDs."""
+
+        def convert(value: JsonObject, kind: str) -> JsonObject:
+            if self.resources.get(kind, {}).get("locator") is None:
+                return {"$handle": kind}
+            d = self.entries[value["$handle"]].descriptor
+            return {"$handle": kind, "locator": deepcopy(d["locator"])}
+
+        return map_handles(values, symbols, convert)
+
+    def dematerialize_external_outputs(self, result: JsonObject, symbols: JsonObject) -> JsonObject:
+        return {
+            "branch": result["branch"],
+            "output": self.project_values(result["output"], symbols),
+        }
 
     def authorize(self, values: JsonObject, symbols: JsonObject) -> list[JsonObject]:
         result = []
@@ -160,7 +286,7 @@ class ResourceRegistry:
 
     def accept(
         self, metadata: JsonObject, allowed: list[JsonObject], output: dict[str, str] | None
-    ) -> None:
+    ) -> dict[str, str]:
         """Validate the complete handoff before accepting any new ownership."""
         authorized = {d["rid"]: d for d in allowed}
         if (
@@ -225,13 +351,30 @@ class ResourceRegistry:
             entry = self.entries.get(rid)
             if entry is not None and not same_identity(entry.descriptor, d):
                 raise ValueError("resource identity changed across a call")
-        self.entries.update({rid: RegistryEntry(d, True) for rid, d in created.items()})
+        # The caller's public resource table is authoritative even for custom
+        # executors that did not use ResourceContext on the Worker.
+        for d in created.values():
+            schema = self.resources.get(d["kind"], {}).get("locator")
+            if schema is not None:
+                if d["locator"] is None:
+                    raise ValueError("public resource requires a locator")
+                axcutor_core.validate_literal(dumps(d["locator"]), dumps(schema))
+        aliases: dict[str, str] = {}
+        for rid, d in created.items():
+            canonical = self._canonical(d["kind"], d["locator"])
+            if canonical is not None:
+                aliases[rid] = canonical
+                # Keep duplicate wrappers under their original IDs for eviction;
+                # their shared external entity belongs to the canonical entry.
+                d["external"] = True
+            self.entries[rid] = RegistryEntry(d, True, pending=canonical is not None)
         for residency in residences:
             queue = residency["worker_queue"]
             for rid in residency["resident_rids"]:
                 entry = self.entries.get(rid)
                 if entry is not None and queue not in entry.descriptor["resident_queues"]:
                     entry.descriptor["resident_queues"].append(queue)
+        return aliases
 
     def route(self, base: str, inputs: list[JsonObject], produces_handles: bool) -> str:
         transient = [d for d in inputs if d["locator"] is None]

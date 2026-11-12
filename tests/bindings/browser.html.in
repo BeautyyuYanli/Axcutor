@@ -30,7 +30,14 @@ try {
       invalidQueries++;
     }
   }
-  const shallow = oracle[0].queries[0].analysis_json;
+  const handleSchema = '{"file":{"type":"handle","kind":"infra:File"}}';
+  const resources = '{"infra:File":{"locator":{"type":"integer"}}}';
+  const external = '{"file":{"$handle":"infra:File","locator":123456789012345678901234567890}}';
+  if (api.validate_root_interface(handleSchema, '{}', resources) !== 'null') throw new Error('root interface');
+  if (api.validate_external_input(external, handleSchema, resources) !== external) throw new Error('external input');
+  if (api.validate_external_output('{"output":' + external + '}', handleSchema, '{}', resources) !== '{"branch":null,"output":' + external + '}') throw new Error('external output');
+  expectHostError(() => api.validate_external_input('{"file":{"$handle":"rid","kind":"infra:File"}}', handleSchema, resources));
+  const shallow = oracle.find(entry => entry.queries.length).queries[0].analysis_json;
   const deepType = '{"type":"array","items":'.repeat(2048) + '{"type":"integer"}' + '}'.repeat(2048);
   const deepAnalysis = shallow.slice(0, -1) + ',"extra":' + '['.repeat(2048) + '0' + ']'.repeat(2048) + '}';
   for (const callback of [

@@ -133,13 +133,18 @@ class ResourceStore:
 
     Kinds address a package's public exports. Definitions may live in its
     initializer or direct file submodules, never another package. Static resource
-    headers belong to compilation and are not read by the Store.
+    headers belong to compilation and are not read by the Store. Local disposal
+    follows the actual class protocol, including external descriptors whose
+    persistent field remains null. External deletion revocation is irreversible.
     """
 
     def __init__(self, worker_queue: str, mounts: Mapping[str, str] | None = None) -> None:
         self.worker_queue = worker_queue
         self.mounts = module_mounts(mounts)
         self.entries: dict[str, _Entry] = {}
+        # Revocation survives cache eviction, so delayed restore/cleanup requests
+        # cannot regain permission to delete an entity already handed to a host.
+        self._external: set[str] = set()
         self._locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self.closed = False
         self.settlements: set[asyncio.Task[None]] = set()
@@ -168,7 +173,10 @@ class ResourceStore:
             else:
                 self._locks[rid] = lock, count - 1
 
-    def resolve_resource_class(self, kind: str) -> type[Any]:
+    def resolve_resource_class(
+        self, kind: str, *, descriptor: JsonObject | None = None
+    ) -> type[Any]:
+        """Resolve and check the class protocol once, optionally against a descriptor."""
         if not valid_kind(kind):
             raise TypeError("invalid resource kind")
         module, name = kind.split(":")
@@ -180,7 +188,13 @@ class ResourceStore:
             or getattr(sys.modules.get(cls.__module__), "__package__", None) != physical
         ):
             raise TypeError("resource kind must address a public class defined in the same package")
-        _protocol(cls)
+        persistent = _protocol(cls)
+        if descriptor is not None:
+            if descriptor["persistent"] is not None and persistent != descriptor["persistent"]:
+                raise TypeError("resource protocol differs from its registered description")
+            # _protocol already checks that locator/restore form a callable pair.
+            if descriptor["persistent"] is None and getattr(cls, "locator", None) is None:
+                raise TypeError("external resources require locator and restore")
         return cls
 
     def _class_kind(self, value: Any) -> str:
@@ -194,8 +208,7 @@ class ResourceStore:
         return kind
 
     async def _validate_instance(self, value: Any, descriptor: JsonObject) -> None:
-        if _protocol(type(value)) != descriptor["persistent"]:
-            raise TypeError("resource protocol differs from its registered description")
+        """Check the instance locator after its class protocol has been validated."""
         locator = await _hook(value.locator) if hasattr(value, "locator") else None
         if not axcutor_core.literal_equal(dumps(locator), dumps(descriptor["locator"])):
             raise ValueError("resource locator differs from its registered description")
@@ -208,9 +221,9 @@ class ResourceStore:
                 raise RuntimeError("resource Store is closed")
             entry = self.entries.get(rid)
             cached = entry is not None
-            cls = self.resolve_resource_class(descriptor["kind"])
-            if _protocol(cls) != descriptor["persistent"]:
-                raise TypeError("resource protocol differs from its registered description")
+            cls = self.resolve_resource_class(descriptor["kind"], descriptor=descriptor)
+            if descriptor["external"]:
+                self._external.add(rid)
             if entry is None:
                 if descriptor["locator"] is None:
                     raise LookupError(f"transient resource {rid} is missing on this Worker")
@@ -218,14 +231,16 @@ class ResourceStore:
                 if type(value) is not cls:
                     raise TypeError("restore must return the exact resource class")
                 await self._validate_instance(value, descriptor)
-                entry = _Entry(value, description(descriptor))
+                entry = _Entry(
+                    value, description(descriptor), delete_external=rid not in self._external
+                )
                 self.entries[rid] = entry
                 # Closure during an async restore cannot grant a new borrow.
                 if context.closed or self.closed:
                     entry.pending = True
                     # This is an input restoration, never an allocation. Losing
                     # the borrow cannot grant deletion of its owner's object.
-                    entry.delete_external = not descriptor["persistent"]
+                    entry.delete_external = False
                     await self._dispose(rid, entry)
                     raise RuntimeError("resource context closed during restore")
             if (
@@ -238,6 +253,9 @@ class ResourceStore:
                 )
             if cached:
                 await self._validate_instance(entry.value, descriptor)
+            if rid in self._external:
+                entry.descriptor["external"] = True
+                entry.delete_external = False
             context._check_open()
             if self.closed:
                 raise RuntimeError("resource Store is closed")
@@ -249,7 +267,7 @@ class ResourceStore:
         """Called under the ID lock; a failed destructor retains its exact instance."""
         if entry.users:
             return "unconfirmed"
-        if not entry.descriptor["persistent"] or entry.delete_external:
+        if not _protocol(type(entry.value)) or entry.delete_external:
             dispose = getattr(entry.value, "dispose", None)
             if dispose is not None:
                 await _hook(dispose)
@@ -264,13 +282,13 @@ class ResourceStore:
         rid = descriptor["rid"]
         try:
             async with self._locked(rid):
+                if descriptor["external"] or deleted:
+                    self._external.add(rid)
                 entry = self.entries.get(rid)
                 if entry is None:
-                    if not (restore and descriptor["persistent"] and not deleted):
+                    if not (restore and descriptor["persistent"] and rid not in self._external):
                         return {"rid": rid, "status": "missing"}
-                    cls = self.resolve_resource_class(descriptor["kind"])
-                    if not _protocol(cls):
-                        raise TypeError("persistent protocol mismatch")
+                    cls = self.resolve_resource_class(descriptor["kind"], descriptor=descriptor)
                     value = await _hook(cls.restore, loads(dumps(descriptor["locator"])))
                     if type(value) is not cls:
                         raise TypeError("restore must return the exact resource class")
@@ -280,7 +298,9 @@ class ResourceStore:
                 if not same_identity(entry.descriptor, descriptor):
                     raise ValueError("cleanup description conflicts with registered identity")
                 entry.pending = True
-                entry.delete_external = not deleted
+                if rid in self._external:
+                    entry.descriptor["external"] = True
+                    entry.delete_external = False
                 return {"rid": rid, "status": await self._dispose(rid, entry)}
         except Exception as error:
             logger.warning(
@@ -288,14 +308,53 @@ class ResourceStore:
             )
             return {"rid": rid, "status": "unconfirmed", "error": str(error)}
 
+    def _protect_orphan_aliases(self, context: "ResourceContext", orphans: set[str]) -> None:
+        """Set deletion rights before any destructor can suspend or remove an alias.
+
+        Unused input authorizations still protect their entities without a local
+        get(). Pure orphan batches retain one deletion owner per (kind, locator);
+        every nonpersistent wrapper still closes its own local connection.
+        Local yielding does not mark a descriptor external: pending aliases that
+        yielded cannot protect a later orphan that must take over deletion.
+        """
+        survivors = [d for rid, d in context.allowed.items() if rid not in orphans]
+        survivors.extend(
+            entry.descriptor
+            for rid, entry in self.entries.items()
+            if rid not in orphans
+            and (
+                not entry.pending
+                or rid in self._external
+                or (entry.delete_external and _protocol(type(entry.value)))
+            )
+        )
+        deletion_owners: list[JsonObject] = []
+        for rid, entry in self.entries.items():
+            d = entry.descriptor
+            if rid not in orphans or d["locator"] is None:
+                continue
+            if any(
+                other["kind"] == d["kind"]
+                and axcutor_core.literal_equal(dumps(other["locator"]), dumps(d["locator"]))
+                for other in (*survivors, *deletion_owners)
+            ):
+                entry.delete_external = False
+            elif _protocol(type(entry.value)):
+                deletion_owners.append(d)
+
     async def release(self, context: "ResourceContext", orphans: set[str]) -> None:
+        # Publish the complete orphan batch before alias adjudication or any ID
+        # lock can suspend, so concurrent exits cannot protect each other forever.
+        for rid in orphans:
+            entry = self.entries.get(rid)
+            if entry is not None:
+                entry.pending = True
+        self._protect_orphan_aliases(context, orphans)
         for rid in context.used:
             async with self._locked(rid):
                 entry = self.entries.get(rid)
                 if entry is not None:
                     entry.users.discard(context)
-                    if rid in orphans:
-                        entry.pending = True
         # One destructor attempt per ID per round, after removing all local uses.
         pending = [
             entry.descriptor for entry in self.entries.values() if entry.pending and not entry.users
@@ -304,12 +363,12 @@ class ResourceStore:
             entry = self.entries.get(descriptor["rid"])
             if entry is not None and descriptor["rid"] not in context.cleanup_attempted:
                 context.cleanup_attempted.add(descriptor["rid"])
-                await self.dispose(descriptor, deleted=not entry.delete_external)
+                await self.dispose(descriptor)
 
     async def shutdown(self) -> None:
         self.closed = True
         for entry in list(self.entries.values()):
-            if entry.descriptor["persistent"] and not entry.pending:
+            if _protocol(type(entry.value)) and not entry.pending:
                 entry.delete_external = False
             entry.pending = True
             await self.dispose(entry.descriptor, deleted=not entry.delete_external)
@@ -321,7 +380,12 @@ class ResourceContext:
     Finalization revokes new access; local users remain until actual drainage.
     """
 
-    def __init__(self, store: ResourceStore, allowed: list[JsonObject]) -> None:
+    def __init__(
+        self,
+        store: ResourceStore,
+        allowed: list[JsonObject],
+        locator_schemas: JsonObject | None = None,
+    ) -> None:
         self.store = store
         self.allowed = {d["rid"]: description(d) for d in allowed}
         if len(self.allowed) != len(allowed):
@@ -332,6 +396,7 @@ class ResourceContext:
         self.drained = False
         self.tasks: set[asyncio.Task[Any]] = set()
         self.cleanup_attempted: set[str] = set()
+        self.locator_schemas = locator_schemas or {}
 
     def _check_open(self) -> None:
         if self.closed:
@@ -358,6 +423,7 @@ class ResourceContext:
             "kind": kind,
             "locator": locator,
             "persistent": persistent,
+            "external": False,
             "creator_queue": self.store.worker_queue,
             "resident_queues": [self.store.worker_queue],
         }
@@ -390,6 +456,13 @@ class ResourceContext:
                 entry = self.store.entries.get(rid)
                 if entry is None or entry.pending or self.store._class_kind(entry.value) != kind:
                     raise ValueError("allocated output resource is no longer valid")
+                locator_schema = self.locator_schemas.get(kind)
+                if locator_schema is not None:
+                    if descriptor["locator"] is None:
+                        raise ValueError("public resource requires a locator")
+                    axcutor_core.validate_literal(
+                        dumps(descriptor["locator"]), dumps(locator_schema)
+                    )
         return set(found)
 
     def metadata(self, exported: set[str]) -> JsonObject:

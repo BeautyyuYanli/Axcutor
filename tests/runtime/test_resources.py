@@ -476,6 +476,7 @@ def test_schema_guided_scanning_and_registry_identity_do_not_interpret_business_
         "kind": "infra:File",
         "locator": {"v": Decimal("1.0")},
         "persistent": True,
+        "external": False,
         "creator_queue": "pool-worker-" + "a" * 32,
         "resident_queues": ["pool-worker-" + "a" * 32],
     }
@@ -607,7 +608,7 @@ async def test_real_root_interfaces_reject_nullable_handles_even_with_forged_dep
     document[position] = {"tx": {**handle_type(resource_package), "type": ["handle", "null"]}}
     async with execution() as run:
         failure = await run.failed(document, {"tx": None} if position == "input" else {})
-        assert failure.type == "EngineError" and "pure values" in failure.message
+        assert failure.type == "EngineError" and "public locator" in failure.message
 
 
 async def test_concurrent_put_accepts_the_same_instance_only_once(resource_package):
@@ -1004,7 +1005,7 @@ async def test_forged_child_depth_cannot_bypass_actual_root_interface(server, re
 
         with pytest.raises(WorkflowFailureError) as failure:
             await handle.result()
-        assert "pure values" in str(failure.value.cause)
+        assert "public locator" in str(failure.value.cause)
 
 
 @pytest.mark.parametrize("valid_source", [False, True])

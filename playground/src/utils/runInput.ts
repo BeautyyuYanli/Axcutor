@@ -6,12 +6,13 @@ import { JsonText, type JsonPath } from './losslessJson';
 export const DEMO_ENTRY = 'workflows/demo/main/__axcutor__.yaml';
 export const DEMO_INPUT = '{"items":[3,1,2],"delay_seconds":5}';
 
-export function defaultInput(schemaRaw: string): string {
+export function defaultInput(schemaRaw: string, resourcesRaw = '{}'): string {
   const schema = new JsonText(schemaRaw);
-  const literal = (path: JsonPath): string => {
-    const enumeration = schema.raw([...path, 'enum', 0]);
+  const resources = new JsonText(resourcesRaw);
+  const literal = (path: JsonPath, source = schema): string => {
+    const enumeration = source.raw([...path, 'enum', 0]);
     if (enumeration !== null) return enumeration;
-    const types = JSON.parse(schema.raw([...path, 'type'])!) as string | string[];
+    const types = JSON.parse(source.raw([...path, 'type'])!) as string | string[];
     const type = Array.isArray(types) ? types.find(type => type !== 'null') : types;
     switch (type) {
       case 'integer': return '0';
@@ -19,16 +20,19 @@ export function defaultInput(schemaRaw: string): string {
       case 'string': return '""';
       case 'boolean': return 'false';
       case 'array': return '[]';
+      case 'handle': {
+        const kind = JSON.parse(source.raw([...path, 'kind'])!) as string;
+        if (resources.raw([kind, 'locator']) === null) return 'null';
+        return `{"$handle":${JSON.stringify(kind)},"locator":${literal([kind, 'locator'], resources)}}`;
+      }
       case 'object': {
-        const properties = schema.at([...path, 'properties'])?.entries;
+        const properties = source.at([...path, 'properties'])?.entries;
         if (!properties) return '{}';
-        const requiredRaw = schema.raw([...path, 'required']);
+        const requiredRaw = source.raw([...path, 'required']);
         const required = new Set<string>(requiredRaw === null ? properties.keys() : JSON.parse(requiredRaw));
         return `{${[...properties.keys()].filter(key => required.has(key))
-          .map(key => `${JSON.stringify(key)}:${literal([...path, 'properties', key])}`).join(',')}}`;
+          .map(key => `${JSON.stringify(key)}:${literal([...path, 'properties', key], source)}`).join(',')}}`;
       }
-      // Resource handles cannot be fabricated as external input. Preflight
-      // reports the unsupported value instead of throwing during rendering.
       default: return 'null';
     }
   };

@@ -53,9 +53,48 @@ fn literal_equal(left_json: &str, right_json: &str) -> PyResult<bool> {
 }
 
 #[pyfunction]
-fn validate_root_interface(input_schema_json: &str, output_schema_json: &str) -> PyResult<String> {
-    compiler::kernel::validate_root_interface_json(input_schema_json, output_schema_json)
+fn validate_root_interface(
+    input_schema_json: &str,
+    output_schema_json: &str,
+    resources_json: &str,
+) -> PyResult<String> {
+    compiler::kernel::validate_root_interface_json(
+        input_schema_json,
+        output_schema_json,
+        resources_json,
+    )
+    .map_err(kernel_error)
+}
+
+#[pyfunction]
+fn validate_external_input(
+    input_json: &str,
+    schema_json: &str,
+    resources_json: &str,
+) -> PyResult<String> {
+    compiler::kernel::validate_external_input_json(input_json, schema_json, resources_json)
         .map_err(kernel_error)
+}
+
+#[pyfunction]
+fn validate_external_output(
+    response_json: &str,
+    output_schema_json: &str,
+    branches_json: &str,
+    resources_json: &str,
+) -> PyResult<String> {
+    compiler::kernel::validate_external_output_json(
+        response_json,
+        output_schema_json,
+        branches_json,
+        resources_json,
+    )
+    .map_err(kernel_error)
+}
+
+#[pyfunction]
+fn validate_literal(value_json: &str, schema_json: &str) -> PyResult<String> {
+    compiler::kernel::validate_literal_json(value_json, schema_json).map_err(kernel_error)
 }
 
 #[pyfunction]
@@ -87,6 +126,9 @@ fn axcutor_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_run_contract, m)?)?;
     m.add_function(wrap_pyfunction!(validate_input, m)?)?;
     m.add_function(wrap_pyfunction!(validate_root_interface, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_external_input, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_external_output, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_literal, m)?)?;
     m.add_function(wrap_pyfunction!(literal_equal, m)?)?;
     m.add_function(wrap_pyfunction!(compile_workflow, m)?)?;
     m.add_function(wrap_pyfunction!(get_available_vars_at_node, m)?)?;

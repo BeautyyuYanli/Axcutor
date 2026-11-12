@@ -203,8 +203,11 @@ class AxcutorHost:
     ) -> Execution:
         """Synchronously compile/validate, then start once and read its view.
 
-        CompilationError retains compiler diagnostics. Shape and input errors
-        never create a durable execution or contact the backend.
+        CompilationError retains compiler diagnostics, including anonymous root
+        handles without public locators. InputValidationError rejects external
+        input values or named root input/output handles without public locators
+        (HTTP adapters map it to 422 input_validation_failed). Shape and input
+        errors never create a durable execution or contact the backend.
         """
         inputs = {} if input is None else input
         _validate_submission(entry, mounts, inputs, execution_id)
@@ -214,9 +217,12 @@ class AxcutorHost:
             axcutor_core.validate_root_interface(
                 dumps(bundle["workflows"][entry]["input"]),
                 dumps(bundle["workflows"][entry]["output"]),
+                dumps(bundle["resources"]),
             )
-            input_json = axcutor_core.validate_input(
-                dumps(inputs), dumps(bundle["workflows"][entry]["input"])
+            input_json = axcutor_core.validate_external_input(
+                dumps(inputs),
+                dumps(bundle["workflows"][entry]["input"]),
+                dumps(bundle["resources"]),
             )
         except (ValueError, TypeError, OverflowError) as error:
             raise InputValidationError(str(error)) from error

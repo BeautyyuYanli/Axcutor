@@ -76,6 +76,15 @@ pub fn validate_run_contract(
     schema: &Symbols,
     branches: &Ordered<BranchContract>,
 ) -> Result<ExecutionResult, KernelError> {
+    validate_output(response, schema, branches, |t, v| t.accepts_runtime(v))
+}
+
+fn validate_output(
+    response: &Value,
+    schema: &Symbols,
+    branches: &Ordered<BranchContract>,
+    accepts: impl Fn(&TypeSpec, &Value) -> bool,
+) -> Result<ExecutionResult, KernelError> {
     let fail = |s: &str| KernelError::Contract(s.into());
     let response = response
         .as_object()
@@ -101,7 +110,7 @@ pub fn validate_run_contract(
         let value = raw
             .get(name)
             .ok_or_else(|| fail(&format!("missing output {name}")))?;
-        if !typespec.accepts_runtime(value) {
+        if !accepts(typespec, value) {
             return Err(fail(&format!("output {name} violates TypeSpec")));
         }
         output.insert(name.into(), value.clone());
@@ -109,18 +118,29 @@ pub fn validate_run_contract(
     Ok(ExecutionResult { branch, output })
 }
 
-/// Root ingress errors cannot be consumed by a DSL node's retry/catch.
+/// Internal capability-envelope validation for calls and independent Children.
+/// Shape checks do not confer authority; the interpreter checks the registry.
 pub fn validate_input(input: &Value, schema: &Symbols) -> Result<Value, KernelError> {
-    let fail = || {
-        KernelError::Input(
-            "input must contain exactly the declared parameters with valid types".into(),
-        )
-    };
+    validate_parameters(
+        input,
+        schema,
+        TypeSpec::accepts_runtime,
+        "input must contain exactly the declared parameters with valid types",
+    )
+}
+
+fn validate_parameters(
+    input: &Value,
+    schema: &Symbols,
+    accepts: impl Fn(&TypeSpec, &Value) -> bool,
+    message: &str,
+) -> Result<Value, KernelError> {
+    let fail = || KernelError::Input(message.into());
     let values = input.as_object().ok_or_else(fail)?;
     if values.len() != schema.len()
         || !schema
             .iter()
-            .all(|(k, t)| values.get(k).is_some_and(|v| t.accepts_runtime(v)))
+            .all(|(k, t)| values.get(k).is_some_and(|v| accepts(t, v)))
     {
         return Err(fail());
     }
@@ -456,22 +476,78 @@ pub fn validate_run_contract_json(
     let response = decode(response).map_err(|e| KernelError::Contract(e.to_string()))?;
     encode(&validate_run_contract(&response, &schema, &branches)?)
 }
+/// Internal call/Child ingress; malformed arguments and incompatible parameters
+/// map to Argument/Input errors, never recoverable output Contract errors.
 pub fn validate_input_json(input: &str, schema: &str) -> Result<String, KernelError> {
     encode(&validate_input(&decode(input)?, &symbols(schema)?)?)
 }
 
-/// Validate the actual host entry separately from compilation of reusable definitions.
-pub fn validate_root_interface_json(input: &str, output: &str) -> Result<String, KernelError> {
+/// Require public locators at the actual host entry, independently of reusable
+/// definition compilation. Rejection is an Input error; success encodes null.
+pub fn validate_root_interface_json(
+    input: &str,
+    output: &str,
+    resources: &str,
+) -> Result<String, KernelError> {
+    let resources: Ordered<ResourceSpec> = model(resources)?;
     if symbols(input)?
         .values()
         .chain(symbols(output)?.values())
-        .any(TypeSpec::contains_handle)
+        .flat_map(|t| t.handle_kinds())
+        .any(|kind| resources.get(kind).is_none_or(|r| r.locator.is_none()))
     {
         return Err(KernelError::Input(
-            "root input and output must contain only pure values".into(),
+            "root handles require a declared public locator".into(),
         ));
     }
     Ok("null".into())
+}
+
+/// Host root ingress with closed public locator envelopes. Schema/value argument
+/// errors are distinct from output contract violations; no I/O authorization.
+pub fn validate_external_input_json(
+    input: &str,
+    schema: &str,
+    resources: &str,
+) -> Result<String, KernelError> {
+    let resources: Ordered<ResourceSpec> = model(resources)?;
+    let schema = symbols(schema)?;
+    let input = decode(input)?;
+    encode(&validate_parameters(
+        &input,
+        &schema,
+        |t, v| t.accepts_external(v, &resources),
+        "external input violates TypeSpec",
+    )?)
+}
+
+/// Root egress and Signal validation: preserve branch filtering and report value
+/// violations as Contract errors, malformed schemas/resources as Argument errors.
+pub fn validate_external_output_json(
+    response: &str,
+    schema: &str,
+    branches: &str,
+    resources: &str,
+) -> Result<String, KernelError> {
+    let resources: Ordered<ResourceSpec> = model(resources)?;
+    let response = decode(response).map_err(|e| KernelError::Contract(e.to_string()))?;
+    encode(&validate_output(
+        &response,
+        &symbols(schema)?,
+        &model(branches)?,
+        |t, v| t.accepts_external(v, &resources),
+    )?)
+}
+
+/// Literal compatibility shared with Worker creation and Workflow handoff checks.
+/// Malformed values/schemas are Argument errors; incompatibility is Contract.
+pub fn validate_literal_json(value: &str, schema: &str) -> Result<String, KernelError> {
+    let schema: TypeSpec = model(schema)?;
+    let value = decode(value)?;
+    if !schema.accepts_literal(&value) {
+        return Err(KernelError::Contract("literal violates TypeSpec".into()));
+    }
+    encode(&value)
 }
 
 pub fn literal_equal_json(left: &str, right: &str) -> Result<bool, KernelError> {

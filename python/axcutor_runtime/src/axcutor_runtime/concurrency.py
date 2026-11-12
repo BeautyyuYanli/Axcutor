@@ -10,6 +10,8 @@ import asyncio
 from collections.abc import Sequence
 from typing import Any
 
+from temporalio import exceptions
+
 
 async def cancel_and_drain(
     tasks: Sequence[asyncio.Future[Any]], *, message: str | None = None
@@ -22,6 +24,6 @@ async def cancel_and_drain(
     while not joined.done():
         try:
             await asyncio.shield(joined)
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, exceptions.CancelledError):
             continue
     return list(joined.result())

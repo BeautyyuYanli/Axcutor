@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { ref } from 'vue';
 import { beforeAll, describe, expect, it } from 'vitest';
-import init, { compile_workflow, validate_input } from '../src/wasm-pkg/axcutor_wasm';
+import init, { compile_workflow, validate_input, validate_external_input } from '../src/wasm-pkg/axcutor_wasm';
 import { useRunInput } from '../src/composables/useRunInput';
 import { defaultInput, DEMO_ENTRY, DEMO_INPUT } from '../src/utils/runInput';
 import { JsonText } from '../src/utils/losslessJson';
@@ -18,6 +18,34 @@ function compileInput(symbols: string): string {
 }
 
 describe('entry-owned input drafts and real WASM contracts', () => {
+  it('builds external handle defaults from lossless locator schemas and refreshes restored drafts when resources change', () => {
+    const input = ref('{"f":{"type":"handle","kind":"infra:File"}}');
+    const resources = ref('{"infra:File":{"locator":{"type":"object","properties":{"id":{"type":"number","enum":[1.00000000000000000001]}}}}}');
+    const state = useRunInput(ref('public.yaml'), input, resources);
+    expect(state.inputRaw.value).toBe('{"f":{"$handle":"infra:File","locator":{"id":1.00000000000000000001}}}');
+    expect(state.inputError.value).toBeNull();
+    expect(() => validate_external_input(state.inputRaw.value, input.value, resources.value)).not.toThrow();
+    state.restore(state.inputRaw.value, 'old');
+    resources.value = '{"infra:File":{"locator":{"type":"string","enum":["new"]}}}';
+    expect(state.inputRaw.value).toBe('{"f":{"$handle":"infra:File","locator":"new"}}');
+    state.inputRaw.value = '{"f":{"$handle":"private-rid","kind":"infra:File"}}';
+    expect(state.inputError.value).not.toBeNull();
+    resources.value = '{}';
+    expect(state.inputRaw.value).toContain('private-rid');
+    expect(state.inputError.value).not.toBeNull();
+  });
+
+  it('preflights output-only root handles and private handles even when inputs are null', () => {
+    const resources = ref('{}');
+    const state = useRunInput(ref('main'), ref('{"f":{"type":["handle","null"],"kind":"infra:File"}}'), resources);
+    expect(state.inputRaw.value).toBe('{"f":null}');
+    expect(state.inputError.value).not.toBeNull();
+    resources.value = '{"infra:File":{"locator":{"type":"string"}}}';
+    expect(state.inputError.value).toBeNull();
+    const outputOnly = useRunInput(ref('output'), ref('{}'), ref('{}'), ref('{"f":{"type":"handle","kind":"infra:File"}}'));
+    expect(outputOnly.inputError.value).not.toBeNull();
+  });
+
   it('constructs recursive required defaults in declaration order without rounding enum literals', () => {
     const schema = compileInput(`{
       "z":{"type":["integer","null"]},

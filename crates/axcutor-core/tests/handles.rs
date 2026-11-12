@@ -108,15 +108,16 @@ fn definitions_can_have_handles_but_host_entry_and_signal_outputs_cannot() {
         json!({"input":{"tx":handle()},"output":{"tx":handle()},"run":{"executor":"builtin","content":"return Output(tx=input.tx)"}}),
     );
     ok(&out);
-    assert!(validate_root_interface_json(&json!({"tx":handle()}).to_string(), "{}").is_err());
+    assert!(validate_root_interface_json(&json!({"tx":handle()}).to_string(), "{}", "{}").is_err());
     assert!(
         validate_root_interface_json(
             "{}",
-            &json!({"tx":{"type":"array", "items":handle()}}).to_string()
+            &json!({"tx":{"type":"array", "items":handle()}}).to_string(),
+            "{}"
         )
         .is_err()
     );
-    assert!(validate_root_interface_json("{}", "{}").is_ok());
+    assert!(validate_root_interface_json("{}", "{}", "{}").is_ok());
     error(
         &compile(json!({"input":{},"output":{"tx":handle()},"run":{"executor":"signal"}})),
         "type.signal_handle",

@@ -70,18 +70,21 @@
 2. **挂起状态与可选步数乐观锁（`step` CAS）核验**：
    * 检查目标 `address` 当前是否存在处于 `pending` 状态的等待槽位；若目标节点尚未到达、已完成、已超时或已取消，立即拒绝并返回冲突错误 **`signal_not_waiting`（HTTP `409 Conflict`）**；
    * 若请求提供了正整数 `step`，核对目标槽位所属栈帧的当前累计步数是否满足 $\text{waiter.frame.steps} == \text{step}$；若不匹配（例如在成环回边循环中工作流已被上一轮信号唤醒并再次停在同一 `address` 的新一轮等待上），立即拒绝并返回 **`signal_not_waiting`（HTTP `409 Conflict`）**。
-3. **节点输出与分支契约边界校验**：
-   * 构造候选响应 `{"branch": branch, "output": output}`，严格执行与 [`01-run-executor-contract.md`](./01-run-executor-contract.md) 第三节第 2 小节完全一致的**分支合法性校验**、**必填输出字段完备性校验**、**深层 `TypeSpec` Schema 校验**与**顶层多余字段白名单过滤**；
-   * 若违反分支或输出类型契约，立即在边界拒绝请求并返回 **`signal_validation_failed`（HTTP `422 Unprocessable Entity`）**。
+3. **节点输出、外部句柄信封与在途删除冲突校验（`validate_external_output`）**：
+   * 构造候选响应 `{"branch": branch, "output": output}`，执行与 [`01-run-executor-contract.md`](./01-run-executor-contract.md) 第三节第 2 小节同构的**分支合法性校验**、**必填输出字段完备性校验**、**深层外部 `TypeSpec` 兼容性校验（$\models_{\text{ext}, \text{bundle.resources}}$）**与**顶层多余字段白名单过滤**：
+     * 非 `handle` 位置遵循标准字面量校验；
+     * 非 `null` 的 `handle` 位置必须为闭合外部信封 `{"$handle": "<kind>", "locator": <value>}`，要求对应资源已在 `bundle.resources` 中显式声明公开 `locator` 且 `<value>` 满足该纯值 Schema；
+     * **在途外部删除冲突拦截**：若某公开句柄定位符 `(kind, locator)` 在当前工作流实例的 `WorkflowResourceRegistry` 中正处于待执行外部实体删除状态（归工作流所有且已转入 `pending_dispose`），同样作为契约冲突拒绝，防止与在途物理删除产生并发竞态；
+   * 若违反上述任一契约条件，立即在边界拒绝请求并返回 **`signal_validation_failed`（HTTP `422 Unprocessable Entity`）**（注：静态值校验不隐含跨租户访问授权，资源归属核验由宿主控制面或业务签名定位符协议负责）。
 
 > **非法信号零状态污染不变量**：外部提交的信号属于不可信外部请求而非内部执行器违约。当阶段 A 因任何原因拒绝请求时，目标等待槽位保持 `pending` 状态不变，栈帧变量环境 $\rho$ 与步数计数器 `steps` 分毫无损，**不会触发节点的 `contract` 异常，也不会消耗节点的 `retry` 尝试次数**。
 
 ### 2. 阶段 B：原子认领与唤醒阶段（Atomic Claim & Wakeup Phase）
 
-当请求通过阶段 A 验证后，更新处理器在工作流确定性状态机及重放过程中执行同一校验，并原子完成以下状态转移：
+当请求通过阶段 A 验证后，更新处理器在工作流确定性状态机及重放过程中复核同一契约，并按以下两步无空窗交接：
 
-1. 将经过白名单投影与无损归一化的响应 `(branch, output)` 写入槽位，将槽位状态标记为已投递（`delivered`），并立即从挂起注册表中移除该 `address`（确保同一等待槽位最多只能被成功认领一次）；
-2. 唤醒等待在该槽位上的节点协程，将 `(branch, output)` 作为本次尝试的 `ExecutionSuccess` 返回给运行时调度器：
+1. **缓冲与返回外部闭合信封**：将经过白名单投影与无损归一化的外部响应 `(branch, output)` 写入槽位并作为 Update 确认返回值返回给调用方，同时将槽位标记为已投递（`delivered`）并从待认领注册表中移除。Update 处理器内部**不提前物化或返回内部 `rid`**，既防止向外部泄露私有运行期句柄标识，也避免在等待协程尚未恢复挂接可达根前被其他并发分支的根扫描误回收；
+2. **唤醒后同步物化与原子提交**：等待在该槽位上的节点协程唤醒并通过工作流取消检查后，在无任何异步挂起点（`await`）的同一同步步骤内将外部句柄信封物化为内部能力信封（按 [`05-resource-lifecycle.md`](./05-resource-lifecycle.md) 登记或复用规范 `rid`）并挂接至待提交结果可达根，随后将 `(branch, output)` 作为本次尝试的 `ExecutionSuccess` 交付运行时调度器：
    * 普通顺序节点立即按右优先覆盖算子 $\rho \leftarrow \rho \triangleleft \Delta_{\text{valid}}$ 提交至所属栈帧并推进控制令牌；
    * Fork-Join 并发成员与 `for_each` 迭代成员将产出写入各自的并发暂存槽，待所在并发屏障内全部成员收敛后，按 [`02-fork-join-and-for-each-scheduler.md`](../04-runtime-execution-model/02-fork-join-and-for-each-scheduler.md) 原子合并回父栈帧（`for_each` 迭代在挂起等待期间持续持有其 `concurrency` 并发信号量槽位）。
 
@@ -118,7 +121,7 @@
 1. **快照合并时的等待地址前缀重写**：
    * 设父工作流中委托给子工作流的调用帧逻辑地址为 $\text{prefix}$（如 `"__main__/sub_call"`），子工作流内部根帧的入口地址为 $\text{child\_entry}$（如 `"billing.approve"`）；
    * 宿主在递归拼接活跃栈帧树时，对子工作流内每一帧的 `address` 及 `waiting` 列表中的每个等待地址 $\text{addr}$，统一执行前缀替换：
-     $$\text{addr}_{\text{external}} = \text{prefix} + \text{ removeprefix}(\text{addr}, \text{child\_entry})$$
+     $$\text{addr}_{\text{external}} = \text{prefix} + \text{removeprefix}(\text{addr}, \text{child\_entry})$$
 2. **信号投递时的路径段边界递归寻址**：
    * 宿主收到针对 `(execution_id, address)` 的信号投递请求后，首先固定根执行轮次（若根执行已处于终态，直接返回 `409 signal_not_waiting`）；
    * 从根工作流开始逐层读取运行期栈帧快照，将外部目标地址转换为当前层局部地址 $\text{local\_target}$，并按**严格路径段边界条件**查找是否存在持有子工作流链接的帧 $\text{remote\_frame}$：

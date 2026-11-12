@@ -40,7 +40,9 @@ const submitted = shallowRef<CompileOutput | null>(null);
 const { ready, error: compilerError, compileOutput, compileJson } = useCompiler(entry, mounts);
 const inputSchema = computed(() => compileOutput.value?.bundle
   ? compileJson.value?.raw(['bundle', 'workflows', entry.value, 'input']) ?? null : null);
-const { inputRaw, inputError, restore: restoreInput } = useRunInput(entryPath, inputSchema);
+const resourcesRaw = computed(() => compileJson.value?.raw(['bundle', 'resources']) ?? '{}');
+const outputSchema = computed(() => compileJson.value?.raw(['bundle', 'workflows', entry.value, 'output']) ?? '{}');
+const { inputRaw, inputError, restore: restoreInput } = useRunInput(entryPath, inputSchema, resourcesRaw, outputSchema);
 // Collapsing changes only the presentation. Run still sends the original draft.
 const inputDisplay = computed({
   get() {

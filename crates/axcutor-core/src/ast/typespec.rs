@@ -58,6 +58,36 @@ impl TypeSpec {
         }
     }
 
+    /// Nominal kinds referenced at any depth, in declaration order.
+    pub fn handle_kinds(&self) -> Vec<&str> {
+        match &self.kind {
+            TypeKind::Handle(kind) => vec![kind],
+            TypeKind::Array(t) | TypeKind::OrderedMap(t) => t.handle_kinds(),
+            TypeKind::TypedDict { properties, .. } => {
+                properties.values().flat_map(Self::handle_kinds).collect()
+            }
+            TypeKind::Scalar { .. } => vec![],
+        }
+    }
+
+    /// External envelopes grant no I/O authority; hosts must authorize locators.
+    pub fn accepts_external(
+        &self,
+        value: &Value,
+        resources: &Ordered<super::ResourceSpec>,
+    ) -> bool {
+        self.accepts_value(value, &|kind, value| {
+            value.as_object().is_some_and(|m| {
+                m.len() == 2
+                    && m.get("$handle").and_then(Value::as_str) == Some(kind)
+                    && resources
+                        .get(kind)
+                        .and_then(|r| r.locator.as_ref())
+                        .is_some_and(|t| m.get("locator").is_some_and(|v| t.accepts_literal(v)))
+            })
+        })
+    }
+
     pub fn scalar(base: Scalar) -> Self {
         Self {
             kind: TypeKind::Scalar {
@@ -279,29 +309,28 @@ impl TypeSpec {
 
     /// Literals never confer resource identity, even inside containers.
     pub fn accepts_literal(&self, value: &Value) -> bool {
-        self.accepts_value(value, false)
+        self.accepts_value(value, &|_, _| false)
     }
 
     /// Shape validation grants no permission to dereference a resource.
     pub fn accepts_runtime(&self, value: &Value) -> bool {
-        self.accepts_value(value, true)
+        self.accepts_value(value, &|kind, value| {
+            value.as_object().is_some_and(|m| {
+                m.len() == 2
+                    && m.get("$handle")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+                    && m.get("kind").and_then(Value::as_str) == Some(kind)
+            })
+        })
     }
 
-    fn accepts_value(&self, value: &Value, runtime: bool) -> bool {
+    fn accepts_value(&self, value: &Value, handle: &impl Fn(&str, &Value) -> bool) -> bool {
         if value.is_null() {
             return self.nullable;
         }
         match &self.kind {
-            TypeKind::Handle(kind) => {
-                runtime
-                    && value.as_object().is_some_and(|m| {
-                        m.len() == 2
-                            && m.get("$handle")
-                                .and_then(Value::as_str)
-                                .is_some_and(|s| !s.is_empty())
-                            && m.get("kind").and_then(Value::as_str) == Some(kind.as_str())
-                    })
-            }
+            TypeKind::Handle(kind) => handle(kind, value),
             TypeKind::Scalar { base, enumeration } => {
                 scalar_matches(value, *base)
                     && enumeration
@@ -310,10 +339,10 @@ impl TypeSpec {
             }
             TypeKind::Array(t) => value
                 .as_array()
-                .is_some_and(|a| a.iter().all(|v| t.accepts_value(v, runtime))),
+                .is_some_and(|a| a.iter().all(|v| t.accepts_value(v, handle))),
             TypeKind::OrderedMap(t) => value
                 .as_object()
-                .is_some_and(|m| m.values().all(|v| t.accepts_value(v, runtime))),
+                .is_some_and(|m| m.values().all(|v| t.accepts_value(v, handle))),
             TypeKind::TypedDict {
                 properties,
                 required,
@@ -322,7 +351,7 @@ impl TypeSpec {
                     && m.iter().all(|(k, v)| {
                         properties
                             .get(k)
-                            .is_some_and(|t| t.accepts_value(v, runtime))
+                            .is_some_and(|t| t.accepts_value(v, handle))
                     })
             }),
         }

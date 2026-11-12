@@ -110,12 +110,56 @@ async def test_host_rejects_recursive_handle_interfaces_before_backend_contact(p
     }
     mounts = packages(document)
     mounts["infra"] = {"resources": {"infra": {"format": "yaml", "text": "resources: {Tx: null}"}}}
-    with pytest.raises(InputValidationError, match="pure values"):
+    with pytest.raises(InputValidationError, match="public locator"):
         await service(client).submit(
             "demo.main",
             mounts,
             {"resources": []} if position == "input" else {},
         )
+
+
+async def test_host_preflight_and_signal_share_closed_external_locator_values(server):
+    h = {"type": "handle", "kind": "infra:File"}
+    document = graph(
+        {
+            "wait": {"run": {"executor": "signal"}, "output": {"selected": h}},
+            "compare": builtin(
+                "compare",
+                {"op": literal("eq"), "left": "file", "right": "selected"},
+                {"result": "same"},
+            ),
+        },
+        ["start -> wait", "wait -> compare", "compare -> end"],
+        inputs={"file": h},
+        outputs={"same": {"type": "boolean"}, "selected": h},
+    )
+    mounts = packages(document)
+    mounts["infra"] = {
+        "resources": {
+            "infra": {"format": "yaml", "text": "resources: {File: {locator: {type: string}}}"}
+        }
+    }
+    queue = str(uuid4())
+    host = service(server.client, queue)
+    public = {"$handle": "infra:File", "locator": "file-1"}
+    async with create_worker(server.client, queue):
+        for invalid in [
+            {"$handle": "rid", "kind": "infra:File"},
+            {"$handle": "infra:File", "locator": None},
+        ]:
+            with pytest.raises(InputValidationError):
+                await host.submit("demo.main", mounts, {"file": invalid})
+        current = await host.submit("demo.main", mounts, {"file": public})
+        assert current["frames"][0]["variables"]["file"] == public
+        with pytest.raises(SignalValidationError):
+            await host.signal(
+                current["execution_id"],
+                "demo.main/wait",
+                output={"selected": {**public, "extra": 1}},
+            )
+        await host.signal(current["execution_id"], "demo.main/wait", output={"selected": public})
+        final = await host.wait(current["execution_id"])
+        assert final["result"]["output"] == {"same": True, "selected": public}
 
 
 @pytest.mark.parametrize(

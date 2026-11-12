@@ -97,7 +97,12 @@ fn integer(
 }
 
 /// Resource headers are closed declarations, not executable workflow documents.
-pub(super) fn resources(raw: &Value, a: &Address, resources: &mut HashSet<String>, ds: &mut Ds) {
+pub(super) fn resources(
+    raw: &Value,
+    a: &Address,
+    resources: &mut Ordered<ResourceSpec>,
+    ds: &mut Ds,
+) {
     let Some(m) = object(raw, a, ds) else { return };
     closed(m, &["resources"], a, ds);
     let at = a.at("resources");
@@ -125,16 +130,28 @@ pub(super) fn resources(raw: &Value, a: &Address, resources: &mut HashSet<String
                 "resource class must be a public package segment",
             );
         }
+        let mut spec = ResourceSpec::default();
         if !value.is_null() {
             if let Some(fields) = object(value, &at, ds) {
-                closed(fields, &["description"], &at, ds);
+                closed(fields, &["description", "locator"], &at, ds);
                 if let Some(description) = fields.get("description") {
-                    string(Some(description), &at.at("description"), ds);
+                    spec.description = string(Some(description), &at.at("description"), ds);
+                }
+                if let Some(locator) = fields.get("locator") {
+                    match TypeSpec::parse(locator) {
+                        Ok(t) if !t.nullable && !t.contains_handle() => spec.locator = Some(t),
+                        _ => at.at("locator").error(
+                            ds,
+                            "resource",
+                            "type.schema",
+                            "locator must be a non-nullable pure value TypeSpec",
+                        ),
+                    }
                 }
             }
         }
         if ds.len() == before {
-            resources.insert(format!("{}:{name}", a.workflow));
+            resources.insert(format!("{}:{name}", a.workflow), spec);
         }
     }
 }
@@ -143,7 +160,7 @@ fn types(
     v: Option<&Value>,
     required: bool,
     a: &Address,
-    resources: &HashSet<String>,
+    resources: &Ordered<ResourceSpec>,
     ds: &mut Ds,
 ) -> Symbols {
     if v.is_none() && !required {
@@ -176,35 +193,62 @@ fn types(
     result
 }
 
-fn type_resources(t: &TypeSpec, a: &Address, resources: &HashSet<String>, ds: &mut Ds) {
+/// Visit nominal handle leaves, retaining the exact diagnostic kind address.
+fn visit_handles(t: &TypeSpec, a: &Address, visit: &mut impl FnMut(&str, &Address)) {
     match &t.kind {
-        TypeKind::Handle(kind) => {
-            let module = kind.split_once(':').unwrap().0;
-            if !workflow_visible(&a.workflow, module) {
-                a.at("kind").error(
-                    ds,
-                    "variable",
-                    "visibility.private_resource",
-                    format!("resource {kind} is private to its parent package"),
-                );
-            }
-            if !resources.contains(kind) {
-                a.at("kind").error(
-                    ds,
-                    "variable",
-                    "type.unknown_resource",
-                    format!("resource {kind} is not declared"),
-                );
-            }
-        }
-        TypeKind::Array(t) => type_resources(t, &a.at("items"), resources, ds),
-        TypeKind::OrderedMap(t) => type_resources(t, &a.at("additionalProperties"), resources, ds),
+        TypeKind::Handle(kind) => visit(kind, &a.at("kind")),
+        TypeKind::Array(t) => visit_handles(t, &a.at("items"), visit),
+        TypeKind::OrderedMap(t) => visit_handles(t, &a.at("additionalProperties"), visit),
         TypeKind::TypedDict { properties, .. } => {
             for (name, t) in properties {
-                type_resources(t, &a.at("properties").at(name), resources, ds);
+                visit_handles(t, &a.at("properties").at(name), visit);
             }
         }
         TypeKind::Scalar { .. } => (),
+    }
+}
+
+fn type_resources(t: &TypeSpec, a: &Address, resources: &Ordered<ResourceSpec>, ds: &mut Ds) {
+    visit_handles(t, a, &mut |kind, at| {
+        let module = kind.split_once(':').unwrap().0;
+        if !workflow_visible(&a.workflow, module) {
+            at.error(
+                ds,
+                "variable",
+                "visibility.private_resource",
+                format!("resource {kind} is private to its parent package"),
+            );
+        }
+        if !resources.contains_key(kind) {
+            at.error(
+                ds,
+                "variable",
+                "type.unknown_resource",
+                format!("resource {kind} is not declared"),
+            );
+        }
+    });
+}
+
+/// Diagnose each inaccessible handle at its exact kind field.
+fn external_types(
+    types: &Symbols,
+    a: &Address,
+    resources: &Ordered<ResourceSpec>,
+    code: &str,
+    ds: &mut Ds,
+) {
+    for (name, t) in types {
+        visit_handles(t, &a.at(name), &mut |kind, at| {
+            if resources.get(kind).is_none_or(|r| r.locator.is_none()) {
+                at.error(
+                    ds,
+                    "variable",
+                    code,
+                    format!("resource {kind} has no public locator"),
+                );
+            }
+        });
     }
 }
 
@@ -293,7 +337,7 @@ pub(super) fn root(
     raw: &Value,
     a: &Address,
     allowed_executors: Option<&[String]>,
-    resources: &HashSet<String>,
+    resources: &Ordered<ResourceSpec>,
     ds: &mut Ds,
 ) -> (Option<NormalizedRoot>, Option<Signature>) {
     let Some(m) = object(raw, a, ds) else {
@@ -302,6 +346,23 @@ pub(super) fn root(
     let before = ds.len();
     let input = types(m.get("input"), true, &a.at("input"), resources, ds);
     let output = types(m.get("output"), true, &a.at("output"), resources, ds);
+    if a.workflow == "__main__" {
+        external_types(&input, &a.at("input"), resources, "type.root_handle", ds);
+        external_types(&output, &a.at("output"), resources, "type.root_handle", ds);
+    }
+    if m.get("run")
+        .and_then(|r| r.get("executor"))
+        .and_then(Value::as_str)
+        == Some("signal")
+    {
+        external_types(
+            &output,
+            &a.at("output"),
+            resources,
+            "type.signal_handle",
+            ds,
+        );
+    }
     let branches = branches(m.get("branches"), &output, &a.at("branches"), ds);
     let signature = (ds.len() == before).then(|| Signature {
         input: input.clone(),
@@ -433,7 +494,7 @@ fn graph(
     raw: &Value,
     a: &Address,
     allowed_executors: Option<&[String]>,
-    resources: &HashSet<String>,
+    resources: &Ordered<ResourceSpec>,
     ds: &mut Ds,
 ) -> Option<NormalizedGraph> {
     let m = object(raw, a, ds)?;
@@ -526,7 +587,7 @@ fn node(
     raw: &Value,
     a: &Address,
     allowed_executors: Option<&[String]>,
-    resources: &HashSet<String>,
+    resources: &Ordered<ResourceSpec>,
     ds: &mut Ds,
 ) -> Option<NormalizedNode> {
     let m = object(raw, a, ds)?;
@@ -614,6 +675,19 @@ fn node(
             .map(|v| strings(Some(v), &a.at("input"), ds))
             .unwrap_or_default();
         let output = types(m.get("output"), false, &a.at("output"), resources, ds);
+        if m.get("run")
+            .and_then(|r| r.get("executor"))
+            .and_then(Value::as_str)
+            == Some("signal")
+        {
+            external_types(
+                &output,
+                &a.at("output"),
+                resources,
+                "type.signal_handle",
+                ds,
+            );
+        }
         let branches = branches(m.get("branches"), &output, &a.at("branches"), ds);
         if let Some(g) = m.get("graph") {
             graph(g, &a.graph(true), allowed_executors, resources, ds).map(|graph| {

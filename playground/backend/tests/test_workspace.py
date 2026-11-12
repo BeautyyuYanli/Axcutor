@@ -243,21 +243,23 @@ async def test_handle_root_preflight_preserves_idle_state_and_latest_trace(
         view["revision"],
         edits(view)
         + [
-            {"path": "handle.yaml", "text": dumps(document)},
+            {"path": "workflows/infra/handle/__axcutor__.yaml", "text": dumps(document)},
             {"path": "workflows/infra/__init__.py", "text": ""},
+            {"path": "workflows/infra/handle/__init__.py", "text": ""},
             {"path": "workflows/infra/__ax_resources__.yaml", "text": "resources: {Tx: null}\n"},
         ],
     )
     response = await client.post(
         "/v1/workspace/executions",
         json={
-            "entry": "handle.yaml",
+            "entry": "workflows/infra/handle/__axcutor__.yaml",
             "input": {"tx": None} if position == "input" else {},
             "revision": saved["revision"],
         },
     )
     assert response.status_code == 422, response.text
-    assert "pure values" in response.text
+    assert response.json()["error"]["code"] == "input_validation_failed"
+    assert "public locator" in response.text
     assert not playground.view()["busy"] and playground.execution_id is None
     assert playground.latest is previous and playground._completion is None
     current = await workspace.get()
